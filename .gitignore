@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# Environment
+.env
+
+# Node (frontend/keyboard-kit reference typecheck)
+node_modules/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
