@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ledgerforge"
+version = "0.1.0"
+description = "Community-driven, keyboard-first, double-entry business management engine — inspired by TallyPrime"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+authors = [{ name = "mir-ashiq", email = "imsrenpsycho@gmail.com" }]
+keywords = [
+    "accounting", "double-entry", "ledger", "tally", "tallyprime", "erp",
+    "bookkeeping", "gst", "postgresql", "fastapi", "open-source",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0.30",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+    "ruff>=0.5",
+    "pgserver>=0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/mir-ashiq/ledgerforge"
+Repository = "https://github.com/mir-ashiq/ledgerforge"
+Issues = "https://github.com/mir-ashiq/ledgerforge/issues"
+Changelog = "https://github.com/mir-ashiq/ledgerforge/releases"
+
+[project.entry-points."ledgerforge.plugins"]
+example_gst = "ledgerforge.contrib.example_gst"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ledgerforge"]
+
+# Ship the SQL sources inside the wheel so `python -m ledgerforge.bootstrap`
+# works for non-editable installs (e.g. the Docker image).
+[tool.hatch.build.targets.wheel.force-include]
+"db" = "ledgerforge/sql"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

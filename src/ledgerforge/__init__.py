@@ -1,0 +1,12 @@
+"""LedgerForge — a community-driven, keyboard-first, double-entry accounting engine.
+
+Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
+1. Total debits must equal total credits for every transaction, exactly.
+2. Financial history is append-only; corrections happen via reversal vouchers.
+3. All money is arbitrary-precision decimal — floating point is banned.
+"""
+
+__version__ = "0.1.0"
+
+#: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
+PLUGIN_API_VERSION = "0.1"
