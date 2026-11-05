@@ -514,15 +514,15 @@ Keyboard-first *is* the accessibility model: every command has a human title (pa
 
 | Law | Layer | Control | Where | Proven by |
 |---|---|---|---|---|
-| **L1 · Debits = Credits, exactly, or abort** | App | `Decimal` summation of D and C legs before any insert; mismatch ⇒ `UnbalancedVoucherError`, HTTP 422, nothing written | `engine/posting.py` | `test_double_entry.py::test_off_by_fraction_rejected` |
+| **L1 · Debits = Credits, exactly, or abort** | App | `Decimal` summation of D and C legs before any insert; mismatch ⇒ `UnbalancedVoucherError`, HTTP 422, nothing written | `engine/posting.py` | `test_double_entry.py::test_off_by_a_hundredth_of_a_cent_rejected` |
 | | DB | `DEFERRABLE INITIALLY DEFERRED` constraint trigger re-verifies `SUM(D) = SUM(C)` at commit; also enforces ≥ 2 lines per voucher | `db/schema.sql` (`trg_entries_balanced`) | `test_double_entry.py::test_db_rejects_raw_sql_unbalanced_insert` |
-| **L2 · History is immutable** | App | No update/delete code paths exist; corrections = `POST /vouchers/{id}/reverse` which inserts a mirror voucher (swapped D/C) linked via `reversal_of` | `engine/reversal.py` | `test_immutability.py`, `test_posting.py::test_reversal_nets_to_zero` |
-| | DB | `BEFORE UPDATE OR DELETE` triggers raise on `vouchers`, `voucher_entries`, `audit_log`; app DB role is granted only `SELECT, INSERT` on them | `db/schema.sql` (`trg_*_immutable`, role grants) | `test_immutability.py::test_update_raises`, `test_delete_raises` |
+| **L2 · History is immutable** | App | No update/delete code paths exist; corrections = `POST /vouchers/{id}/reverse` which inserts a mirror voucher (swapped D/C) linked via `reversal_of` | `engine/reversal.py` | `test_immutability.py`, `test_posting.py::test_reversal_nets_to_zero_and_original_is_intact` |
+| | DB | `BEFORE UPDATE OR DELETE` triggers raise on `vouchers`, `voucher_entries`, `audit_log`; app DB role is granted only `SELECT, INSERT` on them | `db/schema.sql` (`trg_*_immutable`, role grants) | `test_immutability.py::test_update_voucher_raises`, `test_delete_voucher_raises` |
 | **L3 · Decimals only, floats banned** | Wire/API | Amounts **must** arrive as JSON strings; `float` payloads are rejected with HTTP 422 (a JSON number has already lost precision by the time JS/JSON parsers are done with it); scale > 8 rejected | `schemas.py` (`AmountIn`) | `test_decimal_law.py::test_float_rejected`, `test_too_many_decimals_rejected` |
 | | App | `decimal.Decimal` end-to-end; context precision 50 | `engine/posting.py` | `test_decimal_law.py::test_one_tenth_plus_two_tenths` |
 | | DB | `NUMERIC(26,8)` columns — exact, arbitrary-precision decimal storage; sums in SQL are exact | `db/schema.sql` | `test_reports.py::test_trial_balance_exact_zero_difference` |
 | **(Derived) Gapless numbering** | DB+App | Counter row locked inside the posting transaction (§4.5) | `engine/posting.py` | `test_concurrency.py::test_gapless_under_threads` |
-| **(Derived) Idempotent posting** | DB | `UNIQUE (client_token)`; replay returns the original voucher | `engine/posting.py` | `test_posting.py::test_idempotent_replay` |
+| **(Derived) Idempotent posting** | DB | `UNIQUE (client_token)`; replay returns the original voucher | `engine/posting.py` | `test_posting.py::test_idempotent_replay_returns_original` |
 
 ---
 
