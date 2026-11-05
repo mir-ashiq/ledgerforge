@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Tests (real PostgreSQL)
+        run: python -m pytest -v
+        env:
+          LF_TEST_ADMIN_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+
+      - name: Benchmark smoke (proves the harness runs)
+        run: |
+          python scripts/bench_hierarchy.py --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
+          python scripts/bench_posting.py --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
