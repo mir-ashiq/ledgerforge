@@ -160,11 +160,12 @@ def test_unknown_kid_is_401_after_one_refresh(oidc_client):
 
 
 def test_alg_confusion_rejected(oidc_client):
-    """A token signed HS256 with the *public* key as HMAC secret must fail:
-    the algorithm whitelist is the defense (classic JWT pitfall)."""
-    import json
-
-    token = make_token(roles=["admin"], algorithm="HS256", key=json.dumps(PUBLIC_JWK))
+    """An alg=HS256 token — the classic confusion attack, where the attacker
+    swaps the algorithm and signs with their own symmetric secret — must fail:
+    the decode whitelist accepts asymmetric algorithms only."""
+    token = make_token(
+        roles=["admin"], algorithm="HS256", key="attacker-chosen-hmac-secret-0123456789ab"
+    )
     r = oidc_client.get("/api/v1/ledgers", headers=bearer(token))
     assert r.status_code == 401
 
