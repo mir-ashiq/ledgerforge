@@ -589,8 +589,8 @@ curl -s localhost:8000/api/v1/reports/trial-balance?as_of=2026-11-06
 |---|---|---|
 | Multi-currency | Roadmap | `NUMERIC(30,10)` FX rates + base-currency posting rules; schema already decimal-safe |
 | Period locking / FY close | Roadmap | Freeze inserts past a closed date via the posting validator hook + a `periods` table |
-| Multi-company / multi-book | Roadmap | Add `book_id` discriminator to masters and entries before 1.0 (cheap now, breaking later) |
-| AuthN/AuthZ | Roadmap (must precede any production use) | OIDC + role model; API is deliberately closed-world until then |
+| Multi-company / multi-book | Roadmap | Add `book_id` discriminator to masters and entries before 1.0 (cheap now, breaking later); per-book permission scoping lands here |
+| AuthN/AuthZ | **Landed (v0.3)** | OIDC bearer verification (JWKS + rotation refresh) with the `reader` < `bookkeeper` < `admin` role model on every route; `LF_AUTH_MODE=disabled` remains the dev-only default |
 | Alembic migrations | Roadmap | `db/schema.sql` is the v0.1 bootstrap; Alembic baseline follows the first schema change |
 | Inventory / invoicing / payroll | Roadmap | Built as plugins on the same hook taxonomy, not in core |
 | Report scale-out | Watch | Partitioning + BRIN + optional eventually-consistent balance cache (§4.3) — only when books pass millions of entries |

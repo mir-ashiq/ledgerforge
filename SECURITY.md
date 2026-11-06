@@ -16,5 +16,5 @@ Email **imsrenpsycho@gmail.com** with details and reproduction steps. You will r
 
 - The engine is **append-only by construction**: triggers and database privileges block `UPDATE`/`DELETE` on financial history (see [docs/analysis.md §7](docs/analysis.md)). Treat any bypass of these guards as a critical report.
 - Decimal handling is exact end-to-end; any report where the Trial Balance `difference` is not exactly `0` is a critical bug.
-- **Authentication is not yet implemented** — do not expose a LedgerForge instance to untrusted networks before AuthN/AuthZ lands (see the roadmap).
+- **Authentication (v0.3):** `LF_AUTH_MODE=oidc` verifies `Authorization: Bearer` JWTs against the configured OIDC issuer (JWKS, key-cache with rotation refresh) and enforces the `reader` < `bookkeeper` < `admin` role model on every route. The default `LF_AUTH_MODE=disabled` is **development only** — every caller is an anonymous admin and a warning is logged at startup; do not expose such an instance to untrusted networks. See the Authentication section of the README. Per-book permissions land with the multi-book schema.
 - Plugins run in-process with full engine privileges: install plugins only from sources you trust (see [docs/plugin-guide.md](docs/plugin-guide.md)).

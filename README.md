@@ -112,10 +112,10 @@ SELECT * FROM rpt.trial_balance('2026-11-06');
 
 ```
 db/                 schema.sql · functions.sql · seed (TallyPrime's 28 predefined groups)
-src/ledgerforge/    engine (posting/reversal/opening) · api · reporting · plugins · contrib
+src/ledgerforge/    engine (posting/reversal/opening) · api · auth (OIDC + roles) · reporting · plugins · contrib
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
-                    web — the voucher-entry screen on keyboard-kit (React + Vite)
-tests/              laws, hierarchy, immutability, reports, concurrency, plugins
+                    web — the voucher-entry screen + command palette (React + Vite)
+tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh
 ```
@@ -127,13 +127,45 @@ scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.s
 - **Hierarchy rollups:** closure-table and recursive-CTE rollups measure at parity on a 429-group / 3,402-ledger / 120k-entry book (47 ms vs 48 ms for the whole-tree rollup) — the closure model wins on SQL simplicity, integrity, and drill-down queries, not on raw speed. Full discussion: [docs/analysis.md §3.8](docs/analysis.md).
 - **Concurrency:** 8 threads × 60 vouchers → 480/480 posted, strictly gapless numbering, zero deadlocks, ~174 vouchers/s on a single type's counter row, Trial Balance exact to the last sub-cent digit.
 
+## Authentication
+
+The API ships with two modes, picked by `LF_AUTH_MODE`:
+
+- **`disabled`** (default) — development only: every caller is an anonymous
+  admin. A loud warning is logged at startup; never expose this to untrusted
+  networks.
+- **`oidc`** — production: requests carry `Authorization: Bearer <jwt>`, verified
+  against your OIDC provider's JWKS (Keycloak, Auth0, …). Roles come from the
+  token (the `roles` claim, or Keycloak's `realm_access.roles`):
+
+| Role | Powers |
+|---|---|
+| `reader` | GET masters, vouchers, reports |
+| `bookkeeper` | reader + create groups/ledgers, post & reverse vouchers |
+| `admin` | bookkeeper + everything else |
+
+```bash
+LF_AUTH_MODE=oidc \
+LF_OIDC_ISSUER=https://keycloak.example.test/realms/ledgerforge \
+LF_OIDC_AUDIENCE=ledgerforge \
+LF_DATABASE_URL=postgresql+psycopg://... \
+uvicorn ledgerforge.main:app
+```
+
+`GET /api/v1/auth/me` answers with the live subject, roles, and mode. JWKS keys
+are cached (15 min) and refreshed on unknown `kid` rotation. With auth on, the
+API is same-origin only — set `LF_CORS_ORIGINS` if you really need cross-origin
+calls. Per-book permissions land together with the multi-book schema (roadmap).
+
 ## Status & roadmap
 
-v0.2.0 — the accounting kernel **plus the voucher-entry screen** (React +
-keyboard-kit; `frontend/web`). Next (see [docs/analysis.md §9](docs/analysis.md)):
+v0.3.0 — the accounting kernel, the voucher-entry screen **plus the command
+palette with persisted key rebinding, and OIDC authentication with the role
+model**. Next (see [docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
-- [ ] AuthN/AuthZ (OIDC) — **required before any production use**
+- [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
+- [x] AuthN/AuthZ: OIDC bearer tokens + `reader`/`bookkeeper`/`admin` roles
 - [ ] Multi-currency, period locking/FY close, multi-book
 - [ ] Alembic migrations, community plugin index, e-invoicing packs
 

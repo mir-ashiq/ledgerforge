@@ -156,5 +156,5 @@ Keyboard-first *is* the accessibility architecture: commands carry human titles 
 
 1. **Done (v0.1):** framework-agnostic core + React bindings + default keymap + this plan.
 2. **Done (v0.2):** voucher grid + ledger picker components against the live API — `frontend/web` (virtualized rows, type-ahead picker, `Alt+C` create-ledger-here, auto-balance HUD with exact decimal string math, idempotent accept; acceptance-tested end-to-end, mouse-free).
-3. **Next:** command palette UI, settings persistence, plugin command registration.
-4. **Later:** macro recording, offline queuing of accepted vouchers (service worker + idempotency keys make this safe).
+3. **Done (v0.3):** command palette UI (`Ctrl+K`: filter, `Enter` run, `Ctrl+R` rebind, `Alt+R` reset), keybinding persistence (`KeymapStore`, localStorage in `frontend/web`; user bindings reserve their combo, displaced commands fall back and are marked "conflicts"), rebind capture mode in the core pipeline (defining a combo can never trigger the command it used to fire).
+4. **Later:** macro recording, offline queuing of accepted vouchers (service worker + idempotency keys make this safe), plugin command registration into the palette.
