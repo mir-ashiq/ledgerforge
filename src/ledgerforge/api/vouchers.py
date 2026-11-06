@@ -63,6 +63,9 @@ def _voucher_out(session: Session, voucher: Voucher, *, replayed: bool = False) 
                 dc=e.dc,
                 amount=e.amount,
                 narration=e.narration,
+                currency=e.currency,
+                amount_fx=e.amount_fx,
+                fx_rate=e.fx_rate,
             )
             for e in entries
         ],

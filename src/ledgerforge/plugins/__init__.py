@@ -59,13 +59,23 @@ class PluginManifest:
 
 @dataclass
 class DraftLine:
-    """One voucher line while still a draft (before ledger resolution)."""
+    """One voucher line while still a draft (before ledger resolution).
+
+    FX snapshot (plugin API 0.2, issue #4): ``currency``/``amount_fx``/
+    ``fx_rate`` are all-or-none; ``amount`` is always the base-currency
+    figure. Transformers that rebuild or split lines must either keep the
+    trio intact or drop it — an inconsistent trio is rejected by the engine
+    (and by the database) even if a plugin produced it.
+    """
 
     dc: Literal["D", "C"]
     amount: Decimal
     ledger_id: int | None = None
     ledger_name: str | None = None
     narration: str | None = None
+    currency: str | None = None
+    amount_fx: Decimal | None = None
+    fx_rate: Decimal | None = None
 
 
 @dataclass

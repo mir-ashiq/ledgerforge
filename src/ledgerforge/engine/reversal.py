@@ -58,6 +58,11 @@ def reverse_voucher(
                 dc="C" if e.dc == "D" else "D",  # mirror
                 amount=e.amount,
                 narration=e.narration,
+                # FX snapshot carries over verbatim: the reversal cancels the
+                # original at the very rate it was posted (ADR-007).
+                currency=e.currency,
+                amount_fx=e.amount_fx,
+                fx_rate=e.fx_rate,
             )
             for e in entries
         ],

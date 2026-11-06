@@ -23,6 +23,8 @@ from pydantic import (
 
 MAX_AMOUNT = Decimal(10) ** 18
 MAX_SCALE = 8  # matches NUMERIC(26,8); PostgreSQL would round beyond this
+MAX_FX_RATE = Decimal(10) ** 20
+MAX_FX_SCALE = 10  # matches NUMERIC(30,10)
 
 
 def _coerce_amount(v: Any) -> Decimal:
@@ -58,6 +60,49 @@ def _coerce_amount(v: Any) -> Decimal:
 Amount = Annotated[Decimal, BeforeValidator(_coerce_amount)]
 AmountOut = Annotated[Decimal, PlainSerializer(lambda v: format(v, "f"), return_type=str)]
 Dc = Literal["D", "C"]
+
+
+def _coerce_fx_rate(v: Any) -> Decimal:
+    """FX rates are decimal strings too (Law 3) — same rules as amounts,
+    scaled to NUMERIC(30,10)."""
+    if isinstance(v, bool) or v is None:
+        raise ValueError('fx_rate must be a decimal string like "83.5050000000"')
+    if isinstance(v, float):
+        raise ValueError(
+            "fx_rate must be sent as a string, not a JSON number — floats lose "
+            "precision (financial law: exact decimals only)"
+        )
+    try:
+        if isinstance(v, Decimal):
+            d = v
+        elif isinstance(v, int):
+            d = Decimal(v)
+        elif isinstance(v, str):
+            d = Decimal(v.strip())
+        else:
+            raise ValueError("fx_rate must be a decimal string")
+    except InvalidOperation as exc:
+        raise ValueError(f"fx_rate {v!r} is not a valid decimal") from exc
+    if not d.is_finite():
+        raise ValueError("fx_rate must be finite")
+    if d <= 0:
+        raise ValueError("fx_rate must be positive")
+    if -d.as_tuple().exponent > MAX_FX_SCALE:
+        raise ValueError(f"fx_rate supports at most {MAX_FX_SCALE} decimal places")
+    if d >= MAX_FX_RATE:
+        raise ValueError("fx_rate is too large (max 10^20)")
+    return d
+
+
+FxRateIn = Annotated[Decimal, BeforeValidator(_coerce_fx_rate)]
+RateOut = Annotated[Decimal, PlainSerializer(lambda v: format(v, "f"), return_type=str)]
+
+
+def _upper_code(v: str | None) -> str | None:
+    return v.upper() if isinstance(v, str) else v
+
+
+CurrencyCode = Annotated[str, BeforeValidator(_upper_code)]
 
 
 # ---------------------------------------------------------------- masters in
@@ -124,11 +169,19 @@ class VoucherLineIn(BaseModel):
     dc: Dc
     amount: Amount
     narration: str | None = None
+    # FX snapshot (issue #4, ADR-007): all three or none. ``amount`` is ALWAYS
+    # the base-currency figure and must equal round(amount_fx * fx_rate, 8).
+    currency: CurrencyCode | None = Field(default=None, min_length=3, max_length=3)
+    amount_fx: Amount | None = None
+    fx_rate: FxRateIn | None = None
 
     @model_validator(mode="after")
     def _ledger_given(self):
         if self.ledger_id is None and self.ledger_name is None:
             raise ValueError("provide ledger_id or ledger_name on every line")
+        fx_fields = (self.currency, self.amount_fx, self.fx_rate)
+        if any(f is not None for f in fx_fields) and not all(f is not None for f in fx_fields):
+            raise ValueError("foreign-currency lines need currency, amount_fx and fx_rate together")
         return self
 
 
@@ -151,6 +204,9 @@ class VoucherLineOut(BaseModel):
     dc: Dc
     amount: AmountOut
     narration: str | None
+    currency: str | None = None
+    amount_fx: AmountOut | None = None
+    fx_rate: RateOut | None = None
 
 
 class VoucherOut(BaseModel):
@@ -179,3 +235,82 @@ class OpeningCreate(BaseModel):
     client_token: UUID | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
     entries: list[VoucherLineIn] = Field(min_length=2)
+
+
+# ------------------------------------------------------------- currencies (#4)
+class CurrencyCreate(BaseModel):
+    code: CurrencyCode = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    name: str = Field(min_length=1, max_length=100)
+    symbol: str | None = Field(default=None, max_length=16)
+    minor_unit: int = Field(default=2, ge=0, le=8)
+
+
+class CurrencyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    symbol: str | None = Field(default=None, max_length=16)
+    minor_unit: int | None = Field(default=None, ge=0, le=8)
+
+
+class CurrencyOut(BaseModel):
+    code: str
+    name: str
+    symbol: str | None
+    minor_unit: int
+    is_system: bool
+
+
+class FxRateCreate(BaseModel):
+    from_ccy: CurrencyCode = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    to_ccy: CurrencyCode = Field(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$")
+    rate: FxRateIn
+    valid_on: date
+    source: str | None = Field(default=None, max_length=100)
+
+
+class FxRateUpdate(BaseModel):
+    """A correction: same pair and day, a better number."""
+
+    rate: FxRateIn
+    source: str | None = Field(default=None, max_length=100)
+
+
+class FxRateOut(BaseModel):
+    id: int
+    from_ccy: str
+    to_ccy: str
+    rate: RateOut
+    valid_on: date
+    source: str | None
+
+
+# --------------------------------------------------------------- periods (#5)
+class PeriodCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    starts_on: date
+    ends_on: date
+
+
+class PeriodOut(BaseModel):
+    id: int
+    name: str
+    starts_on: date
+    ends_on: date
+    status: Literal["open", "locked", "closed"]
+    locked_at: datetime | None
+    closed_at: datetime | None
+    closed_by: str | None
+
+
+class FyCloseLineOut(BaseModel):
+    bucket: Literal["income", "expense", "profit_loss"]
+    ledger_id: int
+    ledger_name: str
+    dc: Dc
+    amount: AmountOut
+
+
+class FyCloseReportOut(BaseModel):
+    as_of: date
+    lines: list[FyCloseLineOut]
+    net_profit: AmountOut
+    totals: dict[str, AmountOut]

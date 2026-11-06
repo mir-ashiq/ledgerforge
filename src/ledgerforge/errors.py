@@ -31,6 +31,12 @@ class ConflictError(EngineError):
     status_code = 409
 
 
+class PeriodStateError(ConflictError):
+    """The voucher date falls in a locked or closed period (issue #5). The
+    database posting gate enforces the same rule; this is the friendly,
+    pre-emptive check."""
+
+
 class InvariantViolation(EngineError):
     """An internal invariant failed — must never happen; surfaces as 500."""
 

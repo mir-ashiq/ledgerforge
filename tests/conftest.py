@@ -167,3 +167,25 @@ def post_voucher(
     if narration is not None:
         payload["narration"] = narration
     return client.post("/api/v1/vouchers", json=payload)
+
+
+def create_currency(client, code: str, name: str, **kwargs) -> dict:
+    r = client.post("/api/v1/currencies", json={"code": code, "name": name, **kwargs})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def create_fx_rate(client, from_ccy: str, to_ccy: str, rate: str, on: str, **kwargs) -> dict:
+    payload = {"from_ccy": from_ccy, "to_ccy": to_ccy, "rate": rate, "valid_on": on}
+    payload.update(kwargs)
+    r = client.post("/api/v1/fx-rates", json=payload)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def create_period(client, name: str, starts_on: str, ends_on: str) -> dict:
+    r = client.post(
+        "/api/v1/periods", json={"name": name, "starts_on": starts_on, "ends_on": ends_on}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()

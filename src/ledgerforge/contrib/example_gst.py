@@ -24,7 +24,7 @@ from ..plugins import DraftLine, PluginManifest, Resolver, VoucherDraft
 
 logger = logging.getLogger("ledgerforge.plugins.example_gst")
 
-PLUGIN = PluginManifest(name="example-gst", version="0.1.0", api_compat="0.1")
+PLUGIN = PluginManifest(name="example-gst", version="0.2.0", api_compat="0.2")
 
 #: Every voucher posted while this plugin is loaded (observability for tests/demos).
 POSTED_EVENTS: list[dict] = []
@@ -62,6 +62,14 @@ def _tax_lines(draft: VoucherDraft, resolver: Resolver) -> list[DraftLine]:
 
 
 def add_gst_lines(draft: VoucherDraft, resolver: Resolver) -> VoucherDraft:
+    if draft.meta.get("gst") and any(ln.currency is not None for ln in draft.lines):
+        # The example plugin computes tax on base amounts only; an FX line
+        # through the split would drop its snapshot trio. Refuse loudly —
+        # real multi-currency tax handling belongs in a dedicated plugin.
+        raise ValidationError(
+            "gst: meta.gst is not supported on foreign-currency lines "
+            "(post the tax lines explicitly, or extend this plugin)"
+        )
     lines = list(draft.lines)
     extras = _tax_lines(draft, resolver)
     if not extras:

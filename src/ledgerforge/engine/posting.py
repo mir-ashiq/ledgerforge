@@ -6,16 +6,22 @@ from datetime import date, timedelta
 from decimal import Decimal, getcontext
 from uuid import uuid4
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..errors import NotFoundError, UnbalancedVoucherError, ValidationError
-from ..models import DocCounter, Ledger, Voucher, VoucherEntry, VoucherType
+from ..errors import (
+    NotFoundError,
+    PeriodStateError,
+    UnbalancedVoucherError,
+    ValidationError,
+)
+from ..models import DocCounter, Ledger, Period, Voucher, VoucherEntry, VoucherType
 from ..plugins import DraftLine, PluginManager, Resolver, VoucherDraft
 from ..schemas import VoucherCreate, _coerce_amount
 from ..settings import Settings
+from .currency import base_currency_code, validate_fx_lines
 
 # Exact-arithmetic headroom (Law 3)
 getcontext().prec = 50
@@ -41,6 +47,31 @@ def _fy_start_month(session: Session) -> int:
         return int(raw or 4)
     except (TypeError, ValueError):
         return 4
+
+
+# ------------------------------------------------------- period gate (issue #5)
+def _check_period_open(session: Session, voucher_date: date) -> None:
+    """App-level half of the posting gate (ADR-008): with no periods defined
+    every date posts; once periods exist, a date must fall in an OPEN period.
+    The BEFORE INSERT trigger on vouchers enforces the same rule at commit
+    time — this check exists to give a clean 409/422 instead of a 500 when a
+    lock races the posting."""
+    has_periods = session.scalar(select(func.count()).select_from(Period))
+    if not has_periods:
+        return
+    period = session.scalar(
+        select(Period).where(Period.starts_on <= voucher_date, Period.ends_on >= voucher_date)
+    )
+    if period is None:
+        raise ValidationError(
+            f"No period covers voucher date {voucher_date}: create the period first"
+        )
+    if period.status == "locked":
+        raise PeriodStateError(
+            f"Period {period.name!r} is locked: postings are frozen until it is closed or reopened"
+        )
+    if period.status == "closed":
+        raise PeriodStateError(f"Period {period.name!r} is closed: its dates are final")
 
 
 # ---------------------------------------------------------------- validation
@@ -114,6 +145,9 @@ def post_voucher(
                 ledger_id=ln.ledger_id,
                 ledger_name=ln.ledger_name,
                 narration=ln.narration,
+                currency=ln.currency,
+                amount_fx=ln.amount_fx,
+                fx_rate=ln.fx_rate,
             )
             for ln in payload.entries
         ],
@@ -128,8 +162,10 @@ def post_voucher(
     draft = manager.transform(draft, resolver)
     manager.validate(draft, resolver)
 
-    # 4. Engine validation — the three laws
+    # 4. Engine validation — the three laws, the FX rules, the period gate
     _validate_draft(draft, settings)
+    validate_fx_lines(session, draft, base_currency_code(session))
+    _check_period_open(session, draft.voucher_date)
 
     # 5. Resolve masters
     vtype = session.scalar(select(VoucherType).where(VoucherType.code == draft.voucher_type))
@@ -179,6 +215,9 @@ def post_voucher(
                 amount=line.amount,
                 voucher_date=voucher.voucher_date,
                 narration=line.narration,
+                currency=line.currency,
+                amount_fx=line.amount_fx,
+                fx_rate=line.fx_rate,
             )
         )
 

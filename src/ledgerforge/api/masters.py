@@ -1,16 +1,31 @@
-"""Masters API: groups and ledgers (the chart of accounts)."""
+"""Masters API: groups, ledgers (the chart of accounts), currencies and FX
+rates (issue #4)."""
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..engine.currency import get_currency, resolve_rate
 from ..errors import NotFoundError, ValidationError
-from ..models import Group, Ledger
-from ..schemas import GroupCreate, GroupOut, GroupUpdate, LedgerCreate, LedgerOut
+from ..models import Currency, FxRate, Group, Ledger
+from ..schemas import (
+    CurrencyCreate,
+    CurrencyOut,
+    CurrencyUpdate,
+    FxRateCreate,
+    FxRateOut,
+    FxRateUpdate,
+    GroupCreate,
+    GroupOut,
+    GroupUpdate,
+    LedgerCreate,
+    LedgerOut,
+)
 from . import BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(tags=["masters"])
@@ -146,3 +161,157 @@ def list_ledgers(
         )
         for ledger, group in rows
     ]
+
+
+# ==================================================================== currencies
+@router.post("/currencies", response_model=CurrencyOut, status_code=201, tags=["currencies"])
+def create_currency(payload: CurrencyCreate, session: SessionDep, _: BookkeeperDep):
+    currency = Currency(
+        code=payload.code.upper(),
+        name=payload.name,
+        symbol=payload.symbol,
+        minor_unit=payload.minor_unit,
+    )
+    session.add(currency)
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        if "duplicate key" in str(exc).lower():
+            raise ValidationError(f"Currency {payload.code.upper()!r} already exists") from exc
+        raise
+    session.refresh(currency)
+    return _currency_out(currency)
+
+
+@router.get("/currencies", response_model=list[CurrencyOut], tags=["currencies"])
+def list_currencies(session: SessionDep, _: ReaderDep):
+    currencies = session.scalars(select(Currency).order_by(Currency.code)).all()
+    return [_currency_out(c) for c in currencies]
+
+
+@router.patch("/currencies/{code}", response_model=CurrencyOut, tags=["currencies"])
+def update_currency(
+    code: str,
+    payload: CurrencyUpdate,
+    session: SessionDep,
+    _: BookkeeperDep,
+):
+    currency = session.get(Currency, code.upper())
+    if currency is None:
+        raise NotFoundError(f"Currency {code.upper()!r} does not exist")
+    if payload.name is not None:
+        currency.name = payload.name
+    if payload.symbol is not None:
+        currency.symbol = payload.symbol
+    if payload.minor_unit is not None:
+        currency.minor_unit = payload.minor_unit
+    session.commit()
+    session.refresh(currency)
+    return _currency_out(currency)
+
+
+def _currency_out(currency: Currency) -> CurrencyOut:
+    return CurrencyOut(
+        code=currency.code,
+        name=currency.name,
+        symbol=currency.symbol,
+        minor_unit=currency.minor_unit,
+        is_system=currency.is_system,
+    )
+
+
+# ==================================================================== fx rates
+@router.post("/fx-rates", response_model=FxRateOut, status_code=201, tags=["fx-rates"])
+def create_fx_rate(payload: FxRateCreate, session: SessionDep, _: BookkeeperDep):
+    if payload.from_ccy.upper() == payload.to_ccy.upper():
+        raise ValidationError("fx rate pairs must differ (from_ccy != to_ccy)")
+    get_currency(session, payload.from_ccy)
+    get_currency(session, payload.to_ccy)
+    rate = FxRate(
+        from_ccy=payload.from_ccy.upper(),
+        to_ccy=payload.to_ccy.upper(),
+        rate=payload.rate,
+        valid_on=payload.valid_on,
+        source=payload.source,
+    )
+    session.add(rate)
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        message = str(getattr(exc, "orig", exc))
+        if "duplicate key" in message.lower():
+            raise ValidationError(
+                f"Rate {payload.from_ccy.upper()}→{payload.to_ccy.upper()} on "
+                f"{payload.valid_on} already exists — PATCH it to correct"
+            ) from exc
+        raise
+    session.refresh(rate)
+    return _fx_rate_out(rate)
+
+
+@router.get("/fx-rates", response_model=list[FxRateOut], tags=["fx-rates"])
+def list_fx_rates(
+    session: SessionDep,
+    _: ReaderDep,
+    from_ccy: Annotated[str | None, Query(max_length=3)] = None,
+    to_ccy: Annotated[str | None, Query(max_length=3)] = None,
+    valid_on: date | None = None,
+):
+    stmt = select(FxRate).order_by(FxRate.valid_on.desc(), FxRate.id.desc())
+    if from_ccy:
+        stmt = stmt.where(FxRate.from_ccy == from_ccy.upper())
+    if to_ccy:
+        stmt = stmt.where(FxRate.to_ccy == to_ccy.upper())
+    if valid_on:
+        stmt = stmt.where(FxRate.valid_on == valid_on)
+    return [_fx_rate_out(r) for r in session.scalars(stmt.limit(500)).all()]
+
+
+@router.patch("/fx-rates/{rate_id}", response_model=FxRateOut, tags=["fx-rates"])
+def update_fx_rate(
+    rate_id: int,
+    payload: FxRateUpdate,
+    session: SessionDep,
+    _: BookkeeperDep,
+):
+    rate = session.get(FxRate, rate_id)
+    if rate is None:
+        raise NotFoundError(f"FX rate {rate_id} does not exist")
+    rate.rate = payload.rate
+    if "source" in payload.model_fields_set:  # absent = keep the provenance
+        rate.source = payload.source
+    session.commit()
+    session.refresh(rate)
+    return _fx_rate_out(rate)
+
+
+@router.get("/fx-rates/resolve", tags=["fx-rates"])
+def resolve_fx_rate(
+    session: SessionDep,
+    _: ReaderDep,
+    from_ccy: Annotated[str, Query(max_length=3)],
+    to_ccy: Annotated[str, Query(max_length=3)],
+    on: Annotated[date, Query()],
+):
+    """The rate a posting UI should pre-fill: the exact day's row, else the
+    latest one on or before it. Direct pairs only — no silent inversion."""
+    rate = resolve_rate(session, from_ccy, to_ccy, on)
+    if rate is None:
+        raise NotFoundError(
+            f"No {from_ccy.upper()}→{to_ccy.upper()} rate on or before {on} — "
+            "POST /api/v1/fx-rates first"
+        )
+    return _fx_rate_out(rate)
+
+
+def _fx_rate_out(rate: FxRate) -> FxRateOut:
+    return FxRateOut(
+        id=rate.id,
+        from_ccy=rate.from_ccy,
+        to_ccy=rate.to_ccy,
+        rate=rate.rate,
+        valid_on=rate.valid_on,
+        source=rate.source,
+    )
