@@ -112,12 +112,13 @@ SELECT * FROM rpt.trial_balance('2026-11-06');
 
 ```
 db/                 schema.sql · functions.sql · seed (TallyPrime's 28 predefined groups)
+                    migrations/ — Alembic tree, 0001_baseline + drift guard (ADR-006)
 src/ledgerforge/    engine (posting/reversal/opening) · api · auth (OIDC + roles) · reporting · plugins · contrib
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
-tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth
+tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth, migrations
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
-scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh
+scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
 
 ## Performance (measured, reproducible)
@@ -157,6 +158,30 @@ are cached (15 min) and refreshed on unknown `kid` rotation. With auth on, the
 API is same-origin only — set `LF_CORS_ORIGINS` if you really need cross-origin
 calls. Per-book permissions land together with the multi-book schema (roadmap).
 
+## Database migrations
+
+`db/schema.sql` remains the bootstrap path (`make init-db`, Docker) and stays
+idempotent. Alembic ([ADR-006](docs/adr/006-migration-baseline.md)) versions
+the same schema: revision `0001_baseline` embeds `schema.sql` +
+`functions.sql` verbatim, and `tests/test_migrations.py` proves that
+`alembic upgrade head` produces an identical structure — schemas, tables,
+columns, indexes, constraints, triggers, functions, grants — via catalog
+fingerprints. If the two ever drift apart, CI fails.
+
+```bash
+make migrate            # alembic upgrade head
+make migrate-stamp      # adopt on a schema.sql-bootstrapped database
+alembic current         # where this database stands
+```
+
+The bootstrap stamps `alembic_version` to head automatically, so databases
+provisioned either way converge and a later `alembic upgrade head` is a
+no-op, not a re-run. `python -m ledgerforge.migrations upgrade head` works
+from any install. Pre-1.0, schema changes land in the SQL files first and
+the baseline is regenerated (`make baseline-regen`); after 1.0 the baseline
+freezes and changes ship as new revisions — see
+[db/migrations/README.md](db/migrations/README.md).
+
 ## Status & roadmap
 
 v0.3.0 — the accounting kernel, the voucher-entry screen **plus the command
@@ -166,8 +191,9 @@ model**. Next (see [docs/analysis.md §9](docs/analysis.md)):
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
 - [x] AuthN/AuthZ: OIDC bearer tokens + `reader`/`bookkeeper`/`admin` roles
+- [x] Alembic migration baseline: `0001_baseline` + structural drift guard
 - [ ] Multi-currency, period locking/FY close, multi-book
-- [ ] Alembic migrations, community plugin index, e-invoicing packs
+- [ ] Community plugin index, e-invoicing packs
 
 ## Contributing
 

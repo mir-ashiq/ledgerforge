@@ -18,7 +18,7 @@ pip install -e ".[dev]"
 # any PostgreSQL 16+; docker works:
 docker compose up -d db
 make init-db          # applies db/schema.sql + functions + Tally-style seed
-make test             # 39 tests against a real PostgreSQL
+make test             # 63 tests against a real PostgreSQL
 make dev              # API on :8000, docs at /docs
 ```
 
@@ -35,9 +35,32 @@ export LF_TEST_ADMIN_URL=postgresql+psycopg://postgres:postgres@localhost:5432/p
 - **Ruff clean**: `make lint` must pass (`ruff check . && ruff format --check .`).
 - **Tests for behavior**: every bug fix ships with a test that fails without it. New SQL needs a test that proves the invariant it guards.
 - **Conventional commits**: `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `refactor:`.
-- **Schema changes**: `db/schema.sql` is the v0.x bootstrap; keep it idempotent (`IF NOT EXISTS` / `CREATE OR REPLACE`). Alembic arrives before the first post-1.0 schema change — don't fork the schema informally.
+- **Schema changes**: see [ADR-006](docs/adr/006-migration-baseline.md) and the checklist below — the SQL files and the Alembic history must never drift apart (`tests/test_migrations.py` enforces this in CI).
 - **Docs count**: architectural changes come with an ADR (`docs/adr/NNN-*.md`: Context / Decision / Consequences).
 - **Plugins, not core edits**: if your feature is a tax rule, a dashboard, or a vertical workflow, it belongs in a plugin (see [docs/plugin-guide.md](docs/plugin-guide.md)).
+
+### Changing the schema
+
+Until 1.0, `db/schema.sql` + `db/functions.sql` stay the source of truth (keep
+them idempotent) and the Alembic baseline is re-embedded:
+
+```bash
+# 1. edit db/schema.sql / db/functions.sql
+make baseline-regen     # re-embeds them into db/migrations/versions/0001_baseline.py
+make test               # the drift guard must stay green
+```
+
+After 1.0 the baseline freezes; a schema change ships as a new revision that
+also updates the SQL files in the same PR, so fresh bootstraps and migrated
+databases stay identical:
+
+```bash
+make migration-new rev=0002_add_periods m="add periods table"
+# edit db/migrations/versions/0002_add_periods.py — handwritten raw SQL via op.execute()
+# update db/schema.sql + db/functions.sql to the new flattened state
+# include the ledgerforge_app GRANTs for any new tables
+make test
+```
 
 ## Reporting bugs
 

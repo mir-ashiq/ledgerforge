@@ -1,6 +1,6 @@
 # Database Design Reference
 
-**Schema source of truth:** `db/schema.sql` (bootstrap DDL) · `db/functions.sql` (reporting functions) · `db/seed/chart_of_accounts.sql` (TallyPrime-style chart of accounts) · **Decisions:** ADR-001, ADR-002, `docs/analysis.md` §3–§4.
+**Schema source of truth:** `db/schema.sql` (bootstrap DDL) · `db/functions.sql` (reporting functions) · `db/seed/chart_of_accounts.sql` (TallyPrime-style chart of accounts) · **Versioned as:** Alembic revision `0001_baseline` (ADR-006; `tests/test_migrations.py` keeps the two identical) · **Decisions:** ADR-001, ADR-002, `docs/analysis.md` §3–§4.
 
 ## Entity map
 

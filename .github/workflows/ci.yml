@@ -43,6 +43,24 @@ jobs:
         env:
           LF_TEST_ADMIN_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
 
+      - name: Alembic CLI smoke (upgrade, stamp, downgrade on a scratch database)
+        run: |
+          python - <<'PY'
+          import psycopg
+          dsn = "postgresql://postgres:postgres@localhost:5432/postgres"
+          with psycopg.connect(dsn, autocommit=True) as conn:
+              conn.execute("DROP DATABASE IF EXISTS lf_ci_alembic WITH (FORCE)")
+              conn.execute("CREATE DATABASE lf_ci_alembic")
+          PY
+          export LF_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/lf_ci_alembic
+          alembic upgrade head
+          alembic current
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Baseline freshness (schema.sql <-> 0001_baseline.py in sync)
+        run: python scripts/regen_baseline.py --check
+
       - name: Benchmark smoke (proves the harness runs)
         run: |
           python scripts/bench_hierarchy.py --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
