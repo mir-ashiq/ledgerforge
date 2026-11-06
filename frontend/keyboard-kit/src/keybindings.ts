@@ -64,7 +64,9 @@ export function parseCombo(spec: string): KeyCombo {
 
 /** Parse a binding spec; a space-separated pair ('K K') is a chord. */
 export function parseBindingSpec(spec: string): KeyCombo[] {
-  return spec.split(/\s+/).filter(Boolean).map(parseCombo);
+  const combos = spec.split(/\s+/).filter(Boolean).map(parseCombo);
+  if (combos.length === 0) throw new Error(`Empty key binding: ${spec!}`);
+  return combos;
 }
 
 /** True while an IME composition is active (never steal these events). */
@@ -92,13 +94,14 @@ export function comboMatches(a: KeyCombo, b: KeyCombo): boolean {
   );
 }
 
-/** Human-readable form, e.g. 'Ctrl+A' (for the palette). */
+/** Human-readable form, e.g. 'Ctrl+A' (for the palette). Shift is always
+ *  shown so captured combos like 'Ctrl+Shift+P' round-trip through parsing. */
 export function formatCombo(combo: KeyCombo): string {
   const parts: string[] = [];
   if (combo.ctrl) parts.push('Ctrl');
   if (combo.meta) parts.push(isMacPlatform() ? 'Cmd' : 'Meta');
   if (combo.alt) parts.push('Alt');
-  if (combo.shift && combo.key.length > 1) parts.push('Shift');
+  if (combo.shift) parts.push('Shift');
   parts.push(combo.key.length === 1 ? combo.key.toUpperCase() : combo.key);
   return parts.join('+');
 }

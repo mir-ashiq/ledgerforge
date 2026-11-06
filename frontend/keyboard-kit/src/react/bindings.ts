@@ -2,13 +2,20 @@
  * React bindings for keyboard-kit — thin adapters; the core stays
  * framework-agnostic (ADR-004). Requires react >= 18 as a peer.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { KeymapService } from '../keymapService.js';
 import type { Command, ContextPredicate } from '../types.js';
 
 /** App-wide singleton. Host apps call `keymap.start()` once at boot. */
 export const keymap = new KeymapService();
+
+/** Re-render whenever any binding changes (palette / help live-updates). */
+export function useKeymapVersion(): number {
+  const [version, setVersion] = useState(0);
+  useEffect(() => keymap.onChange(() => setVersion((v) => v + 1)), []);
+  return version;
+}
 
 /** Register a command (and optional default binding) for a component's lifetime. */
 export function useCommand(

@@ -13,5 +13,10 @@ export {
   parseBindingSpec,
   parseCombo,
 } from './keybindings.js';
-export { KeymapService, type KeymapOptions } from './keymapService.js';
+export {
+  KeymapService,
+  type BindingInfo,
+  type KeymapOptions,
+  type KeymapStore,
+} from './keymapService.js';
 export { tallyKeymap, TALLY_PRESETS } from './presets/tallyKeymap.js';
