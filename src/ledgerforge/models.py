@@ -106,6 +106,9 @@ class Voucher(Base):
     narration: Mapped[str | None]
     reversal_of: Mapped[int | None] = mapped_column(ForeignKey("vouchers.id"))
     posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    meta: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
 
 class VoucherEntry(Base):

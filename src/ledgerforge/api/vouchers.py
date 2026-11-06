@@ -54,6 +54,7 @@ def _voucher_out(session: Session, voucher: Voucher, *, replayed: bool = False) 
         reversal_of=voucher.reversal_of,
         posted_at=voucher.posted_at,
         client_token=voucher.client_token,
+        meta=voucher.meta or {},
         replayed=replayed,
         entries=[
             VoucherLineOut(

@@ -194,20 +194,64 @@ which Law 2 forbids). Per-book permissions ride on the token's `books` claim
 
 Design: [ADR-009](docs/adr/009-multi-book.md).
 
+## Invoicing (roadmap §9, ADR-010)
+
+The first complete business document shipped **as a plugin, not in core**
+(`ledgerforge/contrib/invoicing.py`, loaded at boot). Describe the commercial
+document; the pack derives the accounting and the voucher *is* the invoice —
+items, rates and computed totals persist with it (`vouchers.meta`, ADR-010)
+and come back from `GET /vouchers/{id}`, immutable like the amounts.
+
+```bash
+# A 10×100 GST-18% sale + 250 exempt service, due in 30 days
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "SAL", "voucher_date": "2026-11-06",
+  "entries": [{"ledger_name": "Sales", "dc": "C", "amount": "0.01"}],
+  "meta": {"invoice": {
+    "customer": "Acme Traders",
+    "items": [
+      {"description": "Widgets", "qty": "10", "rate": "100.00", "tax_rate": "18"},
+      {"description": "Installation", "qty": "1", "rate": "250.00", "tax_rate": "0"}
+    ],
+    "due_days": 30
+  }}
+}'
+# → Dr Acme Traders 1430.00 (auto-created under Sundry Debtors)
+#   Cr Sales 1000.00 + Cr Sales 250.00 (per item, qty @ rate in narrations)
+#   Cr CGST Payable 90.00 + Cr SGST Payable 90.00 (under Duties & Taxes)
+#   meta.invoice.computed: subtotal 1250.00, tax 180.00, grand 1430.00, due 2026-12-06
+
+# Settle it
+# meta: {"receipt": {"customer": "Acme Traders", "amount": "1430.00",
+#                    "bank_ledger": "HDFC Bank", "reference": "NEFT-42"}}
+```
+
+Guard rails (all 422): tax rates outside the GST slabs `0/5/12/18/28`,
+non-positive quantities, double-tax (`gst` + `invoice`), ambiguous documents
+(`invoice` + `receipt`), and future-dated documents (policy-overridable).
+Idempotent replay does not re-issue a document; reversals are new documents
+with empty meta; auto-created masters are book-scoped (ADR-009) — the same
+customer in two books is two ledgers.
+
+Design: [ADR-010](docs/adr/010-voucher-meta.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## What's inside
 
 ```
 db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
                     frozen 0001 baseline + drift guard, 0002 multi-currency,
-                    0003 period locking, 0004 multi-book (ADR-006/007/008/009).
+                    0003 period locking, 0004 multi-book, 0005 voucher meta
+                    (ADR-006/007/008/009/010).
                     The chart-of-accounts seed is code: ledgerforge/seeding.py
                     (one definition for bootstrap and POST /books — ADR-009).
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
-                    + roles + per-book claims) · reporting · seeding · plugins · contrib
+                    + roles + per-book claims) · reporting · seeding · plugins ·
+                    contrib (example_gst + the invoicing pack)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
-                    migrations, multi-currency, period locking, multi-book,
+                    migrations, multi-currency, period locking, multi-book, invoicing,
                     deep audit (adversarial: races, rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
@@ -280,11 +324,12 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.4.0 — the accounting kernel, the voucher-entry screen, the command palette
-with persisted key rebinding, OIDC authentication **plus multi-currency books
-and period locking with the financial-year close — the first two features
-shipped as forward migrations (`0002_*`, `0003_*`) over the frozen baseline**.
-Next (see [docs/analysis.md §9](docs/analysis.md)):
+v0.6.0 — the accounting kernel, the voucher-entry screen, the command palette
+with persisted key rebinding, OIDC authentication, multi-currency books,
+period locking with the financial-year close, multi-book (v0.5) **and the
+first plugin-pack feature: invoicing documents that persist with the voucher
+(`vouchers.meta`, revision 0005)**. Next (see
+[docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -292,7 +337,10 @@ Next (see [docs/analysis.md §9](docs/analysis.md)):
 - [x] Alembic migration baseline: `0001_baseline` + structural drift guard
 - [x] Multi-currency: base-currency posting rules, FX snapshots, gain/loss ledgers
 - [x] Period locking + FY close: the posting gate, the P&L sweep, finality
-- [ ] Multi-book support, community plugin index, e-invoicing packs
+- [x] Multi-book: one database, many companies (ADR-009)
+- [x] Invoicing: sales invoices + AR receipts as a plugin pack (ADR-010)
+- [ ] Inventory and payroll packs on the same hook taxonomy
+- [ ] Community plugin index, signed plugin trust model
 
 ## Contributing
 

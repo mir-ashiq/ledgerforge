@@ -1,6 +1,6 @@
 # Database Design Reference
 
-**Schema source of truth:** `db/schema.sql` (bootstrap DDL) · `db/functions.sql` (reporting functions) · `ledgerforge/seeding.py` (TallyPrime-style chart of accounts — one definition for bootstrap and `POST /api/v1/books`, ADR-009) · **Versioned as:** Alembic revisions `0001_baseline` → `0004_multi_book` (ADR-006; `tests/test_migrations.py` keeps the head and the bootstrap identical) · **Decisions:** ADR-001, ADR-002, ADR-009, `docs/analysis.md` §3–§4.
+**Schema source of truth:** `db/schema.sql` (bootstrap DDL) · `db/functions.sql` (reporting functions) · `ledgerforge/seeding.py` (TallyPrime-style chart of accounts — one definition for bootstrap and `POST /api/v1/books`, ADR-009) · **Versioned as:** Alembic revisions `0001_baseline` → `0005_voucher_meta` (ADR-006; `tests/test_migrations.py` keeps the head and the bootstrap identical) · **Decisions:** ADR-001, ADR-002, ADR-009, ADR-010, `docs/analysis.md` §3–§4.
 
 ## Entity map
 
@@ -10,7 +10,7 @@ groups (tree: parent_id + same-book composite FK, per-book unique names)
   ←── group_closure (read model, trigger-maintained)
   └── ledgers (unique name per book, like Tally per company)
 voucher_types (RCT, PYT, JV, CN, SAL, PUR, CRN, DBN, OPEN, FYC … — per book)
-  └── vouchers (immutable: uuid, client_token per book, voucher_no, date, reversal_of)
+  └── vouchers (immutable: uuid, client_token per book, voucher_no, date, reversal_of, meta document)
         └── voucher_entries (immutable: line_no, ledger_id, book_id, dc D|C, amount NUMERIC(26,8),
                              FX snapshot: currency, amount_fx, fx_rate — issue #4 / ADR-007)
 currencies (ISO 4217, code-keyed)  ←── fx_rates (dated pairs, NUMERIC(30,10) — ADR-007)
@@ -42,7 +42,7 @@ settings (fy_start_month, base_currency, company_name)
 `id`, `code UNIQUE` (`RCT`, `PYT`, `JV`, `CN`, `SAL`, `PUR`, `CRN`, `DBN`, `OPEN`), `name`, `number_prefix`, `restart_yearly`, `is_system`.
 
 ### `vouchers` (immutable)
-`id`, `uuid`, `client_token UNIQUE` (idempotency), `voucher_type_id`, `voucher_no` (+ `UNIQUE (voucher_type_id, voucher_no)`), `sequence` (gapless int), `voucher_date`, `narration`, `reversal_of → vouchers.id`, `posted_at`. `BEFORE UPDATE OR DELETE` trigger raises.
+`id`, `uuid`, `client_token UNIQUE` (idempotency), `voucher_type_id`, `voucher_no` (+ `UNIQUE (voucher_type_id, voucher_no)`), `sequence` (gapless int), `voucher_date`, `narration`, `reversal_of → vouchers.id`, `posted_at`, `meta JSONB NOT NULL DEFAULT '{}'` — the plugin document store (ADR-010): opaque to the kernel, never read by core validation or `rpt.*`; the engine persists the post-transform draft meta so plugin annotations (e.g. `invoice.computed`) live with the voucher. `BEFORE UPDATE OR DELETE` trigger raises — Law 2 covers documents too.
 
 ### `voucher_entries` (immutable)
 `id`, `voucher_id`, `line_no`, `ledger_id`, `dc CHAR(1) CHECK IN ('D','C')`, `amount NUMERIC(26,8) CHECK (amount > 0)` — the **base-currency** figure, `voucher_date` (denormalized, trigger-proven equal to the voucher's), `narration`, and the FX snapshot trio (ADR-007): `currency CHAR(3) → currencies`, `amount_fx NUMERIC(26,8)`, `fx_rate NUMERIC(30,10)`, all-or-none and `CHECK (amount = round(amount_fx * fx_rate, 8))` when present — the database proves the product for any writer. Index: `(ledger_id, voucher_date) INCLUDE (dc, amount)` — the covering index every balance/report query uses.

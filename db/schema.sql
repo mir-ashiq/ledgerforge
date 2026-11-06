@@ -244,6 +244,10 @@ CREATE TABLE IF NOT EXISTS voucher_types (
 -- per-book) and idempotent client_tokens are unique per book, so the same
 -- offline client may retry into two books without interference.
 -- ----------------------------------------------------------------------------
+-- meta: the plugin document store (ADR-010, migration 0005) — opaque to the
+-- kernel, owned by plugins (invoice items, gst config, computed totals).
+-- Last column position on purpose: ALTER TABLE ADD COLUMN appends, and the
+-- drift guard fingerprints columns in attnum order (ADR-006).
 CREATE TABLE IF NOT EXISTS vouchers (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     book_id         BIGINT NOT NULL REFERENCES books(id),
@@ -256,6 +260,7 @@ CREATE TABLE IF NOT EXISTS vouchers (
     narration       TEXT,
     reversal_of     BIGINT REFERENCES vouchers(id),
     posted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    meta            JSONB NOT NULL DEFAULT '{}',
     CONSTRAINT uq_voucher_no_per_type UNIQUE (book_id, voucher_type_id, voucher_no),
     CONSTRAINT uq_voucher_client_token_book UNIQUE (book_id, client_token),
     CONSTRAINT chk_no_self_reversal CHECK (reversal_of IS NULL OR reversal_of <> id)

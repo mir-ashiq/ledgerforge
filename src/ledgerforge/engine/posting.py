@@ -229,6 +229,7 @@ def post_voucher(
         voucher_date=draft.voucher_date,
         narration=draft.narration,
         reversal_of=draft.reversal_of,
+        meta=draft.meta or {},  # post-transform: plugin annotations included (ADR-010)
     )
     session.add(voucher)
     try:
@@ -286,6 +287,7 @@ def post_voucher(
             "book_id": book.id,
             "voucher_type": vtype.code,
             "voucher_date": voucher.voucher_date.isoformat(),
+            "meta": dict(voucher.meta or {}),  # the full document for after-commit bridges
         },
     )
     return voucher, True

@@ -9,7 +9,8 @@ Alembic revision history for the database schema. Policy and rationale:
   CI on any drift.
 - **The baseline is frozen** (ADR-006, amended 2026-11-06). The forward
   revisions — `0002_multi_currency` (issue #4), `0003_period_locking`
-  (issue #5) and `0004_multi_book` (roadmap §9, ADR-009) — shipped against
+  (issue #5), `0004_multi_book` (roadmap §9, ADR-009) and
+  `0005_voucher_meta` (the plugin document store, ADR-010) — shipped against
   it, so it can never be regenerated. `db/migrations/baseline/` preserves the
   schema as it stood at the freeze; `make baseline-check` proves `0001` still
   embeds it exactly.

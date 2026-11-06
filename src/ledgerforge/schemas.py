@@ -259,6 +259,10 @@ class VoucherOut(BaseModel):
     reversal_of: int | None
     posted_at: datetime
     client_token: UUID
+    meta: dict[str, Any] = Field(
+        default_factory=dict,
+        description="the posted document: plugin input plus computed annotations (ADR-010)",
+    )
     entries: list[VoucherLineOut]
     replayed: bool = False
 

@@ -57,7 +57,7 @@ LedgerForge is an open-source business management system whose core is a **high-
 
 ### 2.1 What we are building (and, deliberately, not yet)
 
-The Phase-2 deliverable in this repository is the **accounting kernel**: masters (groups, ledgers), voucher posting, reversal, opening balances, reporting (Trial Balance, Profit & Loss, Balance Sheet), the plugin runtime with a worked GST example, and the keyboard interaction framework for the frontend. Inventory, payroll, banking reconciliation are roadmap items (§9); multi-currency and period locking landed in v0.4.0 (ADR-007/008), and multi-book in v0.5.0 (ADR-009). Every remaining roadmap item is *buildable on top of* this kernel precisely because the plugin boundaries were designed first.
+The Phase-2 deliverable in this repository is the **accounting kernel**: masters (groups, ledgers), voucher posting, reversal, opening balances, reporting (Trial Balance, Profit & Loss, Balance Sheet), the plugin runtime with a worked GST example, and the keyboard interaction framework for the frontend. Inventory and payroll are roadmap items (§9); multi-currency and period locking landed in v0.4.0 (ADR-007/008), multi-book in v0.5.0 (ADR-009), and invoicing in v0.6.0 as the first plugin pack on the voucher document store (ADR-010). Every remaining roadmap item is *buildable on top of* this kernel precisely because the plugin boundaries were designed first.
 
 ### 2.2 The TallyPrime reference model
 
@@ -591,8 +591,9 @@ curl -s localhost:8000/api/v1/reports/trial-balance?as_of=2026-11-06
 | Period locking / FY close | **Landed (v0.4)** | `periods` with the open→locked→closed state machine, a row-locking posting gate and the `rpt.fy_close` sweep; `0003_period_locking` (ADR-008) |
 | Multi-company / multi-book | **Landed (v0.5)** | `books` table + `book_id` discriminator on every book-owned table (0004, taken while cheap); book-scoped uniqueness, numbering, periods and reports; `X-Book-Id` header with single-book back-compat; per-book permissions as the token's `books` claim (ADR-009) |
 | AuthN/AuthZ | **Landed (v0.3)** | OIDC bearer verification (JWKS + rotation refresh) with the `reader` < `bookkeeper` < `admin` role model on every route; `LF_AUTH_MODE=disabled` remains the dev-only default |
-| Alembic migrations | **Landed (v0.3/v0.4/v0.5)** | Frozen `0001_baseline` with a structural drift guard in CI (ADR-006); forward revisions `0002`–`0004` proved convergent with the bootstrap by catalog fingerprint |
-| Inventory / invoicing / payroll | Roadmap | Built as plugins on the same hook taxonomy, not in core |
+| Alembic migrations | **Landed (v0.3/v0.4/v0.5/v0.6)** | Frozen `0001_baseline` with a structural drift guard in CI (ADR-006); forward revisions `0002`–`0005` proved convergent with the bootstrap by catalog fingerprint |
+| Invoicing | **Landed (v0.6)** | The first plugin-pack feature, zero core logic: `vouchers.meta` (0005, ADR-010) persists the commercial document; the `invoicing` pack derives the TallyPrime GST-sale lines from `meta.invoice` (items/qty/rate/slabs), settles via `meta.receipt`, and annotates computed totals that round-trip through `GET /vouchers/{id}` |
+| Inventory / payroll | Roadmap | Built as plugins on the same hook taxonomy + document store, not in core |
 | Report scale-out | Watch | Partitioning + BRIN + optional eventually-consistent balance cache (§4.3) — only when books pass millions of entries |
 | Plugin trust model | Watch | Signed plugin index, capability-scoped registry, sandboxed UI slots (§5.5) |
 
