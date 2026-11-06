@@ -47,8 +47,12 @@ interface VoucherScreenProps {
 const inEditor: ContextPredicate = (ctx) => ctx.scopeId === 'voucherEditor';
 const editorAnywhere: ContextPredicate = (ctx) => Array.isArray(ctx.scopeIds) && ctx.scopeIds.includes('voucherEditor');
 const inLedgerPicker: ContextPredicate = (ctx) => ctx.scopeId === 'ledgerPicker';
+/** The command palette sits on top of this screen: while it is open, this
+ *  screen's keys are inert (only palette keys respond) — same contract as a
+ *  TallyPrime menu. */
+const paletteClosed: ContextPredicate = (ctx) => ctx.paletteOpen !== true;
 /** Voucher-scoped, with the picker open too, but not while a dialog is up. */
-const noDialog: ContextPredicate = (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true;
+const noDialog: ContextPredicate = (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx);
 
 export function VoucherScreen({
   ledgers,
@@ -157,8 +161,8 @@ export function VoucherScreen({
     },
     'Primary+A',
     // fires from anywhere in the voucher — with the picker open too — but
-    // never while a dialog owns the interaction
-    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true,
+    // never while a dialog or the command palette owns the interaction
+    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx),
   );
 
   useCommand(
@@ -171,7 +175,7 @@ export function VoucherScreen({
       },
     },
     'Alt+D',
-    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true,
+    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx),
   );
 
   useCommand(
@@ -234,6 +238,7 @@ export function VoucherScreen({
     (ctx) =>
       editorAnywhere(ctx) &&
       ctx.dialogOpen !== true &&
+      paletteClosed(ctx) &&
       ctx.inAmountCell === true &&
       ctx.amountCellEmpty === true,
   );
@@ -250,7 +255,7 @@ export function VoucherScreen({
       },
     },
     'Alt+C',
-    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && ctx.inLedgerCell === true,
+    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx) && ctx.inLedgerCell === true,
   );
 
   useCommand(
