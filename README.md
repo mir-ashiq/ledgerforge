@@ -281,6 +281,53 @@ items that would silently reuse an unrelated ledger.
 Design: [ADR-011](docs/adr/011-inventory-pack.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Payroll (roadmap §9, ADR-012)
+
+The third business pack — the second in a row with **zero schema change**,
+and the last planned roadmap feature. Salaries are documents like invoices
+and stock: a **run** accrues a period's payroll (one voucher, the
+TallyPrime payroll journal shape), a **payout** settles it. The derived
+state is a deterministic fold over posted documents, never stored:
+**year-to-date windows by the book's fiscal year** (plugin API 0.4 grew
+the one fact that needs: `Resolver.fy_start_month`), while **payable is
+an all-time balance** — an accumulator windows, a balance never expires.
+
+```bash
+# October payroll: earnings, withholdings and the employer's contribution
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "JV", "voucher_date": "2026-11-07",
+  "entries": [{"ledger_name": "Cash", "dc": "C", "amount": "0.01"}],
+  "meta": {"payroll": {"mode": "run", "period": "2026-10",
+    "employees": [{"employee": "Asha Verma", "components": [
+      {"name": "Basic Salary", "amount": "50000.00", "kind": "earning"},
+      {"name": "HRA", "amount": "20000.00", "kind": "earning"},
+      {"name": "PF Payable", "amount": "1800.00", "kind": "withheld"},
+      {"name": "Employer PF", "amount": "1800.00", "kind": "employer",
+       "liability": "PF Payable"}
+    ]}]}}
+}'
+# → Dr Basic Salary 50000 · Dr HRA 20000 (Indirect Expenses)
+#   Dr Employer PF 1800 · Cr PF Payable 1800 + 1800 (Duties & Taxes)
+#   Cr Asha Verma 68200 (Provisions — net pay)
+#   computed: gross 70000 / withheld 1800 / net 68200 + fiscal-year YTD
+
+# Settle it
+# meta: {"payroll": {"mode": "payout", "employee": "Asha Verma",
+#                    "amount": "68200.00", "bank": "HDFC Bank"}}
+```
+
+One run per employee per period (advisory-lock-serialized, so concurrent
+duplicates cannot both post; policy-overridable for off-cycle
+corrections). Reversals net to zero on YTD and payable. `ytd()` and
+`payable()` replay the folds for any later consumer. Guards (all 422):
+malformed periods, duplicate employees/components, withheld exceeding
+gross, employer contributions without a liability, periods that have not
+started, mode conflicts with the other packs, FX lines, and employee
+names that would silently reuse an unrelated ledger.
+
+Design: [ADR-012](docs/adr/012-payroll-pack.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## What's inside
 
 ```
@@ -292,13 +339,13 @@ db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
                     (one definition for bootstrap and POST /books — ADR-009).
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
                     + roles + per-book claims) · reporting · seeding · plugins ·
-                    contrib (example_gst + the invoicing + inventory packs)
+                    contrib (example_gst + the invoicing, inventory and payroll packs)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
-                    inventory, deep audit (adversarial: races, rounding boundaries,
-                    gate bypasses)
+                    inventory, payroll, deep audit (adversarial: races, rounding
+                    boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
@@ -370,12 +417,14 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.7.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.8.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
-as the first plugin pack (v0.6) **and inventory as the second — goods
-movements as documents with weighted-average valuation, zero schema change
-(plugin API 0.3: document-store reads + advisory locks)**. Next (see
+as the first plugin pack (v0.6), inventory as the second — zero schema
+change (plugin API 0.3) — **and payroll as the third: runs and payouts as
+documents, fiscal-year YTD folds, zero schema change (plugin API 0.4:
+Resolver.fy_start_month)**. The planned roadmap is now fully landed; what
+remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
@@ -388,8 +437,11 @@ movements as documents with weighted-average valuation, zero schema change
 - [x] Invoicing: sales invoices + AR receipts as a plugin pack (ADR-010)
 - [x] Inventory: stock documents, weighted-average valuation, derived
       positions as a plugin pack (ADR-011)
-- [ ] Payroll pack on the same hook taxonomy + document store
+- [x] Payroll: runs/payouts, fiscal-year YTD and all-time payable folds
+      as a plugin pack (ADR-012)
 - [ ] Community plugin index, signed plugin trust model
+- [ ] Report scale-out (partitioning + BRIN) — only when books pass
+      millions of entries
 
 ## Contributing
 

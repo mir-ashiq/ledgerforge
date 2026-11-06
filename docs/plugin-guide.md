@@ -1,6 +1,6 @@
 # Plugin Guide
 
-**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack) and `ledgerforge/contrib/inventory.py` (derived state on the document store) · **Architecture:** ADR-003, ADR-010, ADR-011, `docs/analysis.md` §5.
+**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store) and `ledgerforge/contrib/payroll.py` (fiscal-year folds) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, `docs/analysis.md` §5.
 
 ## The two tiers
 
@@ -57,6 +57,7 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 - `resolve.ensure_ledger(name, group_name)` — look up or atomically create under a group of the same book (e.g. `CGST Payable` under *Duties & Taxes*).
 - `resolve.prior_documents(key)` — **plugin API 0.3 (ADR-011):** every posted voucher of the book whose `meta` carries `key`, oldest first, as `PriorDocument(voucher_id, voucher_no, voucher_date, reversal_of, meta)` — plus every voucher reversing one of those, so folds can net document pairs. The kernel interprets nothing; the payload is exactly what was stored.
 - `resolve.lock(name)` — **plugin API 0.3 (ADR-011):** transaction-scoped advisory lock on `"{book}:{name}"`, released at commit/rollback. Lock a voucher's names in **one sorted pass** (deadlock discipline).
+- `resolve.fy_start_month` — **plugin API 0.4 (ADR-012):** the book's fiscal-year start month, 1–12, read-only — the one fact a year-to-date fold needs to window its accumulators. Immutable once the book has vouchers.
 
 `api_compat` is a **floor, not a pin** (ADR-011): a plugin declaring an older minor keeps loading on a newer build; a plugin declaring a newer minor is refused loudly.
 
@@ -181,7 +182,53 @@ restored the ledgers.
 Guard rails (all 422): insufficient stock (`policy:allow_negative_stock`
 overrides partial overdrafts; an empty position never issues), transfers
 that would go negative, no-op recounts, mode conflicts (`stock` +
-`gst`/`invoice`/`receipt`, vetoed by both packs), FX lines, future dates
-(policy-overridable), and item names that would silently reuse an
+`gst`/`invoice`/`receipt`/`payroll`, vetoed by all packs), FX lines, future
+dates (policy-overridable), and item names that would silently reuse an
 unrelated existing ledger. `MOVEMENTS` (after-commit seam) records every
 stock document — the warehouse-bridge hook point.
+
+## Worked pack: payroll (`ledgerforge/contrib/payroll.py`)
+
+The third pack — the second in a row with **zero schema change**
+(ADR-012). Salaries are documents like invoices and stock: the *run*
+accrues, the *payout* settles, and the derived state (year-to-date,
+payable) is a deterministic fold over posted documents, never stored.
+Plugin API 0.4 grew the one fact the fold needs
+(`Resolver.fy_start_month`).
+
+```json
+{"payroll": {"mode": "run", "period": "2026-10",
+  "employees": [{"employee": "Asha Verma", "components": [
+    {"name": "Basic Salary", "amount": "50000.00", "kind": "earning"},
+    {"name": "HRA", "amount": "20000.00", "kind": "earning"},
+    {"name": "PF Payable", "amount": "1800.00", "kind": "withheld"},
+    {"name": "Employer PF", "amount": "1800.00", "kind": "employer",
+     "liability": "PF Payable"}
+  ]}]}}
+// → Dr Basic Salary 50000 · Dr HRA 20000 (Indirect Expenses)
+//   Dr Employer PF 1800 · Cr PF Payable 1800+1800 (Duties & Taxes)
+//   Cr Asha Verma 68200 (Provisions — the net-pay payable)
+//   computed: per-employee gross/withheld/employer/net + fiscal-year YTD
+
+{"payroll": {"mode": "payout", "employee": "Asha Verma",
+  "amount": "68200.00", "bank": "HDFC Bank"}}
+// → Dr Asha Verma 68200 · Cr HDFC Bank 68200
+//   computed: payable_after 0.00
+```
+
+Components are pay heads with a `kind` — the TallyPrime taxonomy in
+miniature: `earning` (Dr expense), `withheld` (Cr liability, reduces
+net), `employer` (Dr expense + Cr a required `liability`; never touches
+net). **YTD windows by the book's fiscal year** (a September payslip
+never shows October); **payable is all-time** (accrued net minus
+payouts — a balance never expires). One run per employee per period,
+serialized by advisory locks; reversals net to zero on both views;
+`payroll.ytd(resolver, employee)` and `payroll.payable(resolver,
+employee)` replay the folds for bridges.
+
+Guard rails (all 422): malformed periods (`YYYY-MM`), duplicate
+employees/components, bad kinds, non-positive amounts, employer without
+a liability, withheld exceeding gross, periods that have not started,
+future dates, mode conflicts (vetoed by all packs), FX lines, and
+employee names colliding with unrelated ledgers. `RUNS` (after-commit
+seam) records every payroll document — the payslip/PF-bridge hook point.

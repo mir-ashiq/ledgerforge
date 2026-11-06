@@ -270,7 +270,7 @@ def _ensure_inventory_ledger(resolver: Resolver, item_name: str, override: str |
 
 
 def _reject_conflicts(draft: VoucherDraft) -> None:
-    for other in ("gst", "invoice", "receipt"):
+    for other in ("gst", "invoice", "receipt", "payroll"):
         if draft.meta.get(other) is not None:
             raise ValidationError(f"inventory: meta.stock and meta.{other} are mutually exclusive")
     if any(ln.currency is not None for ln in draft.lines):

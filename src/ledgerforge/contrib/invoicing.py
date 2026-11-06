@@ -100,6 +100,12 @@ def _reject_conflicts(draft: VoucherDraft, mode: str) -> None:
             "invoicing: meta.invoice/receipt and meta.stock are mutually exclusive "
             "(post the commercial and the stock documents separately)"
         )
+    if draft.meta.get("payroll") is not None:
+        # Same discipline for the payroll pack (ADR-012).
+        raise ValidationError(
+            "invoicing: meta.invoice/receipt and meta.payroll are mutually exclusive "
+            "(post the commercial and the payroll documents separately)"
+        )
 
 
 def _require_customer(doc: dict, mode: str) -> str:

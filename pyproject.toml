@@ -51,6 +51,7 @@ Changelog = "https://github.com/mir-ashiq/ledgerforge/releases"
 example_gst = "ledgerforge.contrib.example_gst"
 invoicing = "ledgerforge.contrib.invoicing"
 inventory = "ledgerforge.contrib.inventory"
+payroll = "ledgerforge.contrib.payroll"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ledgerforge"]

@@ -149,6 +149,16 @@ class Resolver:
             select(Group).where(Group.book_id == self._book.id, Group.name == name)
         )
 
+    @property
+    def fy_start_month(self) -> int:
+        """The book's fiscal-year start month, 1–12 (plugin API 0.4, ADR-012).
+        Read-only: the one fact a year-to-date fold needs to window its
+        accumulators — the months >= ``fy_start_month`` open a fiscal year.
+        Immutable once the book has vouchers, so the value a plugin reads
+        inside the posting transaction is the value every prior document
+        was posted under."""
+        return self._book.fy_start_month
+
     def ensure_ledger(self, name: str, group_name: str) -> Ledger:
         """Return the named ledger of the book, creating it under
         ``group_name`` (of the same book) if absent."""

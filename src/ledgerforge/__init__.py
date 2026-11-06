@@ -15,4 +15,7 @@ __version__ = "0.7.0"
 #: 0.3 — Resolver gained the document-store read (``prior_documents``) and
 #:       transaction-scoped advisory locks (``lock``); ``api_compat`` became
 #:       a floor, not an exact pin — older-minor plugins keep loading (ADR-011).
-PLUGIN_API_VERSION = "0.3"
+#: 0.4 — Resolver gained the read-only ``fy_start_month`` (the book's
+#:       fiscal-year start month), the one fact a year-to-date fold needs
+#:       (ADR-012).
+PLUGIN_API_VERSION = "0.4"
