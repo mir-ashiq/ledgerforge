@@ -40,6 +40,12 @@ export class KeymapService {
     this.options = options;
   }
 
+  /** Supply (or replace) extra context flags, e.g. `pickerOpen`, `inLedgerCell`.
+   *  Hosts call this once at boot with a getter reading live state. */
+  setContextProvider(context?: () => Record<string, unknown>): void {
+    this.options = { ...this.options, context };
+  }
+
   // ------------------------------------------------------------- commands
   registerCommand(command: Command): void {
     this.commands.register(command);

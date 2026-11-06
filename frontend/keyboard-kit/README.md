@@ -40,6 +40,14 @@ useFocusScope('voucherEditor'); // Escape pops back, scope ids feed `when` predi
 useCommand({ id: 'voucher.accept', title: 'Accept voucher', run: post }, 'Primary+A');
 ```
 
+Hosts with dynamic UI state feed it into `when` predicates without re-binding:
+
+```ts
+const flagsRef = useRef<Record<string, unknown>>({});
+keymap.setContextProvider(() => flagsRef.current);
+// e.g. bind with: (ctx) => ctx.scopeId === 'voucherEditor' && ctx.pickerOpen
+```
+
 ## Design rules
 
 1. **One pipeline.** No widget attaches its own key handlers — this is what eliminates double-handled-key races.

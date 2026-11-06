@@ -13,6 +13,7 @@ const KEY_ALIASES: Record<string, string> = {
   cmd: 'meta',
   cmdorctrl: 'primary',
   ctrlorcmd: 'primary',
+  primary: 'primary',
   meta: 'meta',
   command: 'meta',
   win: 'meta',

@@ -21,7 +21,13 @@ export function useCommand(
 
   useEffect(() => {
     keymap.registerCommand({ ...command, run: (args) => runRef.current(args) });
-    if (binding) keymap.bind(binding, command.id, when);
+    try {
+      if (binding) keymap.bind(binding, command.id, when);
+    } catch (err) {
+      // never leak a registered command if its binding is invalid
+      keymap.unregisterCommand(command.id);
+      throw err;
+    }
     return () => keymap.unregisterCommand(command.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [command.id, binding]);
@@ -60,8 +66,11 @@ export function useRovingFocus(
  * "back"); the scope id becomes available to `when` predicates.
  */
 export function useFocusScope(id: string, onEscape?: () => boolean): void {
+  const escapeRef = useRef(onEscape);
+  escapeRef.current = onEscape;
   useEffect(() => {
-    keymap.focus.push({ id, onEscape });
+    // wrap so the scope always calls the latest handler (no stale closures)
+    keymap.focus.push({ id, onEscape: onEscape ? () => escapeRef.current?.() ?? true : undefined });
     return () => {
       keymap.focus.pop();
     };
