@@ -99,10 +99,12 @@ def validate_fx_lines(session: Session, draft: VoucherDraft, base: str) -> None:
             )
         expected = expected_base_amount(amount_fx, fx_rate)
         if line.amount != expected:
+            # plain decimal notation throughout — the API speaks decimal
+            # strings, and str(Decimal) would render tiny values as "2E-8"
             raise ValidationError(
-                f"Line {i}: base amount {line.amount} does not equal "
-                f"round(amount_fx × fx_rate, 8) = {expected} "
-                f"({amount_fx} {code} @ {fx_rate} {base} per {code})"
+                f"Line {i}: base amount {format(line.amount, 'f')} does not equal "
+                f"round(amount_fx × fx_rate, 8) = {format(expected, 'f')} "
+                f"({format(amount_fx, 'f')} {code} @ {format(fx_rate, 'f')} {base} per {code})"
             )
 
 

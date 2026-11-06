@@ -8,10 +8,11 @@ from uuid import uuid4
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from ..errors import (
+    EngineError,
     NotFoundError,
     PeriodStateError,
     UnbalancedVoucherError,
@@ -118,6 +119,21 @@ def _resolve_ledgers(session: Session, lines: list[DraftLine]) -> list[tuple[Dra
     return resolved
 
 
+def _period_gate_error(exc: Exception) -> EngineError | None:
+    """Translate the DB posting-gate trigger's verdict (issue #5, ADR-008)
+    into the same clean engine error the app-level check raises. A lock or
+    close can commit between ``_check_period_open`` and the voucher INSERT;
+    the trigger then fires at INSERT time and its raw P0001 must never leak
+    out as a driver error (an HTTP 500 at the API)."""
+    message = str(getattr(exc, "orig", exc))
+    lowered = message.lower()
+    if "is locked" in lowered or "is closed" in lowered:
+        return PeriodStateError(message)
+    if "no period covers" in lowered:
+        return ValidationError(message)
+    return None
+
+
 # ------------------------------------------------------------------ posting
 def post_voucher(
     session: Session,
@@ -203,7 +219,14 @@ def post_voucher(
         reversal_of=draft.reversal_of,
     )
     session.add(voucher)
-    session.flush()
+    try:
+        session.flush()  # the period gate trigger fires HERE if a lock raced us
+    except ProgrammingError as exc:
+        session.rollback()
+        gate = _period_gate_error(exc)
+        if gate is not None:
+            raise gate from exc
+        raise
 
     for line_no, (line, ledger) in enumerate(resolved, start=1):
         session.add(
@@ -224,7 +247,7 @@ def post_voucher(
     # 8. Commit — the deferred constraint trigger re-verifies Law 1 here
     try:
         session.commit()
-    except IntegrityError as exc:
+    except (IntegrityError, ProgrammingError) as exc:
         session.rollback()
         sqlstate = getattr(exc.orig, "sqlstate", None)
         if sqlstate == "23505" and draft.client_token is not None:
@@ -233,6 +256,9 @@ def post_voucher(
             )
             if existing is not None:
                 return existing, False
+        gate = _period_gate_error(exc)
+        if gate is not None:
+            raise gate from exc
         raise
 
     # 9. After-commit events (isolated; never break posting)
