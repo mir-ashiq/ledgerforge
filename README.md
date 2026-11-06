@@ -57,7 +57,7 @@ Decisions are recorded as ADRs in [docs/adr/](docs/adr/).
 **Docker:**
 
 ```bash
-docker compose up -d        # PostgreSQL 17 + API on http://localhost:8000
+docker compose up -d        # PostgreSQL 17 + API on :8000 + voucher UI on :5173
 ```
 
 **Local development:**
@@ -68,9 +68,17 @@ pip install -e ".[dev]"
 export DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/ledgerforge
 make init-db                # apply db/schema.sql + functions + Tally-style seed
 make dev                    # uvicorn ledgerforge.main:app --reload
+make dev-ui                 # voucher-entry UI on http://localhost:5173 (keyboard-first)
 ```
 
-**Post your first voucher (note: amounts are strings — Law 3):**
+**Post your first voucher — with the keyboard (the Tally contract):**
+
+Start `make dev-ui`, then: type `Cash` → `Enter` · `1180` → `Enter` → `Enter` ·
+type `Local Sales` → `Enter` → `Enter` → `1000` → `Enter` … `Ctrl+A` accepts.
+`Alt+C` creates a missing ledger mid-flight, `F2` changes the date,
+`F4`–`F9` switch the voucher type, `Ctrl+K` shows every binding.
+
+**Or by API (note: amounts are strings — Law 3):**
 
 ```bash
 curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
@@ -106,6 +114,7 @@ SELECT * FROM rpt.trial_balance('2026-11-06');
 db/                 schema.sql · functions.sql · seed (TallyPrime's 28 predefined groups)
 src/ledgerforge/    engine (posting/reversal/opening) · api · reporting · plugins · contrib
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
+                    web — the voucher-entry screen on keyboard-kit (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh
@@ -120,9 +129,10 @@ scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.s
 
 ## Status & roadmap
 
-v0.1.0 — the accounting kernel. Next (see [docs/analysis.md §9](docs/analysis.md)):
+v0.2.0 — the accounting kernel **plus the voucher-entry screen** (React +
+keyboard-kit; `frontend/web`). Next (see [docs/analysis.md §9](docs/analysis.md)):
 
-- [ ] React voucher grid + ledger picker on `keyboard-kit`
+- [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [ ] AuthN/AuthZ (OIDC) — **required before any production use**
 - [ ] Multi-currency, period locking/FY close, multi-book
 - [ ] Alembic migrations, community plugin index, e-invoicing packs

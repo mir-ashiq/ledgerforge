@@ -155,6 +155,6 @@ Keyboard-first *is* the accessibility architecture: commands carry human titles 
 ## 8. Delivery phases
 
 1. **Done (v0.1):** framework-agnostic core + React bindings + default keymap + this plan.
-2. **Next:** voucher grid + ledger picker components against the live API.
-3. **Then:** command palette UI, settings persistence, plugin command registration.
+2. **Done (v0.2):** voucher grid + ledger picker components against the live API — `frontend/web` (virtualized rows, type-ahead picker, `Alt+C` create-ledger-here, auto-balance HUD with exact decimal string math, idempotent accept; acceptance-tested end-to-end, mouse-free).
+3. **Next:** command palette UI, settings persistence, plugin command registration.
 4. **Later:** macro recording, offline queuing of accepted vouchers (service worker + idempotency keys make this safe).
