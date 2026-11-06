@@ -12,4 +12,7 @@ __version__ = "0.6.0"
 #: 0.2 — DraftLine gained the optional FX snapshot fields
 #:       (currency/amount_fx/fx_rate, all-or-none); transformers that rebuild
 #:       lines must keep the trio consistent or drop it (issue #4).
-PLUGIN_API_VERSION = "0.2"
+#: 0.3 — Resolver gained the document-store read (``prior_documents``) and
+#:       transaction-scoped advisory locks (``lock``); ``api_compat`` became
+#:       a floor, not an exact pin — older-minor plugins keep loading (ADR-011).
+PLUGIN_API_VERSION = "0.3"

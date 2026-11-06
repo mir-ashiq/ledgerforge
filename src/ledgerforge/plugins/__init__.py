@@ -25,12 +25,12 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import PLUGIN_API_VERSION
 from ..errors import ValidationError
-from ..models import Book, Group, Ledger
+from ..models import Book, Group, Ledger, Voucher
 
 logger = logging.getLogger("ledgerforge.plugins")
 
@@ -41,13 +41,23 @@ EventHandler = Callable[["DomainEvent"], None]
 
 
 def _api_compatible(declared: str) -> bool:
-    """A plugin declares the plugin-API minor it targets (e.g. '0.1')."""
+    """A plugin declares the plugin-API minor it targets (e.g. '0.2').
+    The declaration is a **floor, not a pin** (ADR-011): a 0.2-era plugin
+    loads on a 0.3 build — additions are backwards compatible — while a
+    0.3 plugin refuses on a 0.2 build, loudly, never silently misbehaving."""
     supported = PLUGIN_API_VERSION.split(".")[:2]
     try:
         target = declared.split(".")[:2]
     except AttributeError:
         return False
-    return target == supported
+    if len(target) != 2 or len(supported) != 2:
+        return False
+    try:
+        t_major, t_minor = int(target[0]), int(target[1])
+        s_major, s_minor = int(supported[0]), int(supported[1])
+    except ValueError:
+        return False
+    return t_major == s_major and t_minor <= s_minor
 
 
 @dataclass(frozen=True)
@@ -101,6 +111,19 @@ class DomainEvent:
     data: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class PriorDocument:
+    """One stored document as seen by a plugin (API 0.3, ADR-011): the
+    meta payload exactly as persisted, with the provenance a fold needs —
+    which voucher carried it and, for reversals, which one it undoes."""
+
+    voucher_id: int
+    voucher_no: str
+    voucher_date: date
+    reversal_of: int | None
+    meta: dict[str, Any]
+
+
 class Resolver:
     """Inside-transaction helper passed to hooks: look up (or safely
     create) masters without breaking the posting transaction. Every lookup
@@ -141,6 +164,56 @@ class Resolver:
         self._session.add(ledger)
         self._session.flush()
         return ledger
+
+    def prior_documents(self, key: str) -> list[PriorDocument]:
+        """Every posted voucher of this book whose ``meta`` carries ``key``,
+        plus every voucher reversing one of those, oldest first (API 0.3,
+        ADR-011). The kernel stays meta-blind: payloads are returned exactly
+        as stored, and interpretation belongs to the plugin. Reversals ride
+        along with empty meta and ``reversal_of`` set so a fold can net an
+        undone document against its correction."""
+        carried = [
+            PriorDocument(*row)
+            for row in self._session.execute(
+                select(
+                    Voucher.id,
+                    Voucher.voucher_no,
+                    Voucher.voucher_date,
+                    Voucher.reversal_of,
+                    Voucher.meta,
+                ).where(Voucher.book_id == self._book.id, Voucher.meta.has_key(key))
+            )
+        ]
+        if not carried:
+            return []
+        carried_ids = {d.voucher_id for d in carried}
+        reversals = [
+            PriorDocument(*row)
+            for row in self._session.execute(
+                select(
+                    Voucher.id,
+                    Voucher.voucher_no,
+                    Voucher.voucher_date,
+                    Voucher.reversal_of,
+                    Voucher.meta,
+                ).where(
+                    Voucher.book_id == self._book.id,
+                    Voucher.reversal_of.in_(carried_ids),
+                )
+            )
+        ]
+        return sorted(carried + reversals, key=lambda d: d.voucher_id)
+
+    def lock(self, name: str) -> None:
+        """Transaction-scoped advisory lock on ``name`` (API 0.3, ADR-011),
+        namespaced to this book — the same serialization discipline the
+        engine uses for numbering counters, available to plugins that need
+        to serialize on a name (a stock item, an invoice series, …).
+        Released automatically at commit/rollback. Deadlock discipline is
+        the caller's: lock a voucher's names in one sorted pass."""
+        self._session.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(f"{self._book.id}:{name}", 0)))
+        )
 
 
 class PluginRegistry:

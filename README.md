@@ -236,6 +236,51 @@ customer in two books is two ledgers.
 Design: [ADR-010](docs/adr/010-voucher-meta.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Inventory (roadmap §9, ADR-011)
+
+The second business pack — and the first roadmap feature shipped with
+**zero schema change**. Stock positions are *derived*: the pack folds every
+posted `meta.stock` document (goods-in, goods-out, transfer, recount) the
+way reports fold entries, valuing issues at a **moving weighted average**
+whose rounding closes exactly — issuing the last unit costs precisely the
+remaining value. Plugin API 0.3 grew the two primitives this needs:
+`Resolver.prior_documents()` (document-store reads, reversals included) and
+`Resolver.lock()` (transaction-scoped advisory locks that serialize
+same-item movements like the engine's numbering counters).
+
+```bash
+# Buy 10 Widgets @ 100 — perpetual purchase: Dr stock, Cr supplier
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "PUR", "voucher_date": "2026-11-06",
+  "entries": [{"ledger_name": "Cash", "dc": "D", "amount": "0.01"}],
+  "meta": {"stock": {"movement": "in", "party": "Omega Supplies",
+    "items": [{"item": "Widgets", "qty": "10", "rate": "100.00"}]}}
+}'
+# → Cr Omega Supplies (Sundry Creditors) 1000.00 · Dr Widgets (Stock-in-Hand) 1000.00
+#   computed: avg_cost_after 100.0000
+
+# Sell 3 @ 150 — the full perpetual sale with its margin annotated
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "SAL", "voucher_date": "2026-11-06",
+  "entries": [{"ledger_name": "Cash", "dc": "D", "amount": "0.01"}],
+  "meta": {"stock": {"movement": "out", "party": "Acme Traders",
+    "items": [{"item": "Widgets", "qty": "3", "rate": "150.00"}]}}
+}'
+# → Dr Acme Traders 450.00 · Cr Sales 450.00 · Dr COGS 300.00 · Cr Widgets 300.00
+#   computed: gross_margin 150.00
+```
+
+Transfers move value between godown ledgers at average cost; recounts
+adjust the book to a physical count against *Stock Adjustment*. Reversals
+net to zero on stock — reversing a goods-out restores it, exactly as the
+mirrored entries restore the ledgers. Guards (all 422): insufficient stock
+(partial overdrafts policy-overridable; an empty position never issues),
+mode conflicts with the invoicing/GST packs, FX lines, future dates, and
+items that would silently reuse an unrelated ledger.
+
+Design: [ADR-011](docs/adr/011-inventory-pack.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## What's inside
 
 ```
@@ -247,12 +292,13 @@ db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
                     (one definition for bootstrap and POST /books — ADR-009).
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
                     + roles + per-book claims) · reporting · seeding · plugins ·
-                    contrib (example_gst + the invoicing pack)
+                    contrib (example_gst + the invoicing + inventory packs)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
-                    deep audit (adversarial: races, rounding boundaries, gate bypasses)
+                    inventory, deep audit (adversarial: races, rounding boundaries,
+                    gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
@@ -324,11 +370,12 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.6.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.7.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
-period locking with the financial-year close, multi-book (v0.5) **and the
-first plugin-pack feature: invoicing documents that persist with the voucher
-(`vouchers.meta`, revision 0005)**. Next (see
+period locking with the financial-year close, multi-book (v0.5), invoicing
+as the first plugin pack (v0.6) **and inventory as the second — goods
+movements as documents with weighted-average valuation, zero schema change
+(plugin API 0.3: document-store reads + advisory locks)**. Next (see
 [docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
@@ -339,7 +386,9 @@ first plugin-pack feature: invoicing documents that persist with the voucher
 - [x] Period locking + FY close: the posting gate, the P&L sweep, finality
 - [x] Multi-book: one database, many companies (ADR-009)
 - [x] Invoicing: sales invoices + AR receipts as a plugin pack (ADR-010)
-- [ ] Inventory and payroll packs on the same hook taxonomy
+- [x] Inventory: stock documents, weighted-average valuation, derived
+      positions as a plugin pack (ADR-011)
+- [ ] Payroll pack on the same hook taxonomy + document store
 - [ ] Community plugin index, signed plugin trust model
 
 ## Contributing

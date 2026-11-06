@@ -57,7 +57,7 @@ LedgerForge is an open-source business management system whose core is a **high-
 
 ### 2.1 What we are building (and, deliberately, not yet)
 
-The Phase-2 deliverable in this repository is the **accounting kernel**: masters (groups, ledgers), voucher posting, reversal, opening balances, reporting (Trial Balance, Profit & Loss, Balance Sheet), the plugin runtime with a worked GST example, and the keyboard interaction framework for the frontend. Inventory and payroll are roadmap items (§9); multi-currency and period locking landed in v0.4.0 (ADR-007/008), multi-book in v0.5.0 (ADR-009), and invoicing in v0.6.0 as the first plugin pack on the voucher document store (ADR-010). Every remaining roadmap item is *buildable on top of* this kernel precisely because the plugin boundaries were designed first.
+The Phase-2 deliverable in this repository is the **accounting kernel**: masters (groups, ledgers), voucher posting, reversal, opening balances, reporting (Trial Balance, Profit & Loss, Balance Sheet), the plugin runtime with a worked GST example, and the keyboard interaction framework for the frontend. Payroll is a roadmap item (§9); multi-currency and period locking landed in v0.4.0 (ADR-007/008), multi-book in v0.5.0 (ADR-009), invoicing in v0.6.0 as the first plugin pack on the voucher document store (ADR-010), and inventory in v0.7.0 as the second pack — the first roadmap feature to land with zero schema change, riding the new document-store read and advisory-lock primitives of plugin API 0.3 (ADR-011). Every remaining roadmap item is *buildable on top of* this kernel precisely because the plugin boundaries were designed first.
 
 ### 2.2 The TallyPrime reference model
 
@@ -364,7 +364,7 @@ Measured (`scripts/bench_posting.py`, PostgreSQL 16.2, 8 concurrent worker threa
 
 - **M1** Build a tax-compliance pack (GST, VAT, US sales tax), a custom dashboard, or a vertical workflow **without modifying core files**.
 - **M2** A plugin must be able to *participate in posting* — e.g. split a sale into CGST/SGST lines — while Law 1 still holds at commit time.
-- **M3** Core/plugin API must be versioned and degradable: a plugin written for 0.1 must keep working across patch releases and fail loudly, not corruptly, across breaking ones.
+- **M3** Core/plugin API must be versioned and degradable: a plugin written for 0.1 must keep working across patch releases and fail loudly, not corruptly, across breaking ones. (Realized as the `api_compat` floor: older-minor plugins keep loading on newer builds — ADR-011.)
 - **M4** Untrusted UI contributions must be sandboxable without poisoning the keyboard experience.
 - **M5** The licensing must make both "community-driven core" and "commercial plugin ecosystem" possible (§5.7).
 
@@ -593,7 +593,8 @@ curl -s localhost:8000/api/v1/reports/trial-balance?as_of=2026-11-06
 | AuthN/AuthZ | **Landed (v0.3)** | OIDC bearer verification (JWKS + rotation refresh) with the `reader` < `bookkeeper` < `admin` role model on every route; `LF_AUTH_MODE=disabled` remains the dev-only default |
 | Alembic migrations | **Landed (v0.3/v0.4/v0.5/v0.6)** | Frozen `0001_baseline` with a structural drift guard in CI (ADR-006); forward revisions `0002`–`0005` proved convergent with the bootstrap by catalog fingerprint |
 | Invoicing | **Landed (v0.6)** | The first plugin-pack feature, zero core logic: `vouchers.meta` (0005, ADR-010) persists the commercial document; the `invoicing` pack derives the TallyPrime GST-sale lines from `meta.invoice` (items/qty/rate/slabs), settles via `meta.receipt`, and annotates computed totals that round-trip through `GET /vouchers/{id}` |
-| Inventory / payroll | Roadmap | Built as plugins on the same hook taxonomy + document store, not in core |
+| Inventory | **Landed (v0.7)** | The second plugin pack, **zero schema change** (ADR-011): goods-in/out/transfer/recount documents on `meta.stock`; positions are a deterministic fold over posted documents (weighted-average valuation whose rounding closes exactly), plugin API 0.3 adds the document-store read (`Resolver.prior_documents`, reversals included) and transaction-scoped advisory locks (`Resolver.lock`); `api_compat` became a floor |
+| Payroll | Roadmap | A plugin on the same hook taxonomy + document store; the v0.7 read/lock primitives are its building blocks |
 | Report scale-out | Watch | Partitioning + BRIN + optional eventually-consistent balance cache (§4.3) — only when books pass millions of entries |
 | Plugin trust model | Watch | Signed plugin index, capability-scoped registry, sandboxed UI slots (§5.5) |
 

@@ -92,6 +92,14 @@ def _reject_conflicts(draft: VoucherDraft, mode: str) -> None:
         raise ValidationError(
             "invoicing: meta.gst would double-tax — this pack computes its own tax lines"
         )
+    if draft.meta.get("stock") is not None:
+        # Cross-pack exclusivity (ADR-011): the inventory pack derives lines
+        # from meta.stock — two document modes in one draft is ambiguous
+        # regardless of transformer order.
+        raise ValidationError(
+            "invoicing: meta.invoice/receipt and meta.stock are mutually exclusive "
+            "(post the commercial and the stock documents separately)"
+        )
 
 
 def _require_customer(doc: dict, mode: str) -> str:
