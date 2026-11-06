@@ -11,10 +11,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from ..errors import InvariantViolation
+from ..errors import InvariantViolation, NotFoundError
+from ..models import Ledger
 
 
 def _fmt(d: Decimal) -> str:
@@ -114,6 +115,62 @@ def profit_loss(session: Session, d_from: date, d_to: date) -> dict:
             "indirect_expenses": groups_for("indirect_expense"),
             "net_profit": _fmt(value_of("net_profit")),
         },
+    }
+
+
+def fy_close(session: Session, as_of: date, pl_ledger_id: int | None = None) -> dict:
+    """The financial-year close sweep (issue #5): for every income/expense
+    ledger with a non-zero closing balance as of ``as_of``, the line that
+    zeroes it, plus the Profit & Loss A/c balancing line. Amounts stay
+    ``Decimal`` (the close action posts them verbatim); the API layer
+    serializes. Like every report, it proves its own balance first (Law 1).
+    """
+    if pl_ledger_id is None:
+        pl_ledger_id = session.scalar(select(Ledger.id).where(Ledger.name == "Profit & Loss A/c"))
+        if pl_ledger_id is None:
+            raise NotFoundError(
+                "Ledger 'Profit & Loss A/c' does not exist — apply the seed "
+                "(python -m ledgerforge.bootstrap) before closing a year"
+            )
+
+    rows = (
+        session.execute(
+            text("SELECT * FROM rpt.fy_close(:as_of, :pl)"),
+            {"as_of": as_of, "pl": pl_ledger_id},
+        )
+        .mappings()
+        .all()
+    )
+    lines = [
+        {
+            "bucket": r.out_bucket,
+            "ledger_id": r.out_ledger_id,
+            "ledger_name": r.out_ledger_name,
+            "dc": r.out_dc,
+            "amount": r.out_amount,
+        }
+        for r in rows
+    ]
+    total_dr = sum((ln["amount"] for ln in lines if ln["dc"] == "D"), Decimal(0))
+    total_cr = sum((ln["amount"] for ln in lines if ln["dc"] == "C"), Decimal(0))
+    difference = total_dr - total_cr
+    if difference != 0:  # the sweep must balance exactly, like a voucher
+        raise InvariantViolation(
+            f"FY close sweep does not balance: difference is {difference}, expected exactly 0"
+        )
+    net = next(
+        (
+            ln["amount"] * (1 if ln["dc"] == "C" else -1)
+            for ln in lines
+            if ln["bucket"] == "profit_loss"
+        ),
+        Decimal(0),
+    )
+    return {
+        "as_of": as_of,
+        "lines": lines,
+        "net_profit": net,
+        "totals": {"dr": total_dr, "cr": total_cr, "difference": difference},
     }
 
 

@@ -11,6 +11,8 @@ from ..db import get_session
 # Modern FastAPI dependency idiom (keeps ruff's B008 happy).
 SessionDep = Annotated[Session, Depends(get_session)]
 
-# Role gates (issue #1): reader = read-only, bookkeeper = writes.
+# Role gates (issue #1): reader = read-only, bookkeeper = writes,
+# admin = bookkeeper + book-wide control (period locking, FY close).
 ReaderDep = Annotated[Principal, Depends(require_role("reader"))]
 BookkeeperDep = Annotated[Principal, Depends(require_role("bookkeeper"))]
+AdminDep = Annotated[Principal, Depends(require_role("admin"))]
