@@ -7,11 +7,12 @@ Alembic revision history for the database schema. Policy and rationale:
   `alembic upgrade head` produces exactly the structure the SQL bootstrap
   produces. `tests/test_migrations.py` compares both structurally and fails
   CI on any drift.
-- **The baseline is frozen** (ADR-006, amended 2026-11-06). The first
-  forward revisions — `0002_multi_currency` (issue #4) and
-  `0003_period_locking` (issue #5) — shipped against it, so it can never be
-  regenerated. `db/migrations/baseline/` preserves the schema as it stood at
-  the freeze; `make baseline-check` proves `0001` still embeds it exactly.
+- **The baseline is frozen** (ADR-006, amended 2026-11-06). The forward
+  revisions — `0002_multi_currency` (issue #4), `0003_period_locking`
+  (issue #5) and `0004_multi_book` (roadmap §9, ADR-009) — shipped against
+  it, so it can never be regenerated. `db/migrations/baseline/` preserves the
+  schema as it stood at the freeze; `make baseline-check` proves `0001` still
+  embeds it exactly.
 
 - A schema change ships as a new revision *and* updates `db/schema.sql` +
   `db/functions.sql` in the same commit (the flattened current state), so
@@ -41,5 +42,7 @@ python -m ledgerforge.migrations upgrade head   # same, from any install
 ```
 
 Seed data (the TallyPrime chart of accounts) is deliberately **not** part of
-any migration — it is data, not schema; `python -m ledgerforge.bootstrap`
-applies it idempotently on top of either path.
+any migration — it is data, not schema. Since 0004 it is code,
+`ledgerforge/seeding.py`, so `python -m ledgerforge.bootstrap` (the default
+book) and `POST /api/v1/books` (every new book) seed identically (ADR-009);
+bootstrap applies it idempotently on top of either path.

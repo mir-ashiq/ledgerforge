@@ -31,11 +31,30 @@ class Base(DeclarativeBase):
 NOW_DEFAULT = {"server_default": text("now()")}
 
 
+class Book(Base):
+    """One company / legal entity's complete accounting context (ADR-009,
+    migration 0004): its chart of accounts, voucher types, numbering,
+    periods, base currency and fiscal-year start. ``slug`` is the stable
+    machine key (the bootstrap default book is ``slug='default'``)."""
+
+    __tablename__ = "books"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    name: Mapped[str] = mapped_column(Text, unique=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True)
+    base_currency: Mapped[str] = mapped_column(CHAR(3), ForeignKey("currencies.code"))
+    fy_start_month: Mapped[int] = mapped_column(SmallInteger, default=4)
+    is_archived: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
 class Group(Base):
     __tablename__ = "groups"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    name: Mapped[str] = mapped_column(Text, unique=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    name: Mapped[str] = mapped_column(Text)  # unique per book (uq_groups_book_name)
     code: Mapped[str | None]
     parent_id: Mapped[int | None] = mapped_column(ForeignKey("groups.id", ondelete="RESTRICT"))
     nature: Mapped[str]
@@ -49,7 +68,8 @@ class Ledger(Base):
     __tablename__ = "ledgers"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    name: Mapped[str] = mapped_column(Text, unique=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    name: Mapped[str] = mapped_column(Text)  # unique per book (uq_ledgers_book_name)
     code: Mapped[str | None]
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id", ondelete="RESTRICT"))
     is_system: Mapped[bool] = mapped_column(default=False)
@@ -61,7 +81,8 @@ class VoucherType(Base):
     __tablename__ = "voucher_types"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    code: Mapped[str] = mapped_column(Text, unique=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    code: Mapped[str] = mapped_column(Text)  # unique per book (uq_voucher_types_book_code)
     name: Mapped[str]
     number_prefix: Mapped[str] = mapped_column(Text, default="")
     restart_yearly: Mapped[bool] = mapped_column(default=True)
@@ -73,10 +94,11 @@ class Voucher(Base):
     __tablename__ = "vouchers"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
     uuid: Mapped[str] = mapped_column(
         UUID(as_uuid=True), unique=True, server_default=text("gen_random_uuid()")
     )
-    client_token: Mapped[str] = mapped_column(UUID(as_uuid=True), unique=True)
+    client_token: Mapped[str] = mapped_column(UUID(as_uuid=True))  # unique per book
     voucher_type_id: Mapped[int] = mapped_column(ForeignKey("voucher_types.id"))
     voucher_no: Mapped[str]
     sequence: Mapped[int] = mapped_column(BigInteger)
@@ -93,6 +115,7 @@ class VoucherEntry(Base):
     voucher_id: Mapped[int] = mapped_column(ForeignKey("vouchers.id", ondelete="RESTRICT"))
     line_no: Mapped[int]
     ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id", ondelete="RESTRICT"))
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
     dc: Mapped[str] = mapped_column(Text, CheckConstraint("dc IN ('D', 'C')"))
     amount: Mapped[Decimal]
     voucher_date: Mapped[date] = mapped_column(Date)
@@ -113,6 +136,9 @@ class DocCounter(Base):
 
 
 class Setting(Base):
+    """Reserved for genuine system-wide keys. Per-company facts (base
+    currency, FY start, company name) moved to ``books`` with 0004/ADR-009."""
+
     __tablename__ = "settings"
 
     key: Mapped[str] = mapped_column(Text, primary_key=True)
@@ -121,9 +147,10 @@ class Setting(Base):
 
 
 class Currency(Base):
-    """ISO 4217 reference currency. The book's base currency lives in
-    ``settings.base_currency``; every other currency here is postable with an
-    FX snapshot (issue #4, ADR-007)."""
+    """ISO 4217 reference currency, shared across books. Each book's base
+    currency is a pointer on its row (``books.base_currency``, ADR-009);
+    every other currency here is postable with an FX snapshot (issue #4,
+    ADR-007)."""
 
     __tablename__ = "currencies"
 
@@ -137,13 +164,15 @@ class Currency(Base):
 
 
 class FxRate(Base):
-    """A dated reference rate: 1 unit of ``from_ccy`` = ``rate`` units of
-    ``to_ccy`` (NUMERIC(30,10), Law 3). Advisory input data — postings snapshot
-    the applied rate on the entry row (ADR-007)."""
+    """A dated reference rate *within a book*: 1 unit of ``from_ccy`` =
+    ``rate`` units of ``to_ccy`` (NUMERIC(30,10), Law 3). Advisory input
+    data — postings snapshot the applied rate on the entry row (ADR-007).
+    Book-scoped by 0004/ADR-009."""
 
     __tablename__ = "fx_rates"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
     from_ccy: Mapped[str] = mapped_column(CHAR(3), ForeignKey("currencies.code"))
     to_ccy: Mapped[str] = mapped_column(CHAR(3), ForeignKey("currencies.code"))
     rate: Mapped[Decimal]
@@ -153,13 +182,14 @@ class FxRate(Base):
 
 
 class Period(Base):
-    """A named, non-overlapping fiscal range with a close state machine:
-    ``open -> locked -> closed`` (open/locked reversible, closed final).
-    Issue #5, ADR-008."""
+    """A named, non-overlapping fiscal range — within one book — with a
+    close state machine: ``open -> locked -> closed`` (open/locked
+    reversible, closed final). Issue #5, ADR-008; book-scoped by 0004."""
 
     __tablename__ = "periods"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
     name: Mapped[str]
     starts_on: Mapped[date] = mapped_column(Date)
     ends_on: Mapped[date] = mapped_column(Date)

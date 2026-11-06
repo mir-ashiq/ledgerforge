@@ -4,6 +4,9 @@ The SQL functions do all aggregation; this layer composes responses and —
 crucially — asserts the engine's own balance invariants (a Trial Balance
 whose difference is not exactly zero, or a Balance Sheet that does not
 balance, raises InvariantViolation and is never returned to a client).
+
+Every report is book-scoped (ADR-009, migration 0004): the ``p_book_id``
+parameter is mandatory and filters the fact tables.
 """
 
 from __future__ import annotations
@@ -22,9 +25,12 @@ def _fmt(d: Decimal) -> str:
     return format(d, "f")
 
 
-def trial_balance(session: Session, as_of: date) -> dict:
+def trial_balance(session: Session, book_id: int, as_of: date) -> dict:
     rows = (
-        session.execute(text("SELECT * FROM rpt.trial_balance(:as_of)"), {"as_of": as_of})
+        session.execute(
+            text("SELECT * FROM rpt.trial_balance(:book, :as_of)"),
+            {"book": book_id, "as_of": as_of},
+        )
         .mappings()
         .all()
     )
@@ -55,9 +61,12 @@ def trial_balance(session: Session, as_of: date) -> dict:
     }
 
 
-def group_rollups(session: Session, as_of: date) -> list[dict]:
+def group_rollups(session: Session, book_id: int, as_of: date) -> list[dict]:
     rows = (
-        session.execute(text("SELECT * FROM rpt.group_rollups(:as_of)"), {"as_of": as_of})
+        session.execute(
+            text("SELECT * FROM rpt.group_rollups(:book, :as_of)"),
+            {"book": book_id, "as_of": as_of},
+        )
         .mappings()
         .all()
     )
@@ -75,11 +84,11 @@ def group_rollups(session: Session, as_of: date) -> list[dict]:
     ]
 
 
-def profit_loss(session: Session, d_from: date, d_to: date) -> dict:
+def profit_loss(session: Session, book_id: int, d_from: date, d_to: date) -> dict:
     rows = (
         session.execute(
-            text("SELECT * FROM rpt.profit_and_loss(:d_from, :d_to)"),
-            {"d_from": d_from, "d_to": d_to},
+            text("SELECT * FROM rpt.profit_and_loss(:book, :d_from, :d_to)"),
+            {"book": book_id, "d_from": d_from, "d_to": d_to},
         )
         .mappings()
         .all()
@@ -118,25 +127,28 @@ def profit_loss(session: Session, d_from: date, d_to: date) -> dict:
     }
 
 
-def fy_close(session: Session, as_of: date, pl_ledger_id: int | None = None) -> dict:
-    """The financial-year close sweep (issue #5): for every income/expense
-    ledger with a non-zero closing balance as of ``as_of``, the line that
-    zeroes it, plus the Profit & Loss A/c balancing line. Amounts stay
-    ``Decimal`` (the close action posts them verbatim); the API layer
-    serializes. Like every report, it proves its own balance first (Law 1).
-    """
+def fy_close(session: Session, book_id: int, as_of: date, pl_ledger_id: int | None = None) -> dict:
+    """The financial-year close sweep (issue #5), scoped to ``book_id``:
+    for every income/expense ledger of the book with a non-zero closing
+    balance as of ``as_of``, the line that zeroes it, plus the Profit & Loss
+    A/c balancing line. Amounts stay ``Decimal`` (the close action posts
+    them verbatim); the API layer serializes. Like every report, it proves
+    its own balance first (Law 1)."""
     if pl_ledger_id is None:
-        pl_ledger_id = session.scalar(select(Ledger.id).where(Ledger.name == "Profit & Loss A/c"))
+        pl_ledger_id = session.scalar(
+            select(Ledger.id).where(Ledger.name == "Profit & Loss A/c", Ledger.book_id == book_id)
+        )
         if pl_ledger_id is None:
             raise NotFoundError(
-                "Ledger 'Profit & Loss A/c' does not exist — apply the seed "
-                "(python -m ledgerforge.bootstrap) before closing a year"
+                "Ledger 'Profit & Loss A/c' does not exist in this book — create "
+                "the book with its seed (POST /api/v1/books does this) before "
+                "closing a year"
             )
 
     rows = (
         session.execute(
-            text("SELECT * FROM rpt.fy_close(:as_of, :pl)"),
-            {"as_of": as_of, "pl": pl_ledger_id},
+            text("SELECT * FROM rpt.fy_close(:book, :as_of, :pl)"),
+            {"book": book_id, "as_of": as_of, "pl": pl_ledger_id},
         )
         .mappings()
         .all()
@@ -174,11 +186,14 @@ def fy_close(session: Session, as_of: date, pl_ledger_id: int | None = None) -> 
     }
 
 
-def balance_sheet(session: Session, as_of: date) -> dict:
+def balance_sheet(session: Session, book_id: int, as_of: date) -> dict:
     # Ledger-level classification for authoritative section totals (each
     # ledger counted exactly once, by its own group's nature).
     tb_rows = (
-        session.execute(text("SELECT * FROM rpt.trial_balance(:as_of)"), {"as_of": as_of})
+        session.execute(
+            text("SELECT * FROM rpt.trial_balance(:book, :as_of)"),
+            {"book": book_id, "as_of": as_of},
+        )
         .mappings()
         .all()
     )
@@ -204,7 +219,10 @@ def balance_sheet(session: Session, as_of: date) -> dict:
 
     # Group display tree from the SQL function (zero lines filtered out).
     group_rows = (
-        session.execute(text("SELECT * FROM rpt.balance_sheet(:as_of)"), {"as_of": as_of})
+        session.execute(
+            text("SELECT * FROM rpt.balance_sheet(:book, :as_of)"),
+            {"book": book_id, "as_of": as_of},
+        )
         .mappings()
         .all()
     )

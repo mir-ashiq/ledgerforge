@@ -51,17 +51,22 @@ def test_db_rejects_raw_sql_unbalanced_insert(psycopg_dsn):
         conn.execute("BEGIN")
         conn.execute(
             """
-            INSERT INTO vouchers (client_token, voucher_type_id, voucher_no, sequence, voucher_date)
-            SELECT gen_random_uuid(), id, 'JV-DB-TEST-999999', 999999, CURRENT_DATE
+            INSERT INTO vouchers (book_id, client_token, voucher_type_id,
+                                  voucher_no, sequence, voucher_date)
+            SELECT (SELECT id FROM books WHERE slug = 'default'), gen_random_uuid(), id,
+                   'JV-DB-TEST-999999', 999999, CURRENT_DATE
             FROM voucher_types WHERE code = 'JV'
             """
         )
         vid = conn.execute("SELECT id FROM vouchers ORDER BY id DESC LIMIT 1").fetchone()[0]
         cash = conn.execute("SELECT id FROM ledgers WHERE name = 'Cash'").fetchone()[0]
         conn.execute(
-            "INSERT INTO voucher_entries (voucher_id, line_no, ledger_id, dc, amount, voucher_date)"
-            " VALUES (%s, 1, %s, 'D', 10, CURRENT_DATE), "
-            "       (%s, 2, %s, 'C', 9.99999999, CURRENT_DATE)",
+            "INSERT INTO voucher_entries (voucher_id, line_no, ledger_id, book_id,"
+            " dc, amount, voucher_date)"
+            " VALUES (%s, 1, %s, (SELECT id FROM books WHERE slug = 'default'),"
+            " 'D', 10, CURRENT_DATE), "
+            "       (%s, 2, %s, (SELECT id FROM books WHERE slug = 'default'),"
+            " 'C', 9.99999999, CURRENT_DATE)",
             (vid, cash, vid, cash),
         )
         with pytest.raises(psycopg.errors.RaiseException, match="Unbalanced"):
@@ -77,16 +82,20 @@ def test_db_rejects_single_line_voucher(psycopg_dsn):
         conn.execute("BEGIN")
         conn.execute(
             """
-            INSERT INTO vouchers (client_token, voucher_type_id, voucher_no, sequence, voucher_date)
-            SELECT gen_random_uuid(), id, 'JV-DB-TEST-999998', 999998, CURRENT_DATE
+            INSERT INTO vouchers (book_id, client_token, voucher_type_id,
+                                  voucher_no, sequence, voucher_date)
+            SELECT (SELECT id FROM books WHERE slug = 'default'), gen_random_uuid(), id,
+                   'JV-DB-TEST-999998', 999998, CURRENT_DATE
             FROM voucher_types WHERE code = 'JV'
             """
         )
         vid = conn.execute("SELECT id FROM vouchers ORDER BY id DESC LIMIT 1").fetchone()[0]
         cash = conn.execute("SELECT id FROM ledgers WHERE name = 'Cash'").fetchone()[0]
         conn.execute(
-            "INSERT INTO voucher_entries (voucher_id, line_no, ledger_id, dc, amount, voucher_date)"
-            " VALUES (%s, 1, %s, 'D', 10, CURRENT_DATE)",
+            "INSERT INTO voucher_entries (voucher_id, line_no, ledger_id, book_id,"
+            " dc, amount, voucher_date)"
+            " VALUES (%s, 1, %s, (SELECT id FROM books WHERE slug = 'default'),"
+            " 'D', 10, CURRENT_DATE)",
             (vid, cash),
         )
         with pytest.raises(psycopg.errors.RaiseException, match="at least 2 entries"):

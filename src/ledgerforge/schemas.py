@@ -105,6 +105,46 @@ def _upper_code(v: str | None) -> str | None:
 CurrencyCode = Annotated[str, BeforeValidator(_upper_code)]
 
 
+# --------------------------------------------------------------------- books
+class BookCreate(BaseModel):
+    """POST /api/v1/books (ADR-009): creates the book AND seeds its chart
+    of accounts (TallyPrime's 28 groups, system ledgers, 10 voucher
+    types) in one action."""
+
+    name: str = Field(min_length=1, max_length=200)
+    slug: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9-]*$",
+        description="stable machine key; derived from the name when omitted",
+    )
+    base_currency: CurrencyCode = Field(default="INR", min_length=3, max_length=3)
+    fy_start_month: int = Field(default=4, ge=1, le=12)
+
+
+class BookUpdate(BaseModel):
+    """PATCH /api/v1/books/{id}. ``base_currency`` and ``fy_start_month``
+    are immutable once the book has vouchers (amounts are stored in the
+    base currency — changing it would restate history, which Law 2
+    forbids)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    base_currency: CurrencyCode | None = Field(default=None, min_length=3, max_length=3)
+    fy_start_month: int | None = Field(default=None, ge=1, le=12)
+    is_archived: bool | None = None
+
+
+class BookOut(BaseModel):
+    id: int
+    name: str
+    slug: str
+    base_currency: str
+    fy_start_month: int
+    is_archived: bool
+    created_at: datetime
+
+
 # ---------------------------------------------------------------- masters in
 class GroupCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)

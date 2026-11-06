@@ -117,12 +117,12 @@ curl -s 'localhost:8000/api/v1/reports/balance-sheet?as_of=2026-11-06'
 ```
 
 ```sql
-SELECT * FROM rpt.trial_balance('2026-11-06');
+SELECT * FROM rpt.trial_balance(1, '2026-11-06');  -- book id first (ADR-009)
 ```
 
 ## Multi-currency (issue #4)
 
-One base currency per book (`settings.base_currency`, seeded INR); every entry
+One base currency per book (`books.base_currency`, seeded INR); every entry
 posts a **base-currency amount** — that is what balances and what the reports
 aggregate. A foreign-currency line snapshots the trio on the immutable entry:
 `currency`, `amount_fx`, `fx_rate` (base units per foreign unit,
@@ -165,18 +165,50 @@ curl -s -X POST localhost:8000/api/v1/periods/1/close
 
 Design: [ADR-008](docs/adr/008-period-locking.md).
 
+## Multi-book (roadmap §9, ADR-009)
+
+One database, many companies — TallyPrime's "select company", made a header.
+Every book is a legal entity's complete accounting context: its own chart of
+accounts, voucher types, numbering (each book's `SAL-2026-27-00001` starts at
+1), periods, base currency and fiscal-year start. `POST /api/v1/books`
+creates a book **and seeds its TallyPrime defaults** (28 groups, system
+ledgers, 10 voucher types) in one action; books are strangers — cross-book
+references are 404s, and the schema itself refuses cross-book hierarchy and
+entry/voucher book disagreement.
+
+Clients send `X-Book-Id: <id>` on every request. With exactly one active book
+the header is optional — every single-book-era client keeps working unchanged;
+with several, omitting it is a 400 that lists the books to pick from.
+
+```bash
+curl -s -X POST localhost:8000/api/v1/books -H 'Content-Type: application/json' \
+  -d '{"name": "Acme Traders", "base_currency": "INR"}'   # created + seeded
+curl -s localhost:8000/api/v1/books                          # the picker list
+curl -s localhost:8000/api/v1/ledgers -H 'X-Book-Id: 2'     # select company
+```
+
+`base_currency` and `fy_start_month` are immutable once the book has vouchers
+(amounts are stored in the base currency — changing it would restate history,
+which Law 2 forbids). Per-book permissions ride on the token's `books` claim
+(`["*"]` or a list of book ids; `admin` always passes; no claim = every book).
+
+Design: [ADR-009](docs/adr/009-multi-book.md).
+
 ## What's inside
 
 ```
-db/                 schema.sql · functions.sql · seed (TallyPrime's 28 predefined groups)
-                    migrations/ — Alembic tree: frozen 0001 baseline + drift guard,
-                    0002 multi-currency, 0003 period locking (ADR-006/007/008)
-src/ledgerforge/    engine (posting/reversal/opening) · api · auth (OIDC + roles) · reporting · plugins · contrib
+db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
+                    frozen 0001 baseline + drift guard, 0002 multi-currency,
+                    0003 period locking, 0004 multi-book (ADR-006/007/008/009).
+                    The chart-of-accounts seed is code: ledgerforge/seeding.py
+                    (one definition for bootstrap and POST /books — ADR-009).
+src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
+                    + roles + per-book claims) · reporting · seeding · plugins · contrib
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
-                    migrations, multi-currency, period locking, deep audit
-                    (adversarial: races, rounding boundaries, gate bypasses)
+                    migrations, multi-currency, period locking, multi-book,
+                    deep audit (adversarial: races, rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
@@ -216,7 +248,9 @@ uvicorn ledgerforge.main:app
 `GET /api/v1/auth/me` answers with the live subject, roles, and mode. JWKS keys
 are cached (15 min) and refreshed on unknown `kid` rotation. With auth on, the
 API is same-origin only — set `LF_CORS_ORIGINS` if you really need cross-origin
-calls. Per-book permissions land together with the multi-book schema (roadmap).
+calls. Per-book permissions (ADR-009) ride on the token's `books` claim:
+`["*"]` or a list of book ids the principal may touch at its global role;
+`admin` always passes; a token with no `books` claim sees every book.
 
 ## Database migrations
 
@@ -224,7 +258,8 @@ calls. Per-book permissions land together with the multi-book schema (roadmap).
 idempotent. Alembic ([ADR-006](docs/adr/006-migration-baseline.md)) versions
 the same schema: the frozen revision `0001_baseline` embeds the schema as it
 stood at the freeze (preserved under `db/migrations/baseline/`), forward
-revisions `0002_multi_currency` and `0003_period_locking` carry the rest, and
+revisions `0002_multi_currency`, `0003_period_locking` and `0004_multi_book`
+carry the rest, and
 `tests/test_migrations.py` proves that `alembic upgrade head` produces an
 identical structure to the bootstrap — schemas, tables, columns, indexes,
 constraints, triggers, functions, grants — via catalog fingerprints. If the

@@ -1,9 +1,10 @@
-"""Database bootstrap: apply schema, functions and seed SQL files.
+"""Database bootstrap: apply schema and functions SQL files, seed the
+default book (ADR-009), and stamp the Alembic version.
 
 Used by the CLI (``python -m ledgerforge.bootstrap``), Docker entrypoint,
 and the test suite. Idempotent — safe to re-run. After applying the SQL
-files, stamps the Alembic version table to the current head (ADR-006) so
-SQL-bootstrapped and alembic-migrated databases converge.
+files and seeding, stamps the Alembic version table to the current head
+(ADR-006) so SQL-bootstrapped and alembic-migrated databases converge.
 """
 
 from __future__ import annotations
@@ -13,7 +14,8 @@ import pathlib
 
 import psycopg
 
-SQL_FILES = ("schema.sql", "functions.sql", "seed/chart_of_accounts.sql")
+SQL_FILES = ("schema.sql", "functions.sql")  # the chart of accounts is
+# seeded by ledgerforge.seeding (ADR-009), not by a SQL file
 
 # db/ lives two levels above this file: src/ledgerforge/ -> src -> repo root
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -30,17 +32,38 @@ def sql_file_paths(repo_root: pathlib.Path | None = None) -> list[pathlib.Path]:
 
 
 def apply_sql_files(dsn: str, repo_root: pathlib.Path | None = None, echo: bool = True) -> None:
-    """Apply schema/functions/seed to ``dsn``. psycopg executes multi-statement
-    scripts (including trigger functions with $$ bodies) in one call."""
+    """Apply schema/functions to ``dsn``, then seed the default book.
+    psycopg executes multi-statement scripts (including trigger functions
+    with $$ bodies) in one call."""
     files = sql_file_paths(repo_root)
     with psycopg.connect(dsn) as conn:
         for path in files:
             if echo:
                 print(f"applying {path.name} ...")
             conn.execute(path.read_text())
+    _seed_default_book(dsn, echo=echo)
     _stamp_alembic_head(dsn, echo=echo)
     if echo:
         print("database bootstrap complete")
+
+
+def _seed_default_book(dsn: str, echo: bool = True) -> None:
+    """Create the default book and its chart of accounts (ADR-009: one
+    seeding definition shared with ``POST /api/v1/books``)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from .seeding import bootstrap_default_book
+
+    url = dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine = create_engine(url, pool_pre_ping=True)
+    try:
+        with Session(engine) as session:
+            book = bootstrap_default_book(session)
+        if echo:
+            print(f"seeded default book {book.name!r} (slug={book.slug!r})")
+    finally:
+        engine.dispose()
 
 
 def _stamp_alembic_head(dsn: str, echo: bool = True) -> None:
@@ -72,7 +95,7 @@ def drop_schema(dsn: str, echo: bool = True) -> None:
             """
             DROP TABLE IF EXISTS voucher_entries, vouchers, ledgers, groups,
                 group_closure, voucher_types, doc_counters, audit_log, settings,
-                fx_rates, currencies, periods
+                fx_rates, currencies, periods, books
             CASCADE
             """
         )

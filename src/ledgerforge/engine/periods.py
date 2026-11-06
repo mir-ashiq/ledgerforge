@@ -30,7 +30,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from ..errors import ConflictError, NotFoundError, PeriodStateError, ValidationError
-from ..models import Ledger, Period, Voucher
+from ..models import Book, Ledger, Period, Voucher
 from ..plugins import PluginManager
 from ..schemas import PeriodCreate, VoucherCreate, VoucherLineIn
 from ..settings import Settings
@@ -44,10 +44,12 @@ def _sweep_token(period_id: int) -> UUID:
     return uuid5(NAMESPACE_URL, f"ledgerforge:fy-close:{period_id}")
 
 
-def _get_period(session: Session, period_id: int) -> Period:
+def _get_period(session: Session, period_id: int, book: Book) -> Period:
+    """A period of ``book`` — another book's period id is a 404, never a
+    cross-book action (ADR-009)."""
     period = session.get(Period, period_id)
-    if period is None:
-        raise NotFoundError(f"Period {period_id} does not exist")
+    if period is None or period.book_id != book.id:
+        raise NotFoundError(f"Period {period_id} does not exist in book {book.name!r}")
     return period
 
 
@@ -57,22 +59,27 @@ def _set_actor(session: Session, actor: str | None) -> None:
         session.execute(text("SELECT set_config('app.actor', :actor, true)"), {"actor": actor})
 
 
-def resolve_pl_ledger(session: Session) -> Ledger:
-    """The sweep target: TallyPrime's equity-side Profit & Loss A/c."""
-    ledger = session.scalar(select(Ledger).where(Ledger.name == PL_LEDGER_NAME))
+def resolve_pl_ledger(session: Session, book: Book) -> Ledger:
+    """The sweep target: TallyPrime's equity-side Profit & Loss A/c,
+    resolved within the book."""
+    ledger = session.scalar(
+        select(Ledger).where(Ledger.name == PL_LEDGER_NAME, Ledger.book_id == book.id)
+    )
     if ledger is None:
         raise NotFoundError(
-            f"Ledger {PL_LEDGER_NAME!r} does not exist — apply the seed "
-            "(python -m ledgerforge.bootstrap) before closing a year"
+            f"Ledger {PL_LEDGER_NAME!r} does not exist in book {book.name!r} — create the "
+            "book with its seed (POST /api/v1/books does this) before closing a year"
         )
     return ledger
 
 
 # --------------------------------------------------------------- the workflow
-def create_period(session: Session, payload: PeriodCreate) -> Period:
+def create_period(session: Session, payload: PeriodCreate, book: Book) -> Period:
     if payload.starts_on > payload.ends_on:
         raise ValidationError("period starts_on must not be after ends_on")
-    period = Period(name=payload.name, starts_on=payload.starts_on, ends_on=payload.ends_on)
+    period = Period(
+        book_id=book.id, name=payload.name, starts_on=payload.starts_on, ends_on=payload.ends_on
+    )
     session.add(period)
     try:
         session.commit()
@@ -81,18 +88,20 @@ def create_period(session: Session, payload: PeriodCreate) -> Period:
         message = str(getattr(exc, "orig", exc))
         if "overlap" in message.lower():
             raise ValidationError(
-                f"Period {payload.name!r} overlaps an existing period — "
+                f"Period {payload.name!r} overlaps an existing period of this book — "
                 "periods must not share dates"
             ) from exc
         if "duplicate key" in message.lower():
-            raise ValidationError(f"Period name {payload.name!r} already exists") from exc
+            raise ValidationError(
+                f"Period name {payload.name!r} already exists in this book"
+            ) from exc
         raise
     session.refresh(period)
     return period
 
 
-def lock_period(session: Session, period_id: int, actor: str | None = None) -> Period:
-    period = _get_period(session, period_id)
+def lock_period(session: Session, period_id: int, book: Book, actor: str | None = None) -> Period:
+    period = _get_period(session, period_id, book)
     if period.status != "open":
         raise PeriodStateError(
             f"Period {period.name!r} is {period.status}; only open periods can be locked"
@@ -104,8 +113,8 @@ def lock_period(session: Session, period_id: int, actor: str | None = None) -> P
     return period
 
 
-def unlock_period(session: Session, period_id: int, actor: str | None = None) -> Period:
-    period = _get_period(session, period_id)
+def unlock_period(session: Session, period_id: int, book: Book, actor: str | None = None) -> Period:
+    period = _get_period(session, period_id, book)
     if period.status != "locked":
         raise PeriodStateError(
             f"Period {period.name!r} is {period.status}; only locked periods can be reopened"
@@ -128,14 +137,14 @@ def unlock_period(session: Session, period_id: int, actor: str | None = None) ->
 
 def fy_close_preview(session: Session, period: Period) -> dict:
     """The sweep rows for a period (what close would post), as of its last day."""
-    return fy_close_rows(session, period.ends_on)
+    return fy_close_rows(session, period.book_id, period.ends_on)
 
 
-def fy_close_rows(session: Session, as_of: date) -> dict:
+def fy_close_rows(session: Session, book_id: int, as_of: date) -> dict:
     """rpt.fy_close shaped by the reporting layer (Decimals, balance-proved)."""
     from ..reporting.reports import fy_close  # local import: reporting layer
 
-    return fy_close(session, as_of)
+    return fy_close(session, book_id, as_of)
 
 
 def close_period(
@@ -143,11 +152,13 @@ def close_period(
     period_id: int,
     manager: PluginManager,
     settings: Settings,
+    book: Book,
     actor: str | None = None,
 ) -> tuple[Period, Voucher | None, bool]:
-    """Lock ➜ close is the contract. Returns (period, sweep_voucher, created);
-    ``sweep_voucher`` is None when there was nothing to sweep."""
-    period = _get_period(session, period_id)
+    """Lock ➜ close is the contract, within ``book``. Returns (period,
+    sweep_voucher, created); ``sweep_voucher`` is None when there was
+    nothing to sweep."""
+    period = _get_period(session, period_id, book)
     if period.status == "closed":
         raise PeriodStateError(f"Period {period.name!r} is already closed")
     if period.status != "locked":
@@ -157,7 +168,11 @@ def close_period(
 
     sweep_date = period.ends_on + timedelta(days=1)
     next_period = session.scalar(
-        select(Period).where(Period.starts_on <= sweep_date, Period.ends_on >= sweep_date)
+        select(Period).where(
+            Period.book_id == book.id,
+            Period.starts_on <= sweep_date,
+            Period.ends_on >= sweep_date,
+        )
     )
     if next_period is None:
         raise ValidationError(
@@ -170,8 +185,8 @@ def close_period(
             f"is {next_period.status}; the sweep needs an open period"
         )
 
-    resolve_pl_ledger(session)  # fail early with a clear 404 if unsweptable
-    report = fy_close_rows(session, period.ends_on)
+    resolve_pl_ledger(session, book)  # fail early with a clear 404 if unsweptable
+    report = fy_close_rows(session, book.id, period.ends_on)
 
     voucher: Voucher | None = None
     created = False
@@ -196,7 +211,7 @@ def close_period(
         # allow_future_dates guard protects against client typos, not against
         # the close action (ADR-008).
         sweep_settings = settings.model_copy(update={"allow_future_dates": True})
-        voucher, created = post_voucher(session, payload, manager, sweep_settings)
+        voucher, created = post_voucher(session, payload, manager, sweep_settings, book)
 
     # Re-issue the actor: post_voucher committed the transaction above.
     _set_actor(session, actor)

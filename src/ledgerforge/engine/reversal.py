@@ -12,8 +12,8 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..errors import ConflictError, ValidationError
-from ..models import Voucher, VoucherType
+from ..errors import ConflictError, NotFoundError, ValidationError
+from ..models import Book, Voucher, VoucherType
 from ..plugins import PluginManager
 from ..schemas import VoucherCreate, VoucherLineIn
 from ..settings import Settings
@@ -25,18 +25,25 @@ def reverse_voucher(
     voucher_id: int,
     manager: PluginManager,
     settings: Settings,
+    book: Book,
     *,
     reversal_date: date | None = None,
     narration: str | None = None,
     client_token=None,
 ) -> tuple[Voucher, bool]:
+    """Reverse a voucher of ``book``. A voucher id from another book is a
+    404, never a cross-book correction (ADR-009)."""
     original, entries = get_voucher_with_entries(session, voucher_id)
+    if original.book_id != book.id:
+        raise NotFoundError(f"Voucher {voucher_id} does not exist in book {book.name!r}")
 
     if original.reversal_of is not None:
         raise ValidationError(
             "A reversal voucher cannot itself be reversed; post a fresh correcting voucher instead"
         )
-    existing = session.scalar(select(Voucher).where(Voucher.reversal_of == original.id))
+    existing = session.scalar(
+        select(Voucher).where(Voucher.reversal_of == original.id, Voucher.book_id == book.id)
+    )
     if existing is not None:
         raise ConflictError(
             f"Voucher {original.voucher_no} is already reversed by {existing.voucher_no}"
@@ -68,4 +75,4 @@ def reverse_voucher(
         ],
         reversal_of=original.id,
     )
-    return post_voucher(session, payload, manager, settings)
+    return post_voucher(session, payload, manager, settings, book)

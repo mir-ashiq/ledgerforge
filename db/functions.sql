@@ -1,12 +1,13 @@
 -- ============================================================================
 -- LedgerForge — reporting engine (SQL functions, schema `rpt`)
 -- ----------------------------------------------------------------------------
--- Callable as raw SQL, e.g.:
---   SELECT * FROM rpt.trial_balance('2026-11-06');
---   SELECT * FROM rpt.profit_and_loss('2026-04-01', '2027-03-31');
---   SELECT * FROM rpt.balance_sheet('2026-11-06');
+-- Callable as raw SQL, e.g. (book 1 = the id from GET /api/v1/books):
+--   SELECT * FROM rpt.trial_balance(1, '2026-11-06');
+--   SELECT * FROM rpt.profit_and_loss(1, '2026-04-01', '2027-03-31');
+--   SELECT * FROM rpt.balance_sheet(1, '2026-11-06');
 -- All aggregation is exact NUMERIC arithmetic; all rollups are closure-table
--- joins (ADR-001). Idempotent (CREATE OR REPLACE).
+-- joins (ADR-001); every function is book-scoped (ADR-009, migration 0004).
+-- Idempotent (CREATE OR REPLACE).
 -- ============================================================================
 
 CREATE SCHEMA IF NOT EXISTS rpt;
@@ -14,10 +15,10 @@ CREATE SCHEMA IF NOT EXISTS rpt;
 GRANT USAGE ON SCHEMA rpt TO ledgerforge_app;
 
 -- ----------------------------------------------------------------------------
--- Trial Balance: per-ledger debit/credit/closing as of a date.
+-- Trial Balance: per-ledger debit/credit/closing as of a date, one book.
 -- Each ledger is classified by its OWN group's nature (single counting).
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpt.trial_balance(p_as_of DATE)
+CREATE OR REPLACE FUNCTION rpt.trial_balance(p_book_id BIGINT, p_as_of DATE)
 RETURNS TABLE (
     out_ledger_id   BIGINT,
     out_ledger_name TEXT,
@@ -36,7 +37,8 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
                COALESCE(SUM(CASE WHEN e.dc = 'C' THEN e.amount ELSE 0 END), 0) AS cr
         FROM voucher_entries e
         JOIN vouchers v ON v.id = e.voucher_id
-        WHERE v.voucher_date <= p_as_of
+        WHERE e.book_id = p_book_id
+          AND v.voucher_date <= p_as_of
         GROUP BY e.ledger_id
     )
     SELECT l.id, l.name, g.id, g.name, g.nature,
@@ -46,13 +48,15 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
     FROM per_ledger pl
     JOIN ledgers l ON l.id = pl.ledger_id
     JOIN groups g ON g.id = l.group_id
+    WHERE l.book_id = p_book_id
+      AND g.book_id = p_book_id
 $$;
 
 -- ----------------------------------------------------------------------------
 -- Group rollups: every group's subtree debit/credit as of a date, in one
--- closure-table pass (the query the closure model exists for).
+-- closure-table pass (the query the closure model exists for), one book.
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpt.group_rollups(p_as_of DATE)
+CREATE OR REPLACE FUNCTION rpt.group_rollups(p_book_id BIGINT, p_as_of DATE)
 RETURNS TABLE (
     out_group_id   BIGINT,
     out_group_name TEXT,
@@ -70,7 +74,8 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         FROM voucher_entries e
         JOIN ledgers l ON l.id = e.ledger_id
         JOIN vouchers v ON v.id = e.voucher_id
-        WHERE v.voucher_date <= p_as_of
+        WHERE e.book_id = p_book_id
+          AND v.voucher_date <= p_as_of
         GROUP BY l.group_id
     ),
     per_group AS (
@@ -86,6 +91,7 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
                 ELSE pg.cr - pg.dr END
     FROM per_group pg
     JOIN groups g ON g.id = pg.gid
+    WHERE g.book_id = p_book_id
 $$;
 
 -- ----------------------------------------------------------------------------
@@ -94,9 +100,9 @@ $$;
 -- rows are subtree rollups for display. Financial-year close sweeps (voucher
 -- type FYC) are excluded: they transfer results to Profit & Loss A/c, they
 -- are not earnings — without this, the year after a close would report the
--- sweep as a loss (ADR-008).
+-- sweep as a loss (ADR-008). Book-scoped (ADR-009).
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpt.profit_and_loss(p_from DATE, p_to DATE)
+CREATE OR REPLACE FUNCTION rpt.profit_and_loss(p_book_id BIGINT, p_from DATE, p_to DATE)
 RETURNS TABLE (
     out_section   TEXT,
     out_bucket    TEXT,
@@ -113,7 +119,8 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         JOIN ledgers l ON l.id = e.ledger_id
         JOIN vouchers v ON v.id = e.voucher_id
         JOIN voucher_types vt ON vt.id = v.voucher_type_id
-        WHERE v.voucher_date BETWEEN p_from AND p_to
+        WHERE e.book_id = p_book_id
+          AND v.voucher_date BETWEEN p_from AND p_to
           AND vt.code <> 'FYC'
         GROUP BY l.group_id
     ),
@@ -132,10 +139,14 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
     ),
     totals AS (
         SELECT
-            COALESCE(SUM(CASE WHEN nature = 'income'  AND affects_gross THEN cr - dr END), 0) AS direct_income,
-            COALESCE(SUM(CASE WHEN nature = 'expense' AND affects_gross THEN dr - cr END), 0) AS direct_expense,
-            COALESCE(SUM(CASE WHEN nature = 'income'  AND NOT affects_gross THEN cr - dr END), 0) AS indirect_income,
-            COALESCE(SUM(CASE WHEN nature = 'expense' AND NOT affects_gross THEN dr - cr END), 0) AS indirect_expense
+            COALESCE(SUM(CASE WHEN nature = 'income'  AND affects_gross THEN cr - dr END), 0)
+                AS direct_income,
+            COALESCE(SUM(CASE WHEN nature = 'expense' AND affects_gross THEN dr - cr END), 0)
+                AS direct_expense,
+            COALESCE(SUM(CASE WHEN nature = 'income'  AND NOT affects_gross THEN cr - dr END), 0)
+                AS indirect_income,
+            COALESCE(SUM(CASE WHEN nature = 'expense' AND NOT affects_gross THEN dr - cr END), 0)
+                AS indirect_expense
         FROM ledger_class
     )
     SELECT 'trading', 'direct_income', g.id, g.name, pg.cr - pg.dr
@@ -169,11 +180,11 @@ $$;
 
 -- ----------------------------------------------------------------------------
 -- Balance Sheet: assets / liabilities / equity group rollups as of a date,
--- plus the cumulative profit-and-loss plug under equity. Section totals are
--- computed by the API from rpt.trial_balance (ledger-level, single-counted);
--- group rows here are subtree rollups for the display tree.
+-- plus the cumulative profit-and-loss plug under equity, one book. Section
+-- totals are computed by the API from rpt.trial_balance (ledger-level,
+-- single-counted); group rows here are subtree rollups for the display tree.
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpt.balance_sheet(p_as_of DATE)
+CREATE OR REPLACE FUNCTION rpt.balance_sheet(p_book_id BIGINT, p_as_of DATE)
 RETURNS TABLE (
     out_section    TEXT,
     out_group_id   BIGINT,
@@ -189,7 +200,8 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         FROM voucher_entries e
         JOIN ledgers l ON l.id = e.ledger_id
         JOIN vouchers v ON v.id = e.voucher_id
-        WHERE v.voucher_date <= p_as_of
+        WHERE e.book_id = p_book_id
+          AND v.voucher_date <= p_as_of
         GROUP BY l.group_id
     ),
     per_group AS (
@@ -220,18 +232,20 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
          - COALESCE(SUM(CASE WHEN g.nature = 'expense' THEN pl.dr - pl.cr END), 0)
     FROM per_ledger pl
     JOIN groups g ON g.id = pl.gid
+    WHERE g.book_id = p_book_id
 $$;
 
 -- ----------------------------------------------------------------------------
 -- Financial-year close: the exact sweep that zeroes the year (issue #5,
--- ADR-008). For every income/expense ledger with a non-zero closing balance
--- as of p_as_of, the reversing line; the net difference lands on the
--- Profit & Loss A/c ledger (p_pl_ledger_id). Balanced by construction —
--- every line is an ABS of a balance and the P&L line absorbs the algebraic
--- sum, so Law 1 holds exactly. The close action posts these rows verbatim as
--- an FYC voucher dated the first day of the NEXT period.
+-- ADR-008; book-scoped by 0004). For every income/expense ledger of the book
+-- with a non-zero closing balance as of p_as_of, the reversing line; the net
+-- difference lands on the Profit & Loss A/c ledger (p_pl_ledger_id).
+-- Balanced by construction — every line is an ABS of a balance and the P&L
+-- line absorbs the algebraic sum, so Law 1 holds exactly. The close action
+-- posts these rows verbatim as an FYC voucher dated the first day of the
+-- NEXT period.
 -- ----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION rpt.fy_close(p_as_of DATE, p_pl_ledger_id BIGINT)
+CREATE OR REPLACE FUNCTION rpt.fy_close(p_book_id BIGINT, p_as_of DATE, p_pl_ledger_id BIGINT)
 RETURNS TABLE (
     out_bucket      TEXT,
     out_ledger_id   BIGINT,
@@ -248,7 +262,8 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         JOIN vouchers v ON v.id = e.voucher_id
         JOIN ledgers l ON l.id = e.ledger_id
         JOIN groups g ON g.id = l.group_id
-        WHERE v.voucher_date <= p_as_of
+        WHERE e.book_id = p_book_id
+          AND v.voucher_date <= p_as_of
           AND g.nature IN ('income', 'expense')
         GROUP BY e.ledger_id
     ),
@@ -259,6 +274,7 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         FROM per_ledger pl
         JOIN ledgers l ON l.id = pl.ledger_id
         JOIN groups g ON g.id = l.group_id
+        WHERE l.book_id = p_book_id
     )
     SELECT 'income', b.ledger_id, b.ledger_name,
            CASE WHEN b.balance > 0 THEN 'D' ELSE 'C' END, ABS(b.balance)

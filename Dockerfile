@@ -9,5 +9,6 @@ RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 
-# Bootstrap applies db/schema.sql + functions + seed (idempotent), then serve.
+# Bootstrap applies db/schema.sql + functions + the seeded default book
+# (ledgerforge/seeding.py — idempotent), then serve.
 CMD ["sh", "-c", "python -m ledgerforge.bootstrap && uvicorn ledgerforge.main:app --host 0.0.0.0 --port 8000"]

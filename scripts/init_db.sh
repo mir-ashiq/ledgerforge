@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# Apply the LedgerForge schema, reporting functions and seed to a database.
+# Apply the LedgerForge schema, reporting functions and the default-book
+# seed (ledgerforge/seeding.py via bootstrap) to a database.
 # Idempotent — safe to re-run. DSN resolution: LF_DATABASE_URL > DATABASE_URL.
 set -eu
 

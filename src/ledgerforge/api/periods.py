@@ -21,7 +21,7 @@ from ..models import Period
 from ..plugins import PluginManager
 from ..schemas import FyCloseReportOut, PeriodCreate, PeriodOut
 from ..settings import get_settings
-from . import AdminDep, ReaderDep, SessionDep
+from . import AdminDep, BookDep, ReaderDep, SessionDep
 
 router = APIRouter(prefix="/periods", tags=["periods"])
 
@@ -44,47 +44,49 @@ def _plugin_manager(request: Request) -> PluginManager:
 
 
 @router.post("", response_model=PeriodOut, status_code=201)
-def post_period(payload: PeriodCreate, session: SessionDep, _: AdminDep):
-    return _period_out(create_period(session, payload))
+def post_period(payload: PeriodCreate, session: SessionDep, book: BookDep, _: AdminDep):
+    return _period_out(create_period(session, payload, book))
 
 
 @router.get("", response_model=list[PeriodOut])
-def list_periods(session: SessionDep, _: ReaderDep):
-    periods = session.query(Period).order_by(Period.starts_on).all()
+def list_periods(session: SessionDep, book: BookDep, _: ReaderDep):
+    periods = (
+        session.query(Period).filter(Period.book_id == book.id).order_by(Period.starts_on).all()
+    )
     return [_period_out(p) for p in periods]
 
 
 @router.get("/{period_id}", response_model=PeriodOut)
-def get_period(period_id: int, session: SessionDep, _: ReaderDep):
+def get_period(period_id: int, session: SessionDep, book: BookDep, _: ReaderDep):
     from ..errors import NotFoundError
 
     period = session.get(Period, period_id)
-    if period is None:
-        raise NotFoundError(f"Period {period_id} does not exist")
+    if period is None or period.book_id != book.id:
+        raise NotFoundError(f"Period {period_id} does not exist in book {book.name!r}")
     return _period_out(period)
 
 
 @router.post("/{period_id}/lock", response_model=PeriodOut)
-def lock(period_id: int, session: SessionDep, principal: AdminDep):
+def lock(period_id: int, session: SessionDep, book: BookDep, principal: AdminDep):
     """Freeze a period's dates for review; postings into it get 409."""
-    return _period_out(lock_period(session, period_id, actor=principal.sub))
+    return _period_out(lock_period(session, period_id, book, actor=principal.sub))
 
 
 @router.post("/{period_id}/unlock", response_model=PeriodOut)
-def unlock(period_id: int, session: SessionDep, principal: AdminDep):
+def unlock(period_id: int, session: SessionDep, book: BookDep, principal: AdminDep):
     """Reopen a locked period. Refused once a close sweep exists."""
-    return _period_out(unlock_period(session, period_id, actor=principal.sub))
+    return _period_out(unlock_period(session, period_id, book, actor=principal.sub))
 
 
 @router.get("/{period_id}/close-preview", response_model=FyCloseReportOut)
-def close_preview(period_id: int, session: SessionDep, _: ReaderDep):
+def close_preview(period_id: int, session: SessionDep, book: BookDep, _: ReaderDep):
     """Exactly what close would post: every income/expense ledger's zeroing
     line plus the Profit & Loss A/c balancing line, as of the period's end."""
     from ..errors import NotFoundError
 
     period = session.get(Period, period_id)
-    if period is None:
-        raise NotFoundError(f"Period {period_id} does not exist")
+    if period is None or period.book_id != book.id:
+        raise NotFoundError(f"Period {period_id} does not exist in book {book.name!r}")
     return fy_close_preview(session, period)
 
 
@@ -93,6 +95,7 @@ def close(
     period_id: int,
     request: Request,
     session: SessionDep,
+    book: BookDep,
     principal: AdminDep,
 ):
     """Lock first, then close. Posts the FY sweep as an FYC voucher dated the
@@ -104,6 +107,7 @@ def close(
         period_id,
         _plugin_manager(request),
         get_settings(),
+        book,
         actor=principal.sub,
     )
     from ..api.vouchers import _voucher_out

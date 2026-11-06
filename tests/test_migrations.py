@@ -260,11 +260,12 @@ def test_head_revision_is_single_and_parseable():
     from alembic.script import ScriptDirectory
 
     head = lf_migrations.head_revision()
-    assert head == "0003_period_locking"
+    assert head == "0004_multi_book"
     assert lf_migrations.revisions() == {
         "0001_baseline": None,
         "0002_multi_currency": "0001_baseline",
         "0003_period_locking": "0002_multi_currency",
+        "0004_multi_book": "0003_period_locking",
     }
     scripts = ScriptDirectory(str(lf_migrations.migrations_dir()))
     assert scripts.get_current_head() == head
@@ -304,8 +305,9 @@ def test_stepwise_upgrade_and_partial_downgrade(scratch_dbs):
 
     _upgrade(dsn)
     with psycopg.connect(dsn) as conn:
+        # at head (0004) the P&L is book-scoped: (BIGINT, DATE, DATE)
         (has_join,) = conn.execute(
-            "SELECT pg_get_functiondef('rpt.profit_and_loss(DATE, DATE)'::regprocedure)"
+            "SELECT pg_get_functiondef('rpt.profit_and_loss(BIGINT, DATE, DATE)'::regprocedure)"
             " LIKE '%voucher_types%'"
         ).fetchone()
         assert has_join is True

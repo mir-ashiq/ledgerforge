@@ -37,7 +37,7 @@ def _as_psycopg(url: str) -> str:
     return url.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
-def _worker(results, errors, session_factory, manager, settings, cash_id, sales_id):
+def _worker(results, errors, session_factory, manager, settings, book, cash_id, sales_id):
     from ledgerforge.engine.posting import post_voucher
     from ledgerforge.schemas import VoucherCreate, VoucherLineIn
 
@@ -54,7 +54,7 @@ def _worker(results, errors, session_factory, manager, settings, cash_id, sales_
                     VoucherLineIn(ledger_id=sales_id, dc="C", amount=amount),
                 ],
             )
-            voucher, _ = post_voucher(session, payload, manager, settings)
+            voucher, _ = post_voucher(session, payload, manager, settings, book)
             results.append(voucher.sequence)
     except Exception as exc:  # noqa: BLE001
         errors.append(exc)
@@ -98,7 +98,7 @@ def main() -> None:
 
     from ledgerforge import bootstrap, db
     from ledgerforge.contrib import example_gst
-    from ledgerforge.models import Group, Ledger
+    from ledgerforge.models import Book, Group, Ledger
     from ledgerforge.plugins import PluginManager
     from ledgerforge.reporting import trial_balance
     from ledgerforge.settings import get_settings
@@ -109,8 +109,9 @@ def main() -> None:
     db.reset_engine()
 
     session = db.session_factory()()
+    book = session.scalar(select(Book).where(Book.slug == "default"))
     sales_group = session.scalar(select(Group).where(Group.name == "Sales Accounts"))
-    session.add(Ledger(name="Bench Sales", group_id=sales_group.id))
+    session.add(Ledger(book_id=book.id, name="Bench Sales", group_id=sales_group.id))
     session.commit()
     cash_id = session.scalar(select(Ledger.id).where(Ledger.name == "Cash"))
     sales_id = session.scalar(select(Ledger.id).where(Ledger.name == "Bench Sales"))
@@ -126,7 +127,7 @@ def main() -> None:
     threads = [
         threading.Thread(
             target=_worker,
-            args=(results, errors, factory, manager, settings, cash_id, sales_id),
+            args=(results, errors, factory, manager, settings, book, cash_id, sales_id),
         )
         for _ in range(N_THREADS)
     ]
@@ -142,7 +143,7 @@ def main() -> None:
     assert sorted(results) == list(range(1, TOTAL + 1)), "numbering must be gapless"
 
     check = db.session_factory()()
-    report = trial_balance(check, date.today())
+    report = trial_balance(check, book.id, date.today())
     check.close()
     assert Decimal(report["totals"]["difference"]) == 0
 

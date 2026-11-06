@@ -6,7 +6,7 @@
 
 import type { Dc } from '../api/types';
 
-/** The F-key switchable voucher types (seeded in db/seed/chart_of_accounts.sql). */
+/** The F-key switchable voucher types (seeded per book by ledgerforge/seeding.py). */
 export interface VoucherTypeDef {
   code: string;
   name: string;

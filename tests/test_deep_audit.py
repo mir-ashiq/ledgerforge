@@ -457,9 +457,9 @@ def test_db_gate_blocks_raw_inserts_locked_open_gap(client, fresh_db, psycopg_ds
     def raw_insert(voucher_no: str, day: str) -> None:
         with psycopg.connect(psycopg_dsn) as conn:
             conn.execute(
-                "INSERT INTO vouchers (client_token, voucher_type_id,"
+                "INSERT INTO vouchers (book_id, client_token, voucher_type_id,"
                 " voucher_no, sequence, voucher_date)"
-                " VALUES (gen_random_uuid(),"
+                " VALUES ((SELECT id FROM books WHERE slug = 'default'), gen_random_uuid(),"
                 " (SELECT id FROM voucher_types WHERE code = 'JV'), %s, 1, %s)",
                 (voucher_no, day),
             )
@@ -560,11 +560,12 @@ def test_lock_versus_post_race(db_session, fresh_db, plugin_manager, settings, c
     from ledgerforge import db
     from ledgerforge.engine.periods import lock_period
     from ledgerforge.engine.posting import post_voucher as engine_post
-    from ledgerforge.models import Ledger
+    from ledgerforge.models import Book, Ledger
     from ledgerforge.schemas import VoucherCreate, VoucherLineIn
 
     create_ledger(client, "Audit Race Sales", "Sales Accounts")
     race = create_period(client, "Audit Race 2018", "2018-01-01", "2018-12-31")
+    book = db_session.scalar(select(Book).where(Book.slug == "default"))
     cash_id = db_session.scalar(select(Ledger.id).where(Ledger.name == "Cash"))
     sales_id = db_session.scalar(select(Ledger.id).where(Ledger.name == "Audit Race Sales"))
     db_session.commit()
@@ -590,7 +591,7 @@ def test_lock_versus_post_race(db_session, fresh_db, plugin_manager, settings, c
                     ],
                 )
                 try:
-                    voucher, _ = engine_post(session, payload, plugin_manager, settings)
+                    voucher, _ = engine_post(session, payload, plugin_manager, settings, book)
                     posted.append(voucher.id)
                 except PeriodStateError:
                     refused.append(Exception("locked"))  # the clean refusal
@@ -604,7 +605,7 @@ def test_lock_versus_post_race(db_session, fresh_db, plugin_manager, settings, c
         session = factory()
         try:
             time.sleep(0.12)  # let the posters get going
-            lock_period(session, race["id"], actor="audit-race")
+            lock_period(session, race["id"], book, actor="audit-race")
             lock_result["status"] = "locked"
         finally:
             session.close()

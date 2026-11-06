@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from ledgerforge import db
 from ledgerforge.engine.posting import post_voucher
-from ledgerforge.models import Ledger, Voucher, VoucherType
+from ledgerforge.models import Book, Ledger, Voucher, VoucherType
 from ledgerforge.reporting import trial_balance
 from ledgerforge.schemas import VoucherCreate, VoucherLineIn
 
@@ -25,7 +25,7 @@ PER_THREAD = 40
 TOTAL = N_THREADS * PER_THREAD
 
 
-def _worker(results, errors, session_factory, manager, settings, cash_id, sales_id, amounts):
+def _worker(results, errors, session_factory, manager, settings, book, cash_id, sales_id, amounts):
     session = session_factory()
     try:
         for amount in amounts:
@@ -38,7 +38,7 @@ def _worker(results, errors, session_factory, manager, settings, cash_id, sales_
                     VoucherLineIn(ledger_id=sales_id, dc="C", amount=amount),
                 ],
             )
-            voucher, _created = post_voucher(session, payload, manager, settings)
+            voucher, _created = post_voucher(session, payload, manager, settings, book)
             results.append((voucher.id, voucher.sequence, voucher.voucher_no))
     except Exception as exc:  # noqa: BLE001 — recorded and asserted below
         errors.append(exc)
@@ -50,6 +50,7 @@ def test_gapless_under_threads(client, fresh_db, db_session, plugin_manager, set
     from conftest import create_ledger
 
     create_ledger(client, "Concurrency Sales", "Sales Accounts")
+    book = db_session.scalar(select(Book).where(Book.slug == "default"))
     cash_id = db_session.scalar(select(Ledger.id).where(Ledger.name == "Cash"))
     sales_id = db_session.scalar(select(Ledger.id).where(Ledger.name == "Concurrency Sales"))
     db_session.commit()
@@ -77,6 +78,7 @@ def test_gapless_under_threads(client, fresh_db, db_session, plugin_manager, set
                 factory,
                 plugin_manager,
                 settings,
+                book,
                 cash_id,
                 sales_id,
                 thread_amounts[t],
@@ -109,7 +111,7 @@ def test_gapless_under_threads(client, fresh_db, db_session, plugin_manager, set
     assert len(sal_ids) == TOTAL
 
     # the whole book still balances exactly
-    report = trial_balance(db_session, date.today())
+    report = trial_balance(db_session, book.id, date.today())
     assert Decimal(report["totals"]["difference"]) == 0
     assert Decimal(report["totals"]["dr"]) == expected_total
     assert Decimal(report["totals"]["cr"]) == expected_total

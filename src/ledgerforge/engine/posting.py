@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal, getcontext
 from uuid import uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
@@ -18,11 +18,11 @@ from ..errors import (
     UnbalancedVoucherError,
     ValidationError,
 )
-from ..models import DocCounter, Ledger, Period, Voucher, VoucherEntry, VoucherType
+from ..models import Book, DocCounter, Ledger, Period, Voucher, VoucherEntry, VoucherType
 from ..plugins import DraftLine, PluginManager, Resolver, VoucherDraft
 from ..schemas import VoucherCreate, _coerce_amount
 from ..settings import Settings
-from .currency import base_currency_code, validate_fx_lines
+from .currency import validate_fx_lines
 
 # Exact-arithmetic headroom (Law 3)
 getcontext().prec = 50
@@ -42,26 +42,25 @@ def format_voucher_no(prefix: str, fy_label: str | None, seq: int) -> str:
     return "-".join(parts)
 
 
-def _fy_start_month(session: Session) -> int:
-    raw = session.execute(text("SELECT value FROM settings WHERE key = 'fy_start_month'")).scalar()
-    try:
-        return int(raw or 4)
-    except (TypeError, ValueError):
-        return 4
-
-
 # ------------------------------------------------------- period gate (issue #5)
-def _check_period_open(session: Session, voucher_date: date) -> None:
-    """App-level half of the posting gate (ADR-008): with no periods defined
-    every date posts; once periods exist, a date must fall in an OPEN period.
-    The BEFORE INSERT trigger on vouchers enforces the same rule at commit
-    time — this check exists to give a clean 409/422 instead of a 500 when a
-    lock races the posting."""
-    has_periods = session.scalar(select(func.count()).select_from(Period))
+def _check_period_open(session: Session, book: Book, voucher_date: date) -> None:
+    """App-level half of the posting gate (ADR-008), scoped to ``book``
+    (ADR-009): with no periods defined for the book every date posts; once
+    they exist, a date must fall in an OPEN period. The BEFORE INSERT
+    trigger on vouchers enforces the same rule at commit time — this check
+    exists to give a clean 409/422 instead of a 500 when a lock races the
+    posting."""
+    has_periods = session.scalar(
+        select(func.count()).select_from(Period).where(Period.book_id == book.id)
+    )
     if not has_periods:
         return
     period = session.scalar(
-        select(Period).where(Period.starts_on <= voucher_date, Period.ends_on >= voucher_date)
+        select(Period).where(
+            Period.book_id == book.id,
+            Period.starts_on <= voucher_date,
+            Period.ends_on >= voucher_date,
+        )
     )
     if period is None:
         raise ValidationError(
@@ -100,20 +99,22 @@ def _validate_draft(draft: VoucherDraft, settings: Settings) -> None:
 
 
 # ---------------------------------------------------------------- resolution
-def _resolve_ledgers(session: Session, lines: list[DraftLine]) -> list[tuple[DraftLine, Ledger]]:
+def _resolve_ledgers(
+    session: Session, book: Book, lines: list[DraftLine]
+) -> list[tuple[DraftLine, Ledger]]:
     resolved: list[tuple[DraftLine, Ledger]] = []
     for i, line in enumerate(lines, start=1):
         stmt = (
-            select(Ledger).where(Ledger.id == line.ledger_id)
+            select(Ledger).where(Ledger.id == line.ledger_id, Ledger.book_id == book.id)
             if line.ledger_id is not None
-            else select(Ledger).where(Ledger.name == line.ledger_name)
+            else select(Ledger).where(Ledger.book_id == book.id, Ledger.name == line.ledger_name)
         )
         ledger = session.scalar(stmt)
         if ledger is None:
             ref = f"id {line.ledger_id}" if line.ledger_id else f"name {line.ledger_name!r}"
             raise NotFoundError(
-                f"Line {i}: ledger {ref} does not exist (create it first, "
-                "or use Alt+C-style master creation)"
+                f"Line {i}: ledger {ref} does not exist in book {book.name!r} "
+                "(create it first, or use Alt+C-style master creation)"
             )
         resolved.append((line, ledger))
     return resolved
@@ -140,13 +141,18 @@ def post_voucher(
     payload: VoucherCreate,
     manager: PluginManager,
     settings: Settings,
+    book: Book,
 ) -> tuple[Voucher, bool]:
-    """Post a voucher in ONE ACID transaction. Returns (voucher, created);
-    ``created=False`` means an idempotent replay of the same client_token."""
-    # 1. Idempotency
+    """Post a voucher into ``book`` in ONE ACID transaction (ADR-009).
+    Returns (voucher, created); ``created=False`` means an idempotent
+    replay of the same client_token — replay resolves within the book."""
+    # 1. Idempotency (book-scoped: the same offline client may retry into
+    # two books without interference — ADR-009)
     if payload.client_token is not None:
         existing = session.scalar(
-            select(Voucher).where(Voucher.client_token == payload.client_token)
+            select(Voucher).where(
+                Voucher.client_token == payload.client_token, Voucher.book_id == book.id
+            )
         )
         if existing is not None:
             return existing, False
@@ -174,28 +180,33 @@ def post_voucher(
     )
 
     # 2-3. Plugin transformers + validators (inside the transaction)
-    resolver = Resolver(session)
+    resolver = Resolver(session, book)
     draft = manager.transform(draft, resolver)
     manager.validate(draft, resolver)
 
     # 4. Engine validation — the three laws, the FX rules, the period gate
     _validate_draft(draft, settings)
-    validate_fx_lines(session, draft, base_currency_code(session))
-    _check_period_open(session, draft.voucher_date)
+    validate_fx_lines(session, draft, book.base_currency)
+    _check_period_open(session, book, draft.voucher_date)
 
-    # 5. Resolve masters
-    vtype = session.scalar(select(VoucherType).where(VoucherType.code == draft.voucher_type))
-    if vtype is None:
-        raise NotFoundError(f"Voucher type {draft.voucher_type!r} does not exist")
-    resolved = _resolve_ledgers(session, draft.lines)
-
-    # 6. Gapless numbering: lock the counter row (the only locked row — ADR-002)
-    fy_label = (
-        fiscal_year_label(draft.voucher_date, _fy_start_month(session))
-        if vtype.restart_yearly
-        else None
+    # 5. Resolve masters (every lookup lives inside the book)
+    vtype = session.scalar(
+        select(VoucherType).where(
+            VoucherType.code == draft.voucher_type, VoucherType.book_id == book.id
+        )
     )
-    scope = f"{vtype.id}:{fy_label if vtype.restart_yearly else 'ALL'}"
+    if vtype is None:
+        raise NotFoundError(
+            f"Voucher type {draft.voucher_type!r} does not exist in book {book.name!r}"
+        )
+    resolved = _resolve_ledgers(session, book, draft.lines)
+
+    # 6. Gapless numbering: lock the counter row (the only locked row —
+    # ADR-002). Scope is '{book}:{vtype}:{fy}' — every book numbers from 1.
+    fy_label = (
+        fiscal_year_label(draft.voucher_date, book.fy_start_month) if vtype.restart_yearly else None
+    )
+    scope = f"{book.id}:{vtype.id}:{fy_label if vtype.restart_yearly else 'ALL'}"
     session.execute(
         pg_insert(DocCounter)
         .values(scope_key=scope, last_value=0)
@@ -210,6 +221,7 @@ def post_voucher(
 
     # 7. Insert (append-only)
     voucher = Voucher(
+        book_id=book.id,
         client_token=draft.client_token or uuid4(),
         voucher_type_id=vtype.id,
         voucher_no=voucher_no,
@@ -234,6 +246,7 @@ def post_voucher(
                 voucher_id=voucher.id,
                 line_no=line_no,
                 ledger_id=ledger.id,
+                book_id=book.id,
                 dc=line.dc,
                 amount=line.amount,
                 voucher_date=voucher.voucher_date,
@@ -252,7 +265,9 @@ def post_voucher(
         sqlstate = getattr(exc.orig, "sqlstate", None)
         if sqlstate == "23505" and draft.client_token is not None:
             existing = session.scalar(
-                select(Voucher).where(Voucher.client_token == draft.client_token)
+                select(Voucher).where(
+                    Voucher.client_token == draft.client_token, Voucher.book_id == book.id
+                )
             )
             if existing is not None:
                 return existing, False
@@ -268,6 +283,7 @@ def post_voucher(
             "voucher_id": voucher.id,
             "voucher_no": voucher.voucher_no,
             "uuid": str(voucher.uuid),
+            "book_id": book.id,
             "voucher_type": vtype.code,
             "voucher_date": voucher.voucher_date.isoformat(),
         },

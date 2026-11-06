@@ -2,8 +2,8 @@
 -- LedgerForge — core accounting schema (PostgreSQL 16+)
 -- ----------------------------------------------------------------------------
 -- Design decisions: docs/adr/001 (hierarchy), docs/adr/002 (write path),
--- docs/database-design.md.  This script is idempotent: it can be re-run
--- safely on an existing database.
+-- docs/adr/009 (multi-book), docs/database-design.md.  This script is
+-- idempotent: it can be re-run safely on an existing database.
 -- ============================================================================
 
 -- Optional trigram index for ledger name search (skip silently if contrib
@@ -16,7 +16,8 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- ----------------------------------------------------------------------------
--- Settings (single-book configuration)
+-- Settings — system-wide configuration only. Per-book facts (company name,
+-- base currency, fiscal-year start) live on the books row itself (ADR-009).
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
@@ -25,25 +26,85 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- ----------------------------------------------------------------------------
--- Groups — the chart-of-accounts tree (adjacency list = source of truth)
+-- Currencies — ISO 4217 reference data shared by every book (issue #4,
+-- ADR-007). A book's base currency is books.base_currency, a pointer.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS currencies (
+    code        CHAR(3) PRIMARY KEY,
+    name        TEXT NOT NULL,
+    symbol      TEXT,
+    minor_unit  SMALLINT NOT NULL DEFAULT 2
+                CONSTRAINT chk_currencies_minor_unit CHECK (minor_unit BETWEEN 0 AND 8),
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ----------------------------------------------------------------------------
+-- Books — one row per company / legal entity (ADR-009, migration 0004).
+-- Everything book-owned below carries its discriminator; currencies are the
+-- one shared master. slug is the stable machine key (the bootstrap default
+-- book is slug='default'); name is the human label.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS books (
+    id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name           TEXT NOT NULL UNIQUE,
+    slug           TEXT NOT NULL UNIQUE,
+    base_currency  CHAR(3) NOT NULL DEFAULT 'INR' REFERENCES currencies(code),
+    fy_start_month SMALLINT NOT NULL DEFAULT 4
+                   CONSTRAINT chk_books_fy_start CHECK (fy_start_month BETWEEN 1 AND 12),
+    is_archived    BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ----------------------------------------------------------------------------
+-- FX rates — per-book dated pairs (issue #4, ADR-007; book-scoped by 0004).
+-- Advisory input data for posting UIs — the rate actually applied is
+-- snapshotted on the entry row.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS fx_rates (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    book_id     BIGINT NOT NULL REFERENCES books(id),
+    from_ccy    CHAR(3) NOT NULL REFERENCES currencies(code),
+    to_ccy      CHAR(3) NOT NULL REFERENCES currencies(code),
+    rate        NUMERIC(30, 10) NOT NULL
+                CONSTRAINT chk_fx_rates_positive CHECK (rate > 0),
+    valid_on    DATE NOT NULL,
+    source      TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_fx_rates_pair_day UNIQUE (book_id, from_ccy, to_ccy, valid_on),
+    CONSTRAINT chk_fx_rates_pair_distinct CHECK (from_ccy <> to_ccy)
+);
+
+-- ----------------------------------------------------------------------------
+-- Groups — the chart-of-accounts tree (adjacency list = source of truth),
+-- one tree per book (ADR-001/009). The composite FK (book_id, parent_id)
+-- makes same-book parenting a property of the schema: a group can never be
+-- re-parented into another book's tree.
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS groups (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name          TEXT NOT NULL UNIQUE,
+    book_id       BIGINT NOT NULL REFERENCES books(id),
+    name          TEXT NOT NULL,
     code          TEXT,
-    parent_id     BIGINT REFERENCES groups(id) ON DELETE RESTRICT,
+    parent_id     BIGINT,
     nature        TEXT NOT NULL
                   CHECK (nature IN ('asset', 'liability', 'equity', 'income', 'expense')),
     affects_gross BOOLEAN NOT NULL DEFAULT FALSE,
     is_root       BOOLEAN NOT NULL DEFAULT FALSE,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_groups_book_id UNIQUE (book_id, id),
+    CONSTRAINT uq_groups_book_name UNIQUE (book_id, name),
+    CONSTRAINT fk_groups_parent_same_book FOREIGN KEY (book_id, parent_id)
+        REFERENCES groups (book_id, id) ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_groups_parent ON groups (parent_id);
 
--- Exactly one root group.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_groups_single_root ON groups (is_root) WHERE is_root;
+-- Exactly one root group per book.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_groups_single_root ON groups (book_id) WHERE is_root;
 
 -- ----------------------------------------------------------------------------
 -- Closure table — trigger-maintained read model for all hierarchy queries
@@ -139,16 +200,18 @@ CREATE TRIGGER trg_groups_del
     FOR EACH ROW EXECUTE FUNCTION trg_groups_before_delete();
 
 -- ----------------------------------------------------------------------------
--- Ledgers (names unique book-wide, as in TallyPrime)
+-- Ledgers — names unique within a book, as in TallyPrime (ADR-009)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ledgers (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name       TEXT NOT NULL UNIQUE,
+    book_id    BIGINT NOT NULL REFERENCES books(id),
+    name       TEXT NOT NULL,
     code       TEXT,
     group_id   BIGINT NOT NULL REFERENCES groups(id) ON DELETE RESTRICT,
     is_system  BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_ledgers_book_name UNIQUE (book_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_ledgers_group ON ledgers (group_id);
@@ -161,54 +224,31 @@ BEGIN
 END $$;
 
 -- ----------------------------------------------------------------------------
--- Currencies & FX rates (issue #4, ADR-007). One base currency per book
--- (settings.base_currency); every entry posts a base-currency amount, and a
--- foreign-currency line snapshots the rate trio on the entry itself.
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS currencies (
-    code        CHAR(3) PRIMARY KEY,
-    name        TEXT NOT NULL,
-    symbol      TEXT,
-    minor_unit  SMALLINT NOT NULL DEFAULT 2
-                CONSTRAINT chk_currencies_minor_unit CHECK (minor_unit BETWEEN 0 AND 8),
-    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS fx_rates (
-    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    from_ccy    CHAR(3) NOT NULL REFERENCES currencies(code),
-    to_ccy      CHAR(3) NOT NULL REFERENCES currencies(code),
-    rate        NUMERIC(30, 10) NOT NULL
-                CONSTRAINT chk_fx_rates_positive CHECK (rate > 0),
-    valid_on    DATE NOT NULL,
-    source      TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_fx_rates_pair_day UNIQUE (from_ccy, to_ccy, valid_on),
-    CONSTRAINT chk_fx_rates_pair_distinct CHECK (from_ccy <> to_ccy)
-);
-
--- ----------------------------------------------------------------------------
--- Voucher types (TallyPrime's set) and numbering configuration
+-- Voucher types (TallyPrime's set) and numbering configuration — per book
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS voucher_types (
     id             BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    code           TEXT NOT NULL UNIQUE,
+    book_id        BIGINT NOT NULL REFERENCES books(id),
+    code           TEXT NOT NULL,
     name           TEXT NOT NULL,
     number_prefix  TEXT NOT NULL DEFAULT '',
     restart_yearly BOOLEAN NOT NULL DEFAULT TRUE,
     is_system      BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_voucher_types_book_code UNIQUE (book_id, code)
 );
 
 -- ----------------------------------------------------------------------------
 -- Vouchers — immutable financial history (Law 2). Correct only via reversal.
+-- Book-scoped from 0004: numbering restarts per book (voucher types are
+-- per-book) and idempotent client_tokens are unique per book, so the same
+-- offline client may retry into two books without interference.
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS vouchers (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    book_id         BIGINT NOT NULL REFERENCES books(id),
     uuid            UUID NOT NULL DEFAULT gen_random_uuid() UNIQUE,
-    client_token    UUID NOT NULL UNIQUE,
+    client_token    UUID NOT NULL,
     voucher_type_id BIGINT NOT NULL REFERENCES voucher_types(id),
     voucher_no      TEXT NOT NULL,
     sequence        BIGINT NOT NULL,
@@ -216,22 +256,27 @@ CREATE TABLE IF NOT EXISTS vouchers (
     narration       TEXT,
     reversal_of     BIGINT REFERENCES vouchers(id),
     posted_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_voucher_no_per_type UNIQUE (voucher_type_id, voucher_no),
+    CONSTRAINT uq_voucher_no_per_type UNIQUE (book_id, voucher_type_id, voucher_no),
+    CONSTRAINT uq_voucher_client_token_book UNIQUE (book_id, client_token),
     CONSTRAINT chk_no_self_reversal CHECK (reversal_of IS NULL OR reversal_of <> id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_vouchers_date ON vouchers (voucher_date);
-CREATE INDEX IF NOT EXISTS idx_vouchers_type_date ON vouchers (voucher_type_id, voucher_date);
+CREATE INDEX IF NOT EXISTS idx_vouchers_date ON vouchers (book_id, voucher_date);
+CREATE INDEX IF NOT EXISTS idx_vouchers_type_date ON vouchers (book_id, voucher_type_id, voucher_date);
 CREATE INDEX IF NOT EXISTS idx_vouchers_reversal_of ON vouchers (reversal_of);
 
 -- ----------------------------------------------------------------------------
--- Voucher entries — the append-only fact table (ADR-002, Law 2)
+-- Voucher entries — the append-only fact table (ADR-002, Law 2).
+-- book_id is denormalized from the voucher and proven equal by
+-- trg_entries_check_date (the same pattern as voucher_date); it is the
+-- future partition key for per-book scale-out (roadmap §9).
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS voucher_entries (
     id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     voucher_id   BIGINT NOT NULL REFERENCES vouchers(id) ON DELETE RESTRICT,
     line_no      INT NOT NULL CHECK (line_no > 0),
     ledger_id    BIGINT NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    book_id      BIGINT NOT NULL REFERENCES books(id),
     dc           CHAR(1) NOT NULL CHECK (dc IN ('D', 'C')),
     amount       NUMERIC(26, 8) NOT NULL CHECK (amount > 0),
     -- denormalized from vouchers for the covering reporting index; proven
@@ -259,22 +304,26 @@ CREATE TABLE IF NOT EXISTS voucher_entries (
     )
 );
 
--- The covering index every balance / report query uses.
+-- The covering index every balance / report query uses (book-led).
 CREATE INDEX IF NOT EXISTS idx_entries_ledger_date
-    ON voucher_entries (ledger_id, voucher_date) INCLUDE (dc, amount);
+    ON voucher_entries (book_id, ledger_id, voucher_date) INCLUDE (dc, amount);
 
--- Entry date must match its voucher's date.
+-- Entry date and book must match the voucher's (denormalization proofs).
 CREATE OR REPLACE FUNCTION trg_entries_check_date() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
     v_date DATE;
+    v_book BIGINT;
 BEGIN
-    SELECT voucher_date INTO v_date FROM vouchers WHERE id = NEW.voucher_id;
+    SELECT voucher_date, book_id INTO v_date, v_book FROM vouchers WHERE id = NEW.voucher_id;
     IF v_date IS NULL THEN
         RAISE EXCEPTION 'Voucher % does not exist', NEW.voucher_id;
     END IF;
     IF v_date <> NEW.voucher_date THEN
         RAISE EXCEPTION 'Entry date % does not match voucher date %', NEW.voucher_date, v_date;
+    END IF;
+    IF v_book <> NEW.book_id THEN
+        RAISE EXCEPTION 'Entry book % does not match voucher book %', NEW.book_id, v_book;
     END IF;
     RETURN NEW;
 END $$;
@@ -318,7 +367,9 @@ CREATE CONSTRAINT TRIGGER trg_entries_balanced
     FOR EACH ROW EXECUTE FUNCTION trg_entries_check_balance();
 
 -- ----------------------------------------------------------------------------
--- Gapless document numbering — the only shared mutable row in the write path
+-- Gapless document numbering — the only shared mutable row in the write
+-- path. scope_key is '{book_id}:{voucher_type_id}:{fy}' (ADR-009): every
+-- book's SAL-2026-27-00001 starts at 1.
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS doc_counters (
     scope_key  TEXT PRIMARY KEY,
@@ -370,6 +421,11 @@ BEGIN
     RETURN COALESCE(NEW, OLD);
 END $$;
 
+DROP TRIGGER IF EXISTS trg_audit_books ON books;
+CREATE TRIGGER trg_audit_books
+    AFTER INSERT OR UPDATE OR DELETE ON books
+    FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
+
 DROP TRIGGER IF EXISTS trg_audit_groups ON groups;
 CREATE TRIGGER trg_audit_groups
     AFTER INSERT OR UPDATE OR DELETE ON groups
@@ -398,15 +454,17 @@ CREATE TRIGGER trg_audit_fx_rates
     FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
 
 -- ----------------------------------------------------------------------------
--- Period locking & financial-year close (issue #5, ADR-008). Periods are
--- named, non-overlapping ranges with a status machine; a BEFORE INSERT
--- trigger on vouchers refuses dates in locked/closed periods (and dates no
--- period covers, once at least one period exists). With no periods at all,
--- every date posts — the feature is opt-in.
+-- Period locking & financial-year close (issue #5, ADR-008; book-scoped by
+-- 0004/ADR-009). Periods are named, non-overlapping ranges WITHIN A BOOK
+-- with a status machine; a BEFORE INSERT trigger on vouchers refuses dates
+-- in locked/closed periods (and dates no period covers, once at least one
+-- period exists for that book). With no periods at all, every date posts —
+-- the feature is opt-in per book.
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS periods (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,
+    book_id     BIGINT NOT NULL REFERENCES books(id),
+    name        TEXT NOT NULL,
     starts_on   DATE NOT NULL,
     ends_on     DATE NOT NULL,
     status      TEXT NOT NULL DEFAULT 'open'
@@ -416,9 +474,30 @@ CREATE TABLE IF NOT EXISTS periods (
     closed_by   TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT chk_periods_order CHECK (starts_on <= ends_on),
-    CONSTRAINT uq_periods_no_overlap EXCLUDE USING gist
-        (daterange(starts_on, ends_on, '[]') WITH &&)
+    CONSTRAINT uq_periods_book_name UNIQUE (book_id, name)
 );
+
+-- Per-book non-overlap. A gist EXCLUDE over (book_id =, daterange &&) would
+-- need the btree_gist contrib module, which embedded/slim builds (pgserver,
+-- alpine) may not ship; the advisory-lock trigger is portable and serializes
+-- the rare concurrent same-book period creation exactly as tightly (ADR-009).
+CREATE OR REPLACE FUNCTION trg_periods_no_overlap() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('ledgerforge:periods:' || NEW.book_id::TEXT));
+    IF EXISTS (
+        SELECT 1 FROM periods p
+        WHERE p.book_id = NEW.book_id
+          AND p.id <> NEW.id
+          AND daterange(p.starts_on, p.ends_on, '[]')
+              && daterange(NEW.starts_on, NEW.ends_on, '[]')
+    ) THEN
+        RAISE EXCEPTION
+            'Period % overlaps an existing period of this book — periods must not share dates',
+            NEW.name;
+    END IF;
+    RETURN NEW;
+END $$;
 
 CREATE OR REPLACE FUNCTION trg_periods_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
@@ -447,6 +526,7 @@ BEGIN
     RAISE EXCEPTION 'Invalid period status transition: % -> %', OLD.status, NEW.status;
 END $$;
 
+-- Deletion is only safe on an open, empty period (same book only).
 CREATE OR REPLACE FUNCTION trg_periods_delete_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -456,7 +536,8 @@ BEGIN
         RAISE EXCEPTION 'Only open periods can be deleted; % is %', OLD.name, OLD.status;
     END IF;
     SELECT count(*) INTO v_n FROM vouchers
-    WHERE voucher_date BETWEEN OLD.starts_on AND OLD.ends_on;
+    WHERE book_id = OLD.book_id
+      AND voucher_date BETWEEN OLD.starts_on AND OLD.ends_on;
     IF v_n > 0 THEN
         RAISE EXCEPTION 'Period % contains % voucher(s) and cannot be deleted',
             OLD.name, v_n;
@@ -472,14 +553,16 @@ DECLARE
     v_status TEXT;
     v_name   TEXT;
 BEGIN
-    -- Opt-in: books that define no periods accept every date (pre-feature
-    -- behavior; existing installs are unaffected until they adopt periods).
-    IF NOT EXISTS (SELECT 1 FROM periods) THEN
+    -- Opt-in per book: books that define no periods accept every date
+    -- (pre-feature behavior; existing books are unaffected until they
+    -- adopt periods).
+    IF NOT EXISTS (SELECT 1 FROM periods WHERE book_id = NEW.book_id) THEN
         RETURN NEW;
     END IF;
     SELECT p.status, p.name INTO v_status, v_name
     FROM periods p
-    WHERE NEW.voucher_date >= p.starts_on AND NEW.voucher_date <= p.ends_on
+    WHERE p.book_id = NEW.book_id
+      AND NEW.voucher_date >= p.starts_on AND NEW.voucher_date <= p.ends_on
     FOR SHARE OF p;
     IF v_status IS NULL THEN
         RAISE EXCEPTION 'No period covers voucher date %: create the period first',
@@ -499,6 +582,11 @@ DROP TRIGGER IF EXISTS trg_vouchers_period ON vouchers;
 CREATE TRIGGER trg_vouchers_period
     BEFORE INSERT ON vouchers
     FOR EACH ROW EXECUTE FUNCTION trg_vouchers_check_period();
+
+DROP TRIGGER IF EXISTS trg_periods_overlap ON periods;
+CREATE TRIGGER trg_periods_overlap
+    BEFORE INSERT OR UPDATE ON periods
+    FOR EACH ROW EXECUTE FUNCTION trg_periods_no_overlap();
 
 DROP TRIGGER IF EXISTS trg_periods_guard ON periods;
 CREATE TRIGGER trg_periods_guard
@@ -562,6 +650,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON groups, ledgers, voucher_types, doc_coun
 -- reference data (no DELETE — a wrong rate is UPDATEd, never erased).
 GRANT SELECT, INSERT, UPDATE, DELETE ON currencies TO ledgerforge_app;
 GRANT SELECT, INSERT, UPDATE ON fx_rates TO ledgerforge_app;
+-- Multi-book (0004): books are masters (archival, never DELETE); the engine
+-- never drops a book that owns financial history.
+GRANT SELECT, INSERT, UPDATE ON books TO ledgerforge_app;
 -- Period locking (0003): control data — never part of financial history.
 GRANT SELECT, INSERT, UPDATE, DELETE ON periods TO ledgerforge_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ledgerforge_app;

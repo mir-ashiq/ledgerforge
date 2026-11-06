@@ -17,7 +17,7 @@ pip install -e ".[dev]"
 
 # any PostgreSQL 16+; docker works:
 docker compose up -d db
-make init-db          # applies db/schema.sql + functions + Tally-style seed
+make init-db          # applies db/schema.sql + functions + seeds the default book
 make test             # 63 tests against a real PostgreSQL
 make dev              # API on :8000, docs at /docs
 ```

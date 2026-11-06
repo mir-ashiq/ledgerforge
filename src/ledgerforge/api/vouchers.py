@@ -22,7 +22,7 @@ from ..schemas import (
     VoucherOut,
 )
 from ..settings import get_settings
-from . import BookkeeperDep, ReaderDep, SessionDep
+from . import BookDep, BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(tags=["vouchers"])
 
@@ -78,29 +78,39 @@ def create_voucher(
     request: Request,
     response: Response,
     session: SessionDep,
+    book: BookDep,
     _: BookkeeperDep,
 ):
-    voucher, created = post_voucher(session, payload, _plugin_manager(request), get_settings())
+    voucher, created = post_voucher(
+        session, payload, _plugin_manager(request), get_settings(), book
+    )
     response.status_code = 201 if created else 200
     return _voucher_out(session, voucher, replayed=not created)
 
 
 @router.get("/vouchers/{voucher_id}", response_model=VoucherOut)
-def get_voucher(voucher_id: int, session: SessionDep, _: ReaderDep):
+def get_voucher(voucher_id: int, session: SessionDep, book: BookDep, _: ReaderDep):
     voucher, _entries = get_voucher_with_entries(session, voucher_id)
+    if voucher.book_id != book.id:
+        from ..errors import NotFoundError
+
+        raise NotFoundError(f"Voucher {voucher_id} does not exist in book {book.name!r}")
     return _voucher_out(session, voucher)
 
 
 @router.get("/vouchers", response_model=list[VoucherOut])
 def list_vouchers(
     session: SessionDep,
+    book: BookDep,
     _: ReaderDep,
     type_code: Annotated[str, Query(alias="type")] = "",
     date_from: date | None = None,
     date_to: date | None = None,
     limit: Annotated[int, Query()] = 50,
 ):
-    stmt = select(Voucher).order_by(Voucher.id.desc()).limit(limit)
+    stmt = (
+        select(Voucher).where(Voucher.book_id == book.id).order_by(Voucher.id.desc()).limit(limit)
+    )
     if type_code:
         stmt = stmt.join(VoucherType, Voucher.voucher_type_id == VoucherType.id).where(
             VoucherType.code == type_code.upper()
@@ -119,6 +129,7 @@ def reverse(
     request: Request,
     response: Response,
     session: SessionDep,
+    book: BookDep,
     _: BookkeeperDep,
     payload: ReversalCreate | None = None,
 ):
@@ -128,6 +139,7 @@ def reverse(
         voucher_id,
         _plugin_manager(request),
         get_settings(),
+        book,
         reversal_date=payload.reversal_date,
         narration=payload.narration,
         client_token=payload.client_token,
@@ -142,8 +154,11 @@ def opening_balances(
     request: Request,
     response: Response,
     session: SessionDep,
+    book: BookDep,
     _: BookkeeperDep,
 ):
-    voucher, created = post_opening(session, payload, _plugin_manager(request), get_settings())
+    voucher, created = post_opening(
+        session, payload, _plugin_manager(request), get_settings(), book
+    )
     response.status_code = 201 if created else 200
     return _voucher_out(session, voucher, replayed=not created)

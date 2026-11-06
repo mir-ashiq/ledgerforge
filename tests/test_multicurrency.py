@@ -327,18 +327,19 @@ def test_database_check_rejects_inconsistent_snapshot(db_session):
     db_session.execute(
         text(
             """
-            INSERT INTO voucher_types (code, name, number_prefix, restart_yearly)
-            VALUES ('FXC', 'FX check probe', 'FXC', TRUE)
-            ON CONFLICT (code) DO NOTHING
+            INSERT INTO voucher_types (book_id, code, name, number_prefix, restart_yearly)
+            VALUES ((SELECT id FROM books WHERE slug = 'default'),
+                    'FXC', 'FX check probe', 'FXC', TRUE)
+            ON CONFLICT (book_id, code) DO NOTHING
             """
         )
     )
     db_session.execute(
         text(
             """
-            INSERT INTO vouchers (client_token, voucher_type_id, voucher_no, sequence,
-                                  voucher_date)
-            VALUES (gen_random_uuid(),
+            INSERT INTO vouchers (book_id, client_token, voucher_type_id, voucher_no,
+                                  sequence, voucher_date)
+            VALUES ((SELECT id FROM books WHERE slug = 'default'), gen_random_uuid(),
                     (SELECT id FROM voucher_types WHERE code = 'FXC'),
                     'FXC-PROBE-1', 1, CURRENT_DATE)
             """
@@ -349,10 +350,11 @@ def test_database_check_rejects_inconsistent_snapshot(db_session):
             text(
                 """
                 INSERT INTO voucher_entries
-                    (voucher_id, line_no, ledger_id, dc, amount, voucher_date,
+                    (voucher_id, line_no, ledger_id, book_id, dc, amount, voucher_date,
                      currency, amount_fx, fx_rate)
                 VALUES ((SELECT id FROM vouchers WHERE voucher_no = 'FXC-PROBE-1'),
-                        1, (SELECT id FROM ledgers WHERE name = 'Cash'), 'D',
+                        1, (SELECT id FROM ledgers WHERE name = 'Cash'),
+                        (SELECT id FROM books WHERE slug = 'default'), 'D',
                         999.00, CURRENT_DATE, 'USD', 100.00, 83.5050000000)
                 """
             )

@@ -92,48 +92,54 @@ def build_dataset(dsn: str, repo_root: str) -> dict:
         # 310 synthetic groups under Sundry Debtors (10 regions x 10 branches x 3 zones)
         conn.execute(
             """
-            INSERT INTO groups (name, parent_id, nature)
-            SELECT 'Region ' || r || ' Branch ' || b, sd.id, 'asset'
+            INSERT INTO groups (book_id, name, parent_id, nature)
+            SELECT bk.id, 'Region ' || r || ' Branch ' || b, sd.id, 'asset'
             FROM generate_series(1, 10) r, generate_series(1, 10) b,
-                 (SELECT id FROM groups WHERE name = 'Sundry Debtors') sd
+                 (SELECT id FROM groups WHERE name = 'Sundry Debtors') sd,
+                 (SELECT id FROM books WHERE slug = 'default') bk
             """
         )
         conn.execute(
             """
-            INSERT INTO groups (name, parent_id, nature)
-            SELECT parent.name || ' Zone ' || z, parent.id, 'asset'
-            FROM groups parent, generate_series(1, 3) z
+            INSERT INTO groups (book_id, name, parent_id, nature)
+            SELECT bk.id, parent.name || ' Zone ' || z, parent.id, 'asset'
+            FROM groups parent, generate_series(1, 3) z,
+                 (SELECT id FROM books WHERE slug = 'default') bk
             WHERE parent.name LIKE 'Region % Branch %'
             """
         )
         # ~3,400 ledgers spread over the synthetic leaf groups
         conn.execute(
             """
-            INSERT INTO ledgers (name, group_id)
-            SELECT 'Customer ' || n, g.id
+            INSERT INTO ledgers (book_id, name, group_id)
+            SELECT bk.id, 'Customer ' || n, g.id
             FROM generate_series(1, 3400) n
             JOIN (
                 SELECT id, row_number() OVER (ORDER BY id) AS rn
                 FROM groups WHERE name LIKE '%Zone %'
-            ) g ON g.rn = (n % (SELECT count(*) FROM groups WHERE name LIKE '%Zone %')) + 1
+            ) g ON g.rn = (n % (SELECT count(*) FROM groups WHERE name LIKE '%Zone %')) + 1,
+                 (SELECT id FROM books WHERE slug = 'default') bk
             """
         )
         n_ledgers = conn.execute("SELECT count(*) FROM ledgers").fetchone()[0]
         # 60,000 vouchers / 120,000 entries over two fiscal years
         conn.execute(
             """
-            INSERT INTO vouchers (client_token, voucher_type_id, voucher_no, sequence, voucher_date)
-            SELECT gen_random_uuid(), vt.id, 'BENCH-' || g, g, DATE '2025-04-01' + (g % 560)
+            INSERT INTO vouchers (book_id, client_token, voucher_type_id, voucher_no,
+                                  sequence, voucher_date)
+            SELECT bk.id, gen_random_uuid(), vt.id, 'BENCH-' || g, g,
+                   DATE '2025-04-01' + (g % 560)
             FROM generate_series(1, 60000) g,
-                 (SELECT id FROM voucher_types WHERE code = 'JV') vt
+                 (SELECT id FROM voucher_types WHERE code = 'JV') vt,
+                 (SELECT id FROM books WHERE slug = 'default') bk
             """
         )
         for line_no, prime, dc in ((1, 7919, "D"), (2, 104729, "C")):
             conn.execute(
                 """
                 INSERT INTO voucher_entries
-                    (voucher_id, line_no, ledger_id, dc, amount, voucher_date)
-                SELECT v.id, %s, l.id, %s, 100.50, v.voucher_date
+                    (voucher_id, line_no, ledger_id, book_id, dc, amount, voucher_date)
+                SELECT v.id, %s, l.id, v.book_id, %s, 100.50, v.voucher_date
                 FROM vouchers v
                 JOIN (SELECT id, row_number() OVER (ORDER BY id) AS rn
                       FROM ledgers) l

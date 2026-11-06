@@ -1,6 +1,6 @@
-"""Multi-currency engine rules (issue #4, ADR-007).
+"""Multi-currency engine rules (issue #4, ADR-007; book-scoped by 0004).
 
-The book has ONE base currency (``settings.base_currency``, default INR).
+Every book has ONE base currency (``books.base_currency``, default INR).
 Every voucher entry posts a base-currency ``amount`` — that is what balances
 (Law 1) and what every report aggregates. A foreign-currency line additionally
 snapshots the trio (``currency``, ``amount_fx``, ``fx_rate``) on the immutable
@@ -13,6 +13,9 @@ entry row, and the engine — and, independently, the database CHECK
 (``USD 100 @ 83.505`` posts a base amount of ``8350.50``). Rounding is
 half-away-from-zero to 8 decimal places, matching PostgreSQL's ``round()``
 on numerics exactly — the engine and the database can never disagree (Law 3).
+
+FX reference rates live per book (ADR-009): each book loads the pairs it
+actually posts against.
 """
 
 from __future__ import annotations
@@ -24,26 +27,24 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..errors import NotFoundError, ValidationError
-from ..models import Currency, FxRate, Setting
+from ..models import Book, Currency, FxRate
 from ..plugins import VoucherDraft
 
 # Exact-arithmetic headroom (Law 3): amount_fx (≤10^18) × fx_rate (≤10^20)
 # needs at most 38 significant digits.
 getcontext().prec = 50
 
-BASE_CURRENCY_DEFAULT = "INR"
-BASE_CURRENCY_KEY = "base_currency"
+DEFAULT_BASE_CURRENCY = "INR"
 
 #: the scale every base amount carries (NUMERIC(26,8))
 BASE_SCALE = Decimal("0.00000001")
 
 
-def base_currency_code(session: Session) -> str:
-    """The book's single base currency (settings key, default INR)."""
-    raw = session.execute(select(Setting.value).where(Setting.key == BASE_CURRENCY_KEY)).scalar()
-    code = (raw or BASE_CURRENCY_DEFAULT).strip().upper()
+def base_currency_of(book: Book) -> str:
+    """The book's base currency (books.base_currency, a 3-letter code)."""
+    code = (book.base_currency or DEFAULT_BASE_CURRENCY).strip().upper()
     if len(code) != 3:
-        return BASE_CURRENCY_DEFAULT
+        return DEFAULT_BASE_CURRENCY
     return code
 
 
@@ -53,16 +54,24 @@ def expected_base_amount(amount_fx: Decimal, fx_rate: Decimal) -> Decimal:
     return (amount_fx * fx_rate).quantize(BASE_SCALE, rounding=ROUND_HALF_UP)
 
 
-def resolve_rate(session: Session, from_ccy: str, to_ccy: str, on: date) -> FxRate | None:
-    """The reference rate for a pair on a day: the exact row if present, else
-    the latest one on or before the day. Direct pairs only — never a silent
-    inversion (1/rate re-rounds and would lie about what was applied)."""
+def resolve_rate(
+    session: Session, book: Book, from_ccy: str, to_ccy: str, on: date
+) -> FxRate | None:
+    """The reference rate for a pair on a day, within ``book`` (ADR-009):
+    the exact row if present, else the latest one on or before the day.
+    Direct pairs only — never a silent inversion (1/rate re-rounds and
+    would lie about what was applied)."""
     from_ccy, to_ccy = from_ccy.upper(), to_ccy.upper()
     if from_ccy == to_ccy:
         raise ValidationError("fx rate pairs must differ (from_ccy != to_ccy)")
     return session.scalar(
         select(FxRate)
-        .where(FxRate.from_ccy == from_ccy, FxRate.to_ccy == to_ccy, FxRate.valid_on <= on)
+        .where(
+            FxRate.book_id == book.id,
+            FxRate.from_ccy == from_ccy,
+            FxRate.to_ccy == to_ccy,
+            FxRate.valid_on <= on,
+        )
         .order_by(FxRate.valid_on.desc())
         .limit(1)
     )

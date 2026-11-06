@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from .. import PLUGIN_API_VERSION
 from ..errors import ValidationError
-from ..models import Group, Ledger
+from ..models import Book, Group, Ledger
 
 logger = logging.getLogger("ledgerforge.plugins")
 
@@ -102,14 +102,17 @@ class DomainEvent:
 
 
 class Resolver:
-    """Inside-transaction helper passed to hooks: look up (or safely create)
-    masters without breaking the posting transaction."""
+    """Inside-transaction helper passed to hooks: look up (or safely
+    create) masters without breaking the posting transaction. Every lookup
+    and creation is scoped to the book being posted into (ADR-009): a plugin
+    can never resolve — or mint — a master of another book."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, book: Book) -> None:
         self._session = session
+        self._book = book
 
     def ledger(self, *, id: int | None = None, name: str | None = None) -> Ledger | None:
-        stmt = select(Ledger)
+        stmt = select(Ledger).where(Ledger.book_id == self._book.id)
         if id is not None:
             stmt = stmt.where(Ledger.id == id)
         elif name is not None:
@@ -119,17 +122,22 @@ class Resolver:
         return self._session.scalar(stmt)
 
     def group(self, name: str) -> Group | None:
-        return self._session.scalar(select(Group).where(Group.name == name))
+        return self._session.scalar(
+            select(Group).where(Group.book_id == self._book.id, Group.name == name)
+        )
 
     def ensure_ledger(self, name: str, group_name: str) -> Ledger:
-        """Return the named ledger, creating it under ``group_name`` if absent."""
+        """Return the named ledger of the book, creating it under
+        ``group_name`` (of the same book) if absent."""
         existing = self.ledger(name=name)
         if existing is not None:
             return existing
         group = self.group(group_name)
         if group is None:
-            raise ValidationError(f"Plugin: group {group_name!r} does not exist")
-        ledger = Ledger(name=name, group_id=group.id)
+            raise ValidationError(
+                f"Plugin: group {group_name!r} does not exist in book {self._book.name!r}"
+            )
+        ledger = Ledger(book_id=self._book.id, name=name, group_id=group.id)
         self._session.add(ledger)
         self._session.flush()
         return ledger

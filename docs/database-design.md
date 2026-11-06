@@ -1,15 +1,17 @@
 # Database Design Reference
 
-**Schema source of truth:** `db/schema.sql` (bootstrap DDL) · `db/functions.sql` (reporting functions) · `db/seed/chart_of_accounts.sql` (TallyPrime-style chart of accounts) · **Versioned as:** Alembic revision `0001_baseline` (ADR-006; `tests/test_migrations.py` keeps the two identical) · **Decisions:** ADR-001, ADR-002, `docs/analysis.md` §3–§4.
+**Schema source of truth:** `db/schema.sql` (bootstrap DDL) · `db/functions.sql` (reporting functions) · `ledgerforge/seeding.py` (TallyPrime-style chart of accounts — one definition for bootstrap and `POST /api/v1/books`, ADR-009) · **Versioned as:** Alembic revisions `0001_baseline` → `0004_multi_book` (ADR-006; `tests/test_migrations.py` keeps the head and the bootstrap identical) · **Decisions:** ADR-001, ADR-002, ADR-009, `docs/analysis.md` §3–§4.
 
 ## Entity map
 
 ```
-groups (tree: parent_id, truth)  ←── group_closure (read model, trigger-maintained)
-  └── ledgers (unique name book-wide, like Tally)
-voucher_types (RCT, PYT, JV, CN, SAL, PUR, CRN, DBN, OPEN, FYC …)
-  └── vouchers (immutable: uuid, client_token, voucher_no, date, reversal_of)
-        └── voucher_entries (immutable: line_no, ledger_id, dc D|C, amount NUMERIC(26,8),
+books (one row per company: base_currency, fy_start_month — ADR-009)
+groups (tree: parent_id + same-book composite FK, per-book unique names)
+  ←── group_closure (read model, trigger-maintained)
+  └── ledgers (unique name per book, like Tally per company)
+voucher_types (RCT, PYT, JV, CN, SAL, PUR, CRN, DBN, OPEN, FYC … — per book)
+  └── vouchers (immutable: uuid, client_token per book, voucher_no, date, reversal_of)
+        └── voucher_entries (immutable: line_no, ledger_id, book_id, dc D|C, amount NUMERIC(26,8),
                              FX snapshot: currency, amount_fx, fx_rate — issue #4 / ADR-007)
 currencies (ISO 4217, code-keyed)  ←── fx_rates (dated pairs, NUMERIC(30,10) — ADR-007)
 periods (non-overlapping ranges, open/locked/closed — issue #5 / ADR-008)

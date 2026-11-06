@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..engine.currency import get_currency, resolve_rate
 from ..errors import NotFoundError, ValidationError
-from ..models import Currency, FxRate, Group, Ledger
+from ..models import Book, Currency, FxRate, Group, Ledger
 from ..schemas import (
     CurrencyCreate,
     CurrencyOut,
@@ -26,13 +26,17 @@ from ..schemas import (
     LedgerCreate,
     LedgerOut,
 )
-from . import BookkeeperDep, ReaderDep, SessionDep
+from . import BookDep, BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(tags=["masters"])
 
 
-def _get_group(session: Session, *, id: int | None = None, name: str | None = None) -> Group:
-    stmt = select(Group)
+def _get_group(
+    session: Session, book: Book, *, id: int | None = None, name: str | None = None
+) -> Group:
+    """A group of ``book`` — another book's group id or name is a 404,
+    never a cross-book parent (ADR-009)."""
+    stmt = select(Group).where(Group.book_id == book.id)
     if id is not None:
         stmt = stmt.where(Group.id == id)
     elif name is not None:
@@ -41,7 +45,9 @@ def _get_group(session: Session, *, id: int | None = None, name: str | None = No
         raise ValidationError("provide id or name")
     group = session.scalar(stmt)
     if group is None:
-        raise NotFoundError(f"Group {'id ' + str(id) if id else name!r} does not exist")
+        raise NotFoundError(
+            f"Group {'id ' + str(id) if id else name!r} does not exist in book {book.name!r}"
+        )
     return group
 
 
@@ -58,9 +64,10 @@ def _group_out(session: Session, group: Group) -> GroupOut:
 
 
 @router.post("/groups", response_model=GroupOut, status_code=201)
-def create_group(payload: GroupCreate, session: SessionDep, _: BookkeeperDep):
-    parent = _get_group(session, id=payload.parent_id, name=payload.parent_name)
+def create_group(payload: GroupCreate, session: SessionDep, book: BookDep, _: BookkeeperDep):
+    parent = _get_group(session, book, id=payload.parent_id, name=payload.parent_name)
     group = Group(
+        book_id=book.id,
         name=payload.name,
         code=payload.code,
         parent_id=parent.id,
@@ -75,15 +82,17 @@ def create_group(payload: GroupCreate, session: SessionDep, _: BookkeeperDep):
     except Exception as exc:
         session.rollback()
         if "duplicate key" in str(exc).lower():
-            raise ValidationError(f"Group name {payload.name!r} already exists") from exc
+            raise ValidationError(
+                f"Group name {payload.name!r} already exists in book {book.name!r}"
+            ) from exc
         raise
     session.refresh(group)
     return _group_out(session, group)
 
 
 @router.get("/groups", response_model=list[GroupOut])
-def list_groups(session: SessionDep, _: ReaderDep):
-    groups = session.scalars(select(Group).order_by(Group.id)).all()
+def list_groups(session: SessionDep, book: BookDep, _: ReaderDep):
+    groups = session.scalars(select(Group).where(Group.book_id == book.id).order_by(Group.id)).all()
     return [_group_out(session, g) for g in groups]
 
 
@@ -92,15 +101,16 @@ def move_group(
     group_id: int,
     payload: GroupUpdate,
     session: SessionDep,
+    book: BookDep,
     _: BookkeeperDep,
 ):
     """Re-parent / reclassify a group. The closure table follows atomically
     (trigger-maintained); cycles are rejected by the database."""
     group = session.get(Group, group_id)
-    if group is None:
-        raise NotFoundError(f"Group {group_id} does not exist")
+    if group is None or group.book_id != book.id:
+        raise NotFoundError(f"Group {group_id} does not exist in book {book.name!r}")
     if payload.parent_id is not None or payload.parent_name is not None:
-        new_parent = _get_group(session, id=payload.parent_id, name=payload.parent_name)
+        new_parent = _get_group(session, book, id=payload.parent_id, name=payload.parent_name)
         group.parent_id = new_parent.id
     if payload.nature is not None:
         group.nature = payload.nature
@@ -118,16 +128,18 @@ def move_group(
 
 
 @router.post("/ledgers", response_model=LedgerOut, status_code=201)
-def create_ledger(payload: LedgerCreate, session: SessionDep, _: BookkeeperDep):
-    group = _get_group(session, id=payload.group_id, name=payload.group_name)
-    ledger = Ledger(name=payload.name, code=payload.code, group_id=group.id)
+def create_ledger(payload: LedgerCreate, session: SessionDep, book: BookDep, _: BookkeeperDep):
+    group = _get_group(session, book, id=payload.group_id, name=payload.group_name)
+    ledger = Ledger(book_id=book.id, name=payload.name, code=payload.code, group_id=group.id)
     session.add(ledger)
     try:
         session.commit()
     except Exception as exc:
         session.rollback()
         if "duplicate key" in str(exc).lower():
-            raise ValidationError(f"Ledger name {payload.name!r} already exists") from exc
+            raise ValidationError(
+                f"Ledger name {payload.name!r} already exists in book {book.name!r}"
+            ) from exc
         raise
     session.refresh(ledger)
     return LedgerOut(
@@ -143,10 +155,16 @@ def create_ledger(payload: LedgerCreate, session: SessionDep, _: BookkeeperDep):
 @router.get("/ledgers", response_model=list[LedgerOut])
 def list_ledgers(
     session: SessionDep,
+    book: BookDep,
     _: ReaderDep,
     search: Annotated[str, Query(max_length=100)] = "",
 ):
-    stmt = select(Ledger, Group).join(Group, Ledger.group_id == Group.id).order_by(Ledger.name)
+    stmt = (
+        select(Ledger, Group)
+        .join(Group, Ledger.group_id == Group.id)
+        .where(Ledger.book_id == book.id)
+        .order_by(Ledger.name)
+    )
     if search:
         stmt = stmt.where(Ledger.name.ilike(f"%{search}%"))
     rows = session.execute(stmt).all()
@@ -223,12 +241,13 @@ def _currency_out(currency: Currency) -> CurrencyOut:
 
 # ==================================================================== fx rates
 @router.post("/fx-rates", response_model=FxRateOut, status_code=201, tags=["fx-rates"])
-def create_fx_rate(payload: FxRateCreate, session: SessionDep, _: BookkeeperDep):
+def create_fx_rate(payload: FxRateCreate, session: SessionDep, book: BookDep, _: BookkeeperDep):
     if payload.from_ccy.upper() == payload.to_ccy.upper():
         raise ValidationError("fx rate pairs must differ (from_ccy != to_ccy)")
     get_currency(session, payload.from_ccy)
     get_currency(session, payload.to_ccy)
     rate = FxRate(
+        book_id=book.id,
         from_ccy=payload.from_ccy.upper(),
         to_ccy=payload.to_ccy.upper(),
         rate=payload.rate,
@@ -254,12 +273,17 @@ def create_fx_rate(payload: FxRateCreate, session: SessionDep, _: BookkeeperDep)
 @router.get("/fx-rates", response_model=list[FxRateOut], tags=["fx-rates"])
 def list_fx_rates(
     session: SessionDep,
+    book: BookDep,
     _: ReaderDep,
     from_ccy: Annotated[str | None, Query(max_length=3)] = None,
     to_ccy: Annotated[str | None, Query(max_length=3)] = None,
     valid_on: date | None = None,
 ):
-    stmt = select(FxRate).order_by(FxRate.valid_on.desc(), FxRate.id.desc())
+    stmt = (
+        select(FxRate)
+        .where(FxRate.book_id == book.id)
+        .order_by(FxRate.valid_on.desc(), FxRate.id.desc())
+    )
     if from_ccy:
         stmt = stmt.where(FxRate.from_ccy == from_ccy.upper())
     if to_ccy:
@@ -274,11 +298,12 @@ def update_fx_rate(
     rate_id: int,
     payload: FxRateUpdate,
     session: SessionDep,
+    book: BookDep,
     _: BookkeeperDep,
 ):
     rate = session.get(FxRate, rate_id)
-    if rate is None:
-        raise NotFoundError(f"FX rate {rate_id} does not exist")
+    if rate is None or rate.book_id != book.id:
+        raise NotFoundError(f"FX rate {rate_id} does not exist in book {book.name!r}")
     rate.rate = payload.rate
     if "source" in payload.model_fields_set:  # absent = keep the provenance
         rate.source = payload.source
@@ -290,14 +315,16 @@ def update_fx_rate(
 @router.get("/fx-rates/resolve", tags=["fx-rates"])
 def resolve_fx_rate(
     session: SessionDep,
+    book: BookDep,
     _: ReaderDep,
     from_ccy: Annotated[str, Query(max_length=3)],
     to_ccy: Annotated[str, Query(max_length=3)],
     on: Annotated[date, Query()],
 ):
     """The rate a posting UI should pre-fill: the exact day's row, else the
-    latest one on or before it. Direct pairs only — no silent inversion."""
-    rate = resolve_rate(session, from_ccy, to_ccy, on)
+    latest one on or before it. Direct pairs only — no silent inversion.
+    Rates are book-local (ADR-009)."""
+    rate = resolve_rate(session, book, from_ccy, to_ccy, on)
     if rate is None:
         raise NotFoundError(
             f"No {from_ccy.upper()}→{to_ccy.upper()} rate on or before {on} — "

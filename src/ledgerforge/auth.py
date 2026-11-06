@@ -22,8 +22,13 @@ The API layer is the *enforcement point*; the database role
 ``ledgerforge_app`` (SELECT + INSERT-only on financial history) remains as
 defense in depth — see docs/analysis.md §7 and db/schema.sql.
 
-Per-book permissions land together with the multi-book schema (roadmap §9):
-the role model below is the seam they will scope.
+Per-book permissions (ADR-009, migration 0004) ride on the ``books`` claim:
+either ``["*"]`` or a list of book ids the principal may touch at its
+global role. ``admin`` always passes; a token with no ``books`` claim sees
+every book (the single-book-era contract every deployed token already
+satisfies). :func:`require_book_access` is the one enforcement seam — a
+future membership table can replace the claim reader without touching a
+route.
 """
 
 from __future__ import annotations
@@ -278,6 +283,60 @@ def require_role(minimum: Role):
         return principal
 
     return dependency
+
+
+# ------------------------------------------------------- per-book access
+
+
+def allowed_book_ids(principal: Principal) -> set[int] | None:
+    """The book ids this principal may touch, or None for "every book".
+
+    ADR-009: the token may carry a ``books`` claim — either ``["*"]`` or a
+    list of book ids. No claim at all means every book: that is the
+    single-book-era contract every token issued before 0004 satisfies.
+    Malformed claims (non-numeric, non-list) fail closed to *nothing*, not
+    open to everything.
+    """
+    if "admin" in principal.roles:
+        return None  # admins see every book, whatever the claim says
+    claim = principal.claims.get("books")
+    if claim is None:
+        return None
+    if isinstance(claim, str):
+        claim = [claim]
+    if not isinstance(claim, (list, tuple)):
+        return set()
+    ids: set[int] = set()
+    for item in claim:
+        if item == "*":
+            return None
+        # ints and integer-looking strings only; floats and other junk are
+        # ignored (fail closed — never round 7.5 into book 7)
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            continue
+        try:
+            ids.add(int(item))
+        except ValueError:
+            continue
+    return ids
+
+
+def require_book_access(principal: Principal, book_id: int) -> None:
+    """The single seam where per-book permissions are enforced (ADR-009).
+    Raises 403 when the principal's ``books`` claim excludes ``book_id``.
+    Scoping the *role* per book is deliberately left to the IdP issuing
+    claims; when a membership table replaces the claim reader, this is the
+    only function that changes.
+    """
+    allowed = allowed_book_ids(principal)
+    if allowed is not None and book_id not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"this token is not authorized for book {book_id} "
+                "(its 'books' claim lists other books)"
+            ),
+        )
 
 
 def warn_if_disabled() -> None:

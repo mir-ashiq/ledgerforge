@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from ..models import Voucher
+from ..models import Book, Voucher
 from ..plugins import PluginManager
 from ..schemas import OpeningCreate, VoucherCreate
 from ..settings import Settings
@@ -23,6 +23,7 @@ def post_opening(
     payload: OpeningCreate,
     manager: PluginManager,
     settings: Settings,
+    book: Book,
 ) -> tuple[Voucher, bool]:  # noqa: F821 — Voucher from .posting
     voucher_payload = VoucherCreate(
         voucher_type="OPEN",
@@ -32,4 +33,4 @@ def post_opening(
         meta=payload.meta,
         entries=payload.entries,
     )
-    return post_voucher(session, voucher_payload, manager, settings)
+    return post_voucher(session, voucher_payload, manager, settings, book)
