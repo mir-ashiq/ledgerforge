@@ -57,7 +57,7 @@ LedgerForge is an open-source business management system whose core is a **high-
 
 ### 2.1 What we are building (and, deliberately, not yet)
 
-The Phase-2 deliverable in this repository is the **accounting kernel**: masters (groups, ledgers), voucher posting, reversal, opening balances, reporting (Trial Balance, Profit & Loss, Balance Sheet), the plugin runtime with a worked GST example, and the keyboard interaction framework for the frontend. Inventory, payroll, banking reconciliation, multi-company and multi-currency are roadmap items (§9); every one of them is *buildable on top of* this kernel precisely because the plugin boundaries were designed first.
+The Phase-2 deliverable in this repository is the **accounting kernel**: masters (groups, ledgers), voucher posting, reversal, opening balances, reporting (Trial Balance, Profit & Loss, Balance Sheet), the plugin runtime with a worked GST example, and the keyboard interaction framework for the frontend. Inventory, payroll, banking reconciliation and multi-company are roadmap items (§9); multi-currency and period locking have since landed (v0.4.0, ADR-007/008). Every remaining roadmap item is *buildable on top of* this kernel precisely because the plugin boundaries were designed first.
 
 ### 2.2 The TallyPrime reference model
 
@@ -587,11 +587,11 @@ curl -s localhost:8000/api/v1/reports/trial-balance?as_of=2026-11-06
 
 | Item | Status / risk | Plan |
 |---|---|---|
-| Multi-currency | Roadmap | `NUMERIC(30,10)` FX rates + base-currency posting rules; schema already decimal-safe |
-| Period locking / FY close | Roadmap | Freeze inserts past a closed date via the posting validator hook + a `periods` table |
+| Multi-currency | **Landed (v0.4)** | `NUMERIC(30,10)` FX rates + base-currency posting rules with entry-level snapshots; `0002_multi_currency` over the frozen baseline (ADR-007) |
+| Period locking / FY close | **Landed (v0.4)** | `periods` with the open→locked→closed state machine, a row-locking posting gate and the `rpt.fy_close` sweep; `0003_period_locking` (ADR-008) |
 | Multi-company / multi-book | Roadmap | Add `book_id` discriminator to masters and entries before 1.0 (cheap now, breaking later); per-book permission scoping lands here |
 | AuthN/AuthZ | **Landed (v0.3)** | OIDC bearer verification (JWKS + rotation refresh) with the `reader` < `bookkeeper` < `admin` role model on every route; `LF_AUTH_MODE=disabled` remains the dev-only default |
-| Alembic migrations | Roadmap | `db/schema.sql` is the v0.1 bootstrap; Alembic baseline follows the first schema change |
+| Alembic migrations | **Landed (v0.3/v0.4)** | Frozen `0001_baseline` with a structural drift guard in CI (ADR-006); forward revisions `0002`/`0003` proved convergent with the bootstrap by catalog fingerprint |
 | Inventory / invoicing / payroll | Roadmap | Built as plugins on the same hook taxonomy, not in core |
 | Report scale-out | Watch | Partitioning + BRIN + optional eventually-consistent balance cache (§4.3) — only when books pass millions of entries |
 | Plugin trust model | Watch | Signed plugin index, capability-scoped registry, sandboxed UI slots (§5.5) |
