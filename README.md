@@ -79,9 +79,18 @@ type `Local Sales` → `Enter` → `Enter` → `1000` → `Enter` … `Ctrl+A` a
 `Alt+C` creates a missing ledger mid-flight, `F2` changes the date,
 `F4`–`F9` switch the voucher type, `Ctrl+K` shows every binding.
 
-**Or by API (note: amounts are strings — Law 3):**
+**Or by API (note: amounts are strings — Law 3).** The seed ships only the
+TallyPrime defaults (`Cash`, `Profit & Loss A/c` and the FX gain/loss ledgers),
+so create the ledgers you need first:
 
 ```bash
+curl -s -X POST localhost:8000/api/v1/ledgers -H 'Content-Type: application/json' \
+  -d '{"name": "Local Sales", "group_name": "Sales Accounts"}'
+curl -s -X POST localhost:8000/api/v1/ledgers -H 'Content-Type: application/json' \
+  -d '{"name": "CGST Payable", "group_name": "Duties & Taxes"}'
+curl -s -X POST localhost:8000/api/v1/ledgers -H 'Content-Type: application/json' \
+  -d '{"name": "SGST Payable", "group_name": "Duties & Taxes"}'
+
 curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
   "voucher_type": "SAL",
   "voucher_date": "2026-11-06",
@@ -95,7 +104,9 @@ curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/jso
 }'
 ```
 
-Or with the GST plugin doing the tax split for you — add `"meta": {"gst": {"rate": "18"}}` and post only the two base lines.
+Or with the GST plugin doing the tax split for you — add `"meta": {"gst": {"rate": "18"}}`
+and post only the two base lines; the plugin creates the CGST/SGST ledgers
+under *Duties & Taxes* on first use.
 
 **Reports (raw SQL works too):**
 
@@ -164,7 +175,8 @@ src/ledgerforge/    engine (posting/reversal/opening) · api · auth (OIDC + rol
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
-                    migrations, multi-currency, period locking
+                    migrations, multi-currency, period locking, deep audit
+                    (adversarial: races, rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
