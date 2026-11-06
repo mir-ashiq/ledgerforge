@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 PLUGIN_API_VERSION = "0.1"

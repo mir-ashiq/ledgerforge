@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from . import __version__
-from .api import masters, reports, vouchers
+from .api import auth, masters, reports, vouchers
+from .auth import build_verifier, warn_if_disabled
 from .db import get_engine
 from .errors import EngineError
 from .plugins import PluginManager
@@ -32,12 +33,33 @@ def create_app() -> FastAPI:
             "decimal arithmetic everywhere."
         ),
     )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+
+    # --- authentication (issue #1) --------------------------------------
+    warn_if_disabled()
+    if settings.auth_mode == "oidc":
+        if not settings.oidc_issuer or not settings.oidc_audience:
+            raise RuntimeError("LF_AUTH_MODE=oidc requires LF_OIDC_ISSUER and LF_OIDC_AUDIENCE")
+        app.state.token_verifier = build_verifier()
+    else:
+        app.state.token_verifier = None
+
+    # CORS: in dev (auth disabled) allow everything for convenience; with
+    # authentication on, the browser UI is same-origin (proxied /api), so no
+    # cross-origin calls are allowed unless explicitly configured.
+    if settings.auth_mode == "disabled":
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+    elif settings.cors_origin_list:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.cors_origin_list,
+            allow_methods=["*"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     manager = PluginManager()
     try:
@@ -50,6 +72,7 @@ def create_app() -> FastAPI:
     async def engine_error_handler(request: Request, exc: EngineError):
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
+    app.include_router(auth.router, prefix="/api/v1")
     app.include_router(masters.router, prefix="/api/v1")
     app.include_router(vouchers.router, prefix="/api/v1")
     app.include_router(reports.router, prefix="/api/v1")

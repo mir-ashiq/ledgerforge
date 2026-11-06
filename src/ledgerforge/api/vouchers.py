@@ -22,7 +22,7 @@ from ..schemas import (
     VoucherOut,
 )
 from ..settings import get_settings
-from . import SessionDep
+from . import BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(tags=["vouchers"])
 
@@ -75,6 +75,7 @@ def create_voucher(
     request: Request,
     response: Response,
     session: SessionDep,
+    _: BookkeeperDep,
 ):
     voucher, created = post_voucher(session, payload, _plugin_manager(request), get_settings())
     response.status_code = 201 if created else 200
@@ -82,7 +83,7 @@ def create_voucher(
 
 
 @router.get("/vouchers/{voucher_id}", response_model=VoucherOut)
-def get_voucher(voucher_id: int, session: SessionDep):
+def get_voucher(voucher_id: int, session: SessionDep, _: ReaderDep):
     voucher, _entries = get_voucher_with_entries(session, voucher_id)
     return _voucher_out(session, voucher)
 
@@ -90,6 +91,7 @@ def get_voucher(voucher_id: int, session: SessionDep):
 @router.get("/vouchers", response_model=list[VoucherOut])
 def list_vouchers(
     session: SessionDep,
+    _: ReaderDep,
     type_code: Annotated[str, Query(alias="type")] = "",
     date_from: date | None = None,
     date_to: date | None = None,
@@ -114,6 +116,7 @@ def reverse(
     request: Request,
     response: Response,
     session: SessionDep,
+    _: BookkeeperDep,
     payload: ReversalCreate | None = None,
 ):
     payload = payload or ReversalCreate()
@@ -136,6 +139,7 @@ def opening_balances(
     request: Request,
     response: Response,
     session: SessionDep,
+    _: BookkeeperDep,
 ):
     voucher, created = post_opening(session, payload, _plugin_manager(request), get_settings())
     response.status_code = 201 if created else 200

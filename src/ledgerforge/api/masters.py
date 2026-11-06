@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..errors import NotFoundError, ValidationError
 from ..models import Group, Ledger
 from ..schemas import GroupCreate, GroupOut, GroupUpdate, LedgerCreate, LedgerOut
-from . import SessionDep
+from . import BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(tags=["masters"])
 
@@ -43,7 +43,7 @@ def _group_out(session: Session, group: Group) -> GroupOut:
 
 
 @router.post("/groups", response_model=GroupOut, status_code=201)
-def create_group(payload: GroupCreate, session: SessionDep):
+def create_group(payload: GroupCreate, session: SessionDep, _: BookkeeperDep):
     parent = _get_group(session, id=payload.parent_id, name=payload.parent_name)
     group = Group(
         name=payload.name,
@@ -67,7 +67,7 @@ def create_group(payload: GroupCreate, session: SessionDep):
 
 
 @router.get("/groups", response_model=list[GroupOut])
-def list_groups(session: SessionDep):
+def list_groups(session: SessionDep, _: ReaderDep):
     groups = session.scalars(select(Group).order_by(Group.id)).all()
     return [_group_out(session, g) for g in groups]
 
@@ -77,6 +77,7 @@ def move_group(
     group_id: int,
     payload: GroupUpdate,
     session: SessionDep,
+    _: BookkeeperDep,
 ):
     """Re-parent / reclassify a group. The closure table follows atomically
     (trigger-maintained); cycles are rejected by the database."""
@@ -102,7 +103,7 @@ def move_group(
 
 
 @router.post("/ledgers", response_model=LedgerOut, status_code=201)
-def create_ledger(payload: LedgerCreate, session: SessionDep):
+def create_ledger(payload: LedgerCreate, session: SessionDep, _: BookkeeperDep):
     group = _get_group(session, id=payload.group_id, name=payload.group_name)
     ledger = Ledger(name=payload.name, code=payload.code, group_id=group.id)
     session.add(ledger)
@@ -127,6 +128,7 @@ def create_ledger(payload: LedgerCreate, session: SessionDep):
 @router.get("/ledgers", response_model=list[LedgerOut])
 def list_ledgers(
     session: SessionDep,
+    _: ReaderDep,
     search: Annotated[str, Query(max_length=100)] = "",
 ):
     stmt = select(Ledger, Group).join(Group, Ledger.group_id == Group.id).order_by(Ledger.name)
