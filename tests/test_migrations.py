@@ -21,101 +21,127 @@ from ledgerforge import migrations as lf_migrations
 
 APP_ROLE = "ledgerforge_app"
 
-_FINGERPRINT_QUERIES = (
-    (
-        "schemas",
-        "SELECT 'schema ' || nspname FROM pg_namespace"
-        " WHERE nspname NOT LIKE 'pg%' AND nspname <> 'information_schema'"
-        " ORDER BY nspname",
-    ),
-    (
-        "extensions",
-        "SELECT 'extension ' || extname FROM pg_extension ORDER BY extname",
-    ),
-    (
-        "columns",
-        """
-        SELECT format('%s.%s | %s | notnull=%s | default=%s | identity=%s | generated=%s',
-                      c.relname, a.attname, format_type(a.atttypid, a.atttypmod),
-                      a.attnotnull,
-                      COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '-'),
-                      COALESCE(NULLIF(a.attidentity, ''), '-'),
-                      COALESCE(NULLIF(a.attgenerated, ''), '-'))
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        JOIN pg_attribute a
-          ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
-        LEFT JOIN pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum
-        WHERE c.relkind IN ('r', 'S')
-          AND n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'
-        ORDER BY c.relname, a.attnum
-        """,
-    ),
-    (
-        "indexes",
-        """
-        SELECT format('index %s %s', i.relname, pg_get_indexdef(i.oid))
-        FROM pg_class i
-        JOIN pg_namespace n ON n.oid = i.relnamespace
-        WHERE i.relkind = 'i'
-          AND n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'
-        ORDER BY i.relname
-        """,
-    ),
-    (
-        "constraints",
-        """
-        SELECT format('constraint %s %s %s', conrelid::regclass::text, conname,
-                      pg_get_constraintdef(oid))
-        FROM pg_constraint
-        WHERE connamespace NOT IN ('pg_catalog'::regnamespace,
-                                   'information_schema'::regnamespace)
-        ORDER BY 1
-        """,
-    ),
-    (
-        "triggers",
-        """
-        SELECT pg_get_triggerdef(t.oid)
-        FROM pg_trigger t
-        JOIN pg_class c ON c.oid = t.tgrelid
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE NOT t.tgisinternal
-          AND n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'
-        ORDER BY t.tgname, c.relname
-        """,
-    ),
-    (
-        "functions",
-        """
-        SELECT pg_get_functiondef(p.oid)
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'
-        ORDER BY p.oid::regprocedure::text
-        """,
-    ),
-    (
-        "role",
-        f"SELECT 'role {APP_ROLE}' WHERE EXISTS"
-        f" (SELECT 1 FROM pg_roles WHERE rolname = '{APP_ROLE}')",
-    ),
-    (
-        "grants",
-        f"""
-        SELECT 'table grant ' || table_schema || '.' || table_name || ' ' || privilege_type
-        FROM information_schema.role_table_grants WHERE grantee = '{APP_ROLE}'
-        UNION ALL
-        SELECT 'routine grant ' || routine_schema || '.' || routine_name || ' ' || privilege_type
-        FROM information_schema.role_routine_grants WHERE grantee = '{APP_ROLE}'
-        UNION ALL
-        SELECT 'usage grant ' || object_type || ' ' || object_schema || '.'
-               || object_name || ' ' || privilege_type
-        FROM information_schema.usage_privileges WHERE grantee = '{APP_ROLE}'
-        ORDER BY 1
-        """,
-    ),
-)
+# ----------------------------------------------------------------- queries
+#: The fingerprint describes objects *we* own. Anything installed by an
+#: extension (pg_depend deptype='e' — the same membership check pg_dump
+#: uses, e.g. pg_trgm's ~31 functions in `public`) is the server's, not
+#: ours: symmetric in the equality tests, invisible in the downgrade test.
+_NOT_EXTENSION = """
+          AND NOT EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.classid = {classid} AND d.objid = {objid} AND d.deptype = 'e'
+          )
+"""
+
+
+def _member_queries() -> tuple[tuple[str, str], ...]:
+    ne = _NOT_EXTENSION
+    return (
+        (
+            "schemas",
+            "SELECT 'schema ' || nspname FROM pg_namespace"
+            " WHERE nspname NOT LIKE 'pg%' AND nspname <> 'information_schema'"
+            " ORDER BY nspname",
+        ),
+        ("extensions", "SELECT 'extension ' || extname FROM pg_extension ORDER BY extname"),
+        (
+            "columns",
+            """
+            SELECT format('%s.%s | %s | notnull=%s | default=%s | identity=%s | generated=%s',
+                          c.relname, a.attname, format_type(a.atttypid, a.atttypmod),
+                          a.attnotnull,
+                          COALESCE(pg_get_expr(ad.adbin, ad.adrelid), '-'),
+                          COALESCE(NULLIF(a.attidentity, ''), '-'),
+                          COALESCE(NULLIF(a.attgenerated, ''), '-'))
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_attribute a
+              ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+            LEFT JOIN pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+            WHERE c.relkind IN ('r', 'S')
+              AND n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'"""
+            + ne.format(classid="'pg_class'::regclass", objid="c.oid")
+            + """
+            ORDER BY c.relname, a.attnum
+            """,
+        ),
+        (
+            "indexes",
+            """
+            SELECT format('index %s %s', i.relname, pg_get_indexdef(i.oid))
+            FROM pg_class i
+            JOIN pg_namespace n ON n.oid = i.relnamespace
+            WHERE i.relkind = 'i'
+              AND n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'"""
+            + ne.format(classid="'pg_class'::regclass", objid="i.oid")
+            + """
+            ORDER BY i.relname
+            """,
+        ),
+        (
+            "constraints",
+            """
+            SELECT format('constraint %s %s %s', co.conrelid::regclass::text, co.conname,
+                          pg_get_constraintdef(co.oid))
+            FROM pg_constraint co
+            WHERE co.connamespace NOT IN ('pg_catalog'::regnamespace,
+                                          'information_schema'::regnamespace)"""
+            + ne.format(classid="'pg_constraint'::regclass", objid="co.oid")
+            + """
+            ORDER BY 1
+            """,
+        ),
+        (
+            "triggers",
+            """
+            SELECT pg_get_triggerdef(t.oid)
+            FROM pg_trigger t
+            JOIN pg_class c ON c.oid = t.tgrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE NOT t.tgisinternal
+              AND n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'"""
+            + ne.format(classid="'pg_trigger'::regclass", objid="t.oid")
+            + """
+            ORDER BY t.tgname, c.relname
+            """,
+        ),
+        (
+            "functions",
+            """
+            SELECT pg_get_functiondef(p.oid)
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname NOT LIKE 'pg%' AND n.nspname <> 'information_schema'"""
+            + ne.format(classid="'pg_proc'::regclass", objid="p.oid")
+            + """
+            ORDER BY p.oid::regprocedure::text
+            """,
+        ),
+        (
+            "role",
+            f"SELECT 'role {APP_ROLE}' WHERE EXISTS"
+            f" (SELECT 1 FROM pg_roles WHERE rolname = '{APP_ROLE}')",
+        ),
+        (
+            "grants",
+            f"""
+            SELECT 'table grant ' || table_schema || '.' || table_name || ' ' || privilege_type
+            FROM information_schema.role_table_grants WHERE grantee = '{APP_ROLE}'
+            UNION ALL
+            SELECT 'routine grant ' || routine_schema || '.' || routine_name
+                   || ' ' || privilege_type
+            FROM information_schema.role_routine_grants WHERE grantee = '{APP_ROLE}'
+            UNION ALL
+            SELECT 'usage grant ' || object_type || ' ' || object_schema || '.'
+                   || object_name || ' ' || privilege_type
+            FROM information_schema.usage_privileges WHERE grantee = '{APP_ROLE}'
+            ORDER BY 1
+            """,
+        ),
+    )
+
+
+_FINGERPRINT_QUERIES = _member_queries()
 
 
 def fingerprint(dsn: str) -> list[str]:
