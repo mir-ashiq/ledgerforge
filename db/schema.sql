@@ -161,6 +161,35 @@ BEGIN
 END $$;
 
 -- ----------------------------------------------------------------------------
+-- Currencies & FX rates (issue #4, ADR-007). One base currency per book
+-- (settings.base_currency); every entry posts a base-currency amount, and a
+-- foreign-currency line snapshots the rate trio on the entry itself.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS currencies (
+    code        CHAR(3) PRIMARY KEY,
+    name        TEXT NOT NULL,
+    symbol      TEXT,
+    minor_unit  SMALLINT NOT NULL DEFAULT 2
+                CONSTRAINT chk_currencies_minor_unit CHECK (minor_unit BETWEEN 0 AND 8),
+    is_system   BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS fx_rates (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    from_ccy    CHAR(3) NOT NULL REFERENCES currencies(code),
+    to_ccy      CHAR(3) NOT NULL REFERENCES currencies(code),
+    rate        NUMERIC(30, 10) NOT NULL
+                CONSTRAINT chk_fx_rates_positive CHECK (rate > 0),
+    valid_on    DATE NOT NULL,
+    source      TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_fx_rates_pair_day UNIQUE (from_ccy, to_ccy, valid_on),
+    CONSTRAINT chk_fx_rates_pair_distinct CHECK (from_ccy <> to_ccy)
+);
+
+-- ----------------------------------------------------------------------------
 -- Voucher types (TallyPrime's set) and numbering configuration
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS voucher_types (
@@ -210,7 +239,24 @@ CREATE TABLE IF NOT EXISTS voucher_entries (
     -- impossible after insert)
     voucher_date DATE NOT NULL,
     narration    TEXT,
-    CONSTRAINT uq_entry_line UNIQUE (voucher_id, line_no)
+    -- FX snapshot (issue #4): all three or none, and the base amount must be
+    -- the exact product — enforced by chk_entry_fx_consistent below so the
+    -- invariant survives any client, not just the engine (Law 3)
+    currency     CHAR(3) REFERENCES currencies(code),
+    amount_fx    NUMERIC(26, 8)
+                 CONSTRAINT chk_entry_amount_fx_positive CHECK (amount_fx > 0),
+    fx_rate      NUMERIC(30, 10)
+                 CONSTRAINT chk_entry_fx_rate_positive CHECK (fx_rate > 0),
+    CONSTRAINT uq_entry_line UNIQUE (voucher_id, line_no),
+    CONSTRAINT chk_entry_fx_consistent CHECK (
+        (currency IS NULL AND amount_fx IS NULL AND fx_rate IS NULL)
+        OR (
+            currency IS NOT NULL
+            AND amount_fx IS NOT NULL
+            AND fx_rate IS NOT NULL
+            AND amount = round(amount_fx * fx_rate, 8)
+        )
+    )
 );
 
 -- The covering index every balance / report query uses.
@@ -308,6 +354,22 @@ BEGIN
     RETURN COALESCE(NEW, OLD);
 END $$;
 
+-- Variant for code-keyed tables (currencies): no surrogate id, so record_id
+-- is NULL and the natural key lives in row_data.
+CREATE OR REPLACE FUNCTION trg_audit_master_code() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO audit_log (actor, table_name, operation, record_id, row_data)
+    VALUES (
+        NULLIF(current_setting('app.actor', true), ''),
+        TG_TABLE_NAME,
+        TG_OP,
+        NULL,
+        to_jsonb(CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END)
+    );
+    RETURN COALESCE(NEW, OLD);
+END $$;
+
 DROP TRIGGER IF EXISTS trg_audit_groups ON groups;
 CREATE TRIGGER trg_audit_groups
     AFTER INSERT OR UPDATE OR DELETE ON groups
@@ -321,6 +383,136 @@ CREATE TRIGGER trg_audit_ledgers
 DROP TRIGGER IF EXISTS trg_audit_voucher_types ON voucher_types;
 CREATE TRIGGER trg_audit_voucher_types
     AFTER INSERT OR UPDATE OR DELETE ON voucher_types
+    FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
+
+DROP TRIGGER IF EXISTS trg_audit_currencies ON currencies;
+CREATE TRIGGER trg_audit_currencies
+    AFTER INSERT OR UPDATE OR DELETE ON currencies
+    FOR EACH ROW EXECUTE FUNCTION trg_audit_master_code();
+
+-- Only corrections are journaled: rate INSERTs are routine daily loads and
+-- would flood the audit log; entries snapshot rates, so rows are advisory.
+DROP TRIGGER IF EXISTS trg_audit_fx_rates ON fx_rates;
+CREATE TRIGGER trg_audit_fx_rates
+    AFTER UPDATE OR DELETE ON fx_rates
+    FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
+
+-- ----------------------------------------------------------------------------
+-- Period locking & financial-year close (issue #5, ADR-008). Periods are
+-- named, non-overlapping ranges with a status machine; a BEFORE INSERT
+-- trigger on vouchers refuses dates in locked/closed periods (and dates no
+-- period covers, once at least one period exists). With no periods at all,
+-- every date posts — the feature is opt-in.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS periods (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    starts_on   DATE NOT NULL,
+    ends_on     DATE NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open'
+                CONSTRAINT chk_periods_status CHECK (status IN ('open', 'locked', 'closed')),
+    locked_at   TIMESTAMPTZ,
+    closed_at   TIMESTAMPTZ,
+    closed_by   TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_periods_order CHECK (starts_on <= ends_on),
+    CONSTRAINT uq_periods_no_overlap EXCLUDE USING gist
+        (daterange(starts_on, ends_on, '[]') WITH &&)
+);
+
+CREATE OR REPLACE FUNCTION trg_periods_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.starts_on <> OLD.starts_on OR NEW.ends_on <> OLD.ends_on THEN
+        RAISE EXCEPTION 'Period dates are immutable: % .. %', OLD.starts_on, OLD.ends_on;
+    END IF;
+    IF NEW.status = OLD.status THEN
+        RETURN NEW;  -- metadata-only update
+    END IF;
+    IF OLD.status = 'open' AND NEW.status = 'locked' THEN
+        NEW.locked_at := now();
+        RETURN NEW;
+    END IF;
+    IF OLD.status = 'locked' AND NEW.status = 'open' THEN
+        NEW.locked_at := NULL;
+        RETURN NEW;
+    END IF;
+    IF OLD.status = 'locked' AND NEW.status = 'closed' THEN
+        IF COALESCE(NEW.closed_by, '') = '' THEN
+            RAISE EXCEPTION 'Closing a period requires closed_by (who closed it)';
+        END IF;
+        NEW.closed_at := now();
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'Invalid period status transition: % -> %', OLD.status, NEW.status;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_periods_delete_guard() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_n BIGINT;
+BEGIN
+    IF OLD.status <> 'open' THEN
+        RAISE EXCEPTION 'Only open periods can be deleted; % is %', OLD.name, OLD.status;
+    END IF;
+    SELECT count(*) INTO v_n FROM vouchers
+    WHERE voucher_date BETWEEN OLD.starts_on AND OLD.ends_on;
+    IF v_n > 0 THEN
+        RAISE EXCEPTION 'Period % contains % voucher(s) and cannot be deleted',
+            OLD.name, v_n;
+    END IF;
+    RETURN OLD;
+END $$;
+
+-- FOR SHARE serializes a posting against a concurrent lock/close of the same
+-- period row: whichever commits first defines the outcome for the other.
+CREATE OR REPLACE FUNCTION trg_vouchers_check_period() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_status TEXT;
+    v_name   TEXT;
+BEGIN
+    -- Opt-in: books that define no periods accept every date (pre-feature
+    -- behavior; existing installs are unaffected until they adopt periods).
+    IF NOT EXISTS (SELECT 1 FROM periods) THEN
+        RETURN NEW;
+    END IF;
+    SELECT p.status, p.name INTO v_status, v_name
+    FROM periods p
+    WHERE NEW.voucher_date >= p.starts_on AND NEW.voucher_date <= p.ends_on
+    FOR SHARE OF p;
+    IF v_status IS NULL THEN
+        RAISE EXCEPTION 'No period covers voucher date %: create the period first',
+            NEW.voucher_date;
+    END IF;
+    IF v_status = 'closed' THEN
+        RAISE EXCEPTION 'Period % is closed: its dates are final', v_name;
+    END IF;
+    IF v_status = 'locked' THEN
+        RAISE EXCEPTION 'Period % is locked: postings are frozen until it is closed or reopened',
+            v_name;
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_vouchers_period ON vouchers;
+CREATE TRIGGER trg_vouchers_period
+    BEFORE INSERT ON vouchers
+    FOR EACH ROW EXECUTE FUNCTION trg_vouchers_check_period();
+
+DROP TRIGGER IF EXISTS trg_periods_guard ON periods;
+CREATE TRIGGER trg_periods_guard
+    BEFORE UPDATE ON periods
+    FOR EACH ROW EXECUTE FUNCTION trg_periods_guard();
+
+DROP TRIGGER IF EXISTS trg_periods_delete_guard ON periods;
+CREATE TRIGGER trg_periods_delete_guard
+    BEFORE DELETE ON periods
+    FOR EACH ROW EXECUTE FUNCTION trg_periods_delete_guard();
+
+DROP TRIGGER IF EXISTS trg_audit_periods ON periods;
+CREATE TRIGGER trg_audit_periods
+    AFTER INSERT OR UPDATE OR DELETE ON periods
     FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
 
 -- ----------------------------------------------------------------------------
@@ -366,4 +558,10 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO ledgerforge_app;
 GRANT INSERT ON vouchers, voucher_entries, audit_log TO ledgerforge_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON groups, ledgers, voucher_types, doc_counters, settings
     TO ledgerforge_app;
+-- Multi-currency (0002): currencies are masters; rates are correctable
+-- reference data (no DELETE — a wrong rate is UPDATEd, never erased).
+GRANT SELECT, INSERT, UPDATE, DELETE ON currencies TO ledgerforge_app;
+GRANT SELECT, INSERT, UPDATE ON fx_rates TO ledgerforge_app;
+-- Period locking (0003): control data — never part of financial history.
+GRANT SELECT, INSERT, UPDATE, DELETE ON periods TO ledgerforge_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ledgerforge_app;

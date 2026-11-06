@@ -91,7 +91,10 @@ $$;
 -- ----------------------------------------------------------------------------
 -- Profit & Loss: trading (direct, affects_gross) and indirect sections, with
 -- gross and net profit rows. Ledger-level classification for totals; group
--- rows are subtree rollups for display.
+-- rows are subtree rollups for display. Financial-year close sweeps (voucher
+-- type FYC) are excluded: they transfer results to Profit & Loss A/c, they
+-- are not earnings — without this, the year after a close would report the
+-- sweep as a loss (ADR-008).
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION rpt.profit_and_loss(p_from DATE, p_to DATE)
 RETURNS TABLE (
@@ -109,7 +112,9 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
         FROM voucher_entries e
         JOIN ledgers l ON l.id = e.ledger_id
         JOIN vouchers v ON v.id = e.voucher_id
+        JOIN voucher_types vt ON vt.id = v.voucher_type_id
         WHERE v.voucher_date BETWEEN p_from AND p_to
+          AND vt.code <> 'FYC'
         GROUP BY l.group_id
     ),
     ledger_class AS (
@@ -215,6 +220,67 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
          - COALESCE(SUM(CASE WHEN g.nature = 'expense' THEN pl.dr - pl.cr END), 0)
     FROM per_ledger pl
     JOIN groups g ON g.id = pl.gid
+$$;
+
+-- ----------------------------------------------------------------------------
+-- Financial-year close: the exact sweep that zeroes the year (issue #5,
+-- ADR-008). For every income/expense ledger with a non-zero closing balance
+-- as of p_as_of, the reversing line; the net difference lands on the
+-- Profit & Loss A/c ledger (p_pl_ledger_id). Balanced by construction —
+-- every line is an ABS of a balance and the P&L line absorbs the algebraic
+-- sum, so Law 1 holds exactly. The close action posts these rows verbatim as
+-- an FYC voucher dated the first day of the NEXT period.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION rpt.fy_close(p_as_of DATE, p_pl_ledger_id BIGINT)
+RETURNS TABLE (
+    out_bucket      TEXT,
+    out_ledger_id   BIGINT,
+    out_ledger_name TEXT,
+    out_dc          CHAR(1),
+    out_amount      NUMERIC
+)
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    WITH per_ledger AS (
+        SELECT e.ledger_id,
+               COALESCE(SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE 0 END), 0) AS dr,
+               COALESCE(SUM(CASE WHEN e.dc = 'C' THEN e.amount ELSE 0 END), 0) AS cr
+        FROM voucher_entries e
+        JOIN vouchers v ON v.id = e.voucher_id
+        JOIN ledgers l ON l.id = e.ledger_id
+        JOIN groups g ON g.id = l.group_id
+        WHERE v.voucher_date <= p_as_of
+          AND g.nature IN ('income', 'expense')
+        GROUP BY e.ledger_id
+    ),
+    balances AS (
+        SELECT l.id AS ledger_id, l.name AS ledger_name, g.nature,
+               CASE WHEN g.nature = 'income' THEN pl.cr - pl.dr
+                    ELSE pl.dr - pl.cr END AS balance
+        FROM per_ledger pl
+        JOIN ledgers l ON l.id = pl.ledger_id
+        JOIN groups g ON g.id = l.group_id
+    )
+    SELECT 'income', b.ledger_id, b.ledger_name,
+           CASE WHEN b.balance > 0 THEN 'D' ELSE 'C' END, ABS(b.balance)
+    FROM balances b
+    WHERE b.nature = 'income' AND b.balance <> 0
+
+    UNION ALL
+    SELECT 'expense', b.ledger_id, b.ledger_name,
+           CASE WHEN b.balance > 0 THEN 'C' ELSE 'D' END, ABS(b.balance)
+    FROM balances b
+    WHERE b.nature = 'expense' AND b.balance <> 0
+
+    UNION ALL
+    SELECT 'profit_loss', p_pl_ledger_id,
+           (SELECT name FROM ledgers WHERE id = p_pl_ledger_id),
+           CASE WHEN t.net > 0 THEN 'C' ELSE 'D' END, ABS(t.net)
+    FROM (
+        SELECT COALESCE(SUM(balance) FILTER (WHERE nature = 'income'), 0)
+             - COALESCE(SUM(balance) FILTER (WHERE nature = 'expense'), 0) AS net
+        FROM balances
+    ) t
+    WHERE t.net <> 0
 $$;
 
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA rpt TO ledgerforge_app;

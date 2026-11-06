@@ -223,8 +223,9 @@ def test_baseline_matches_bootstrap_sql(scratch_dbs):
             )
         )
         pytest.fail(
-            "Alembic baseline drifted from db/schema.sql + db/functions.sql.\n"
-            "Pre-1.0: edit the SQL files, then run scripts/regen_baseline.py.\n\n" + diff
+            "alembic upgrade head drifted from db/schema.sql + db/functions.sql.\n"
+            "The baseline (0001) is frozen: ship the change as a NEW revision "
+            "that also updates the SQL files in the same commit (ADR-006).\n\n" + diff
         )
     assert alembic_version(alembic_dsn) == alembic_version(sql_dsn) == lf_migrations.head_revision()
 
@@ -259,10 +260,56 @@ def test_head_revision_is_single_and_parseable():
     from alembic.script import ScriptDirectory
 
     head = lf_migrations.head_revision()
-    assert head == "0001_baseline"
-    assert lf_migrations.revisions()[head] is None
+    assert head == "0003_period_locking"
+    assert lf_migrations.revisions() == {
+        "0001_baseline": None,
+        "0002_multi_currency": "0001_baseline",
+        "0003_period_locking": "0002_multi_currency",
+    }
     scripts = ScriptDirectory(str(lf_migrations.migrations_dir()))
     assert scripts.get_current_head() == head
+
+
+def test_stepwise_upgrade_and_partial_downgrade(scratch_dbs):
+    """Each revision is independently reversible: stop at 0002 (currencies
+    in, periods out), continue to head, step back one (periods dropped, FX
+    columns survive), and land at head again."""
+    dsn = scratch_dbs("stepwise")
+
+    command.upgrade(_alembic_cfg(dsn), "0002_multi_currency")  # base -> 0002
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM currencies").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM information_schema.columns"
+                " WHERE table_name = 'voucher_entries'"
+                " AND column_name IN ('currency', 'amount_fx', 'fx_rate')"
+            ).fetchone()[0]
+            == 3
+        )
+        assert conn.execute("SELECT to_regclass('periods')").fetchone()[0] is None
+
+    _upgrade(dsn)
+    _downgrade(dsn, "0002_multi_currency")
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT to_regclass('periods')").fetchone()[0] is None
+        assert conn.execute("SELECT to_regclass('currencies')").fetchone()[0] is not None
+        # the FYC-aware profit_and_loss was 0003's; stepping back restores the
+        # baseline version (no voucher_types join inside)
+        (has_join,) = conn.execute(
+            "SELECT pg_get_functiondef('rpt.profit_and_loss(DATE, DATE)'::regprocedure)"
+            " LIKE '%voucher_types%'"
+        ).fetchone()
+        assert has_join is False
+
+    _upgrade(dsn)
+    with psycopg.connect(dsn) as conn:
+        (has_join,) = conn.execute(
+            "SELECT pg_get_functiondef('rpt.profit_and_loss(DATE, DATE)'::regprocedure)"
+            " LIKE '%voucher_types%'"
+        ).fetchone()
+        assert has_join is True
+        assert conn.execute("SELECT to_regclass('periods')").fetchone()[0] is not None
 
 
 def test_downgrade_baseline_drops_all(scratch_dbs):

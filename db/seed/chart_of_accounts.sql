@@ -68,9 +68,29 @@ INSERT INTO ledgers (name, group_id, is_system)
 SELECT 'Profit & Loss A/c', g.id, TRUE FROM groups g WHERE g.name = 'Primary'
 ON CONFLICT (name) DO NOTHING;
 
+-- FX gain/loss system ledgers (issue #4, ADR-007): realized differences on
+-- settlement/receipt; unrealized on period-end revaluation of open positions.
+INSERT INTO ledgers (name, group_id, is_system)
+SELECT v.name, g.id, TRUE
+FROM (VALUES
+    ('Realized Exchange Gain',   'Indirect Incomes'),
+    ('Realized Exchange Loss',   'Indirect Expenses'),
+    ('Unrealized Exchange Gain', 'Indirect Incomes'),
+    ('Unrealized Exchange Loss', 'Indirect Expenses')
+) AS v(name, parent)
+JOIN groups g ON g.name = v.parent
+ON CONFLICT (name) DO NOTHING;
+
+-- Currencies: the base currency ships as a system row; others via POST
+-- /api/v1/currencies. minor_unit drives display rounding (JPY 0, BHD 3).
+INSERT INTO currencies (code, name, symbol, minor_unit, is_system) VALUES
+    ('INR', 'Indian Rupee', '₹', 2, TRUE)
+ON CONFLICT (code) DO NOTHING;
+
 -- Voucher types (TallyPrime's set) ------------------------------------------
 INSERT INTO voucher_types (code, name, number_prefix, restart_yearly, is_system) VALUES
     ('OPEN', 'Opening Journal', 'OPN', TRUE, TRUE),
+    ('FYC',  'Financial Year Close', 'FYC', TRUE, TRUE),
     ('CN',   'Contra',          'CN',  TRUE, FALSE),
     ('PYT',  'Payment',         'PYT', TRUE, FALSE),
     ('RCT',  'Receipt',         'RCT', TRUE, FALSE),

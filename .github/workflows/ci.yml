@@ -58,7 +58,7 @@ jobs:
           alembic downgrade base
           alembic upgrade head
 
-      - name: Baseline freshness (schema.sql <-> 0001_baseline.py in sync)
+      - name: Baseline integrity (0001 still embeds the frozen snapshot)
         run: python scripts/regen_baseline.py --check
 
       - name: Benchmark smoke (proves the harness runs)

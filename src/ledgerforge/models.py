@@ -7,7 +7,18 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, ForeignKey, Identity, Text, text
+from sqlalchemy import (
+    CHAR,
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Identity,
+    SmallInteger,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -86,6 +97,12 @@ class VoucherEntry(Base):
     amount: Mapped[Decimal]
     voucher_date: Mapped[date] = mapped_column(Date)
     narration: Mapped[str | None]
+    # FX snapshot (issue #4, ADR-007): all three or none; amount is and stays
+    # the base-currency figure — the trio is proven consistent by the
+    # chk_entry_fx_consistent database constraint.
+    currency: Mapped[str | None] = mapped_column(CHAR(3), ForeignKey("currencies.code"))
+    amount_fx: Mapped[Decimal | None]
+    fx_rate: Mapped[Decimal | None]
 
 
 class DocCounter(Base):
@@ -101,6 +118,56 @@ class Setting(Base):
     key: Mapped[str] = mapped_column(Text, primary_key=True)
     value: Mapped[str]
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class Currency(Base):
+    """ISO 4217 reference currency. The book's base currency lives in
+    ``settings.base_currency``; every other currency here is postable with an
+    FX snapshot (issue #4, ADR-007)."""
+
+    __tablename__ = "currencies"
+
+    code: Mapped[str] = mapped_column(CHAR(3), primary_key=True)
+    name: Mapped[str]
+    symbol: Mapped[str | None]
+    minor_unit: Mapped[int] = mapped_column(SmallInteger, default=2)
+    is_system: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class FxRate(Base):
+    """A dated reference rate: 1 unit of ``from_ccy`` = ``rate`` units of
+    ``to_ccy`` (NUMERIC(30,10), Law 3). Advisory input data — postings snapshot
+    the applied rate on the entry row (ADR-007)."""
+
+    __tablename__ = "fx_rates"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    from_ccy: Mapped[str] = mapped_column(CHAR(3), ForeignKey("currencies.code"))
+    to_ccy: Mapped[str] = mapped_column(CHAR(3), ForeignKey("currencies.code"))
+    rate: Mapped[Decimal]
+    valid_on: Mapped[date] = mapped_column(Date)
+    source: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class Period(Base):
+    """A named, non-overlapping fiscal range with a close state machine:
+    ``open -> locked -> closed`` (open/locked reversible, closed final).
+    Issue #5, ADR-008."""
+
+    __tablename__ = "periods"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    name: Mapped[str]
+    starts_on: Mapped[date] = mapped_column(Date)
+    ends_on: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(Text, default="open")
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
 
 
 class AuditLog(Base):

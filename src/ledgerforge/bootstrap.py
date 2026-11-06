@@ -71,7 +71,8 @@ def drop_schema(dsn: str, echo: bool = True) -> None:
         conn.execute(
             """
             DROP TABLE IF EXISTS voucher_entries, vouchers, ledgers, groups,
-                group_closure, voucher_types, doc_counters, audit_log, settings
+                group_closure, voucher_types, doc_counters, audit_log, settings,
+                fx_rates, currencies, periods
             CASCADE
             """
         )
