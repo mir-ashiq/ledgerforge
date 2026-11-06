@@ -7,9 +7,12 @@
 ```
 groups (tree: parent_id, truth)  ←── group_closure (read model, trigger-maintained)
   └── ledgers (unique name book-wide, like Tally)
-voucher_types (RCT, PYT, JV, CN, SAL, PUR, CRN, DBN, OPEN …)
+voucher_types (RCT, PYT, JV, CN, SAL, PUR, CRN, DBN, OPEN, FYC …)
   └── vouchers (immutable: uuid, client_token, voucher_no, date, reversal_of)
-        └── voucher_entries (immutable: line_no, ledger_id, dc D|C, amount NUMERIC(26,8))
+        └── voucher_entries (immutable: line_no, ledger_id, dc D|C, amount NUMERIC(26,8),
+                             FX snapshot: currency, amount_fx, fx_rate — issue #4 / ADR-007)
+currencies (ISO 4217, code-keyed)  ←── fx_rates (dated pairs, NUMERIC(30,10) — ADR-007)
+periods (non-overlapping ranges, open/locked/closed — issue #5 / ADR-008)
 doc_counters (gapless numbering, the only locked row in the write path)
 audit_log (append-only trigger journal for masters)
 settings (fy_start_month, base_currency, company_name)
@@ -40,7 +43,16 @@ settings (fy_start_month, base_currency, company_name)
 `id`, `uuid`, `client_token UNIQUE` (idempotency), `voucher_type_id`, `voucher_no` (+ `UNIQUE (voucher_type_id, voucher_no)`), `sequence` (gapless int), `voucher_date`, `narration`, `reversal_of → vouchers.id`, `posted_at`. `BEFORE UPDATE OR DELETE` trigger raises.
 
 ### `voucher_entries` (immutable)
-`id`, `voucher_id`, `line_no`, `ledger_id`, `dc CHAR(1) CHECK IN ('D','C')`, `amount NUMERIC(26,8) CHECK (amount > 0)`, `voucher_date` (denormalized, trigger-proven equal to the voucher's), `narration`. Index: `(ledger_id, voucher_date) INCLUDE (dc, amount)` — the covering index every balance/report query uses.
+`id`, `voucher_id`, `line_no`, `ledger_id`, `dc CHAR(1) CHECK IN ('D','C')`, `amount NUMERIC(26,8) CHECK (amount > 0)` — the **base-currency** figure, `voucher_date` (denormalized, trigger-proven equal to the voucher's), `narration`, and the FX snapshot trio (ADR-007): `currency CHAR(3) → currencies`, `amount_fx NUMERIC(26,8)`, `fx_rate NUMERIC(30,10)`, all-or-none and `CHECK (amount = round(amount_fx * fx_rate, 8))` when present — the database proves the product for any writer. Index: `(ledger_id, voucher_date) INCLUDE (dc, amount)` — the covering index every balance/report query uses.
+
+### `currencies` (issue #4, ADR-007)
+`code CHAR(3) PK` (ISO 4217), `name`, `symbol`, `minor_unit` (0–8, display rounding), `is_system` (INR ships seeded), timestamps. Audited via the code-keyed variant of the master audit trigger.
+
+### `fx_rates` (issue #4, ADR-007)
+`id`, `from_ccy`/`to_ccy → currencies` (`CHECK` distinct), `rate NUMERIC(30,10) > 0`, `valid_on`, `source`, `created_at`; `UNIQUE (from_ccy, to_ccy, valid_on)`. Advisory reference data — postings snapshot the applied rate on the entry row. App role: SELECT/INSERT/UPDATE (no DELETE; corrections are updates, journaled).
+
+### `periods` (issue #5, ADR-008)
+`id`, `name UNIQUE`, `starts_on`, `ends_on` (`CHECK` ordered, gist `EXCLUDE` no-overlap), `status open|locked|closed` (transition-guarded trigger: open↔locked, locked→closed final, closed_by required), `locked_at`, `closed_at`, `closed_by`. A BEFORE INSERT trigger on `vouchers` takes `FOR SHARE` on the covering period and refuses locked/closed/uncovered dates once any period exists. Audited.
 
 ### `doc_counters`
 `scope_key TEXT PK, last_value BIGINT`. Locked with `FOR UPDATE` inside each posting transaction — gapless by construction (ADR-002).

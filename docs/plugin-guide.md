@@ -17,7 +17,7 @@ A plugin is a Python module exposing a `PLUGIN` manifest and a `register(registr
 from decimal import Decimal
 from ledgerforge.plugins import PluginManifest, ValidationError
 
-PLUGIN = PluginManifest(name="my-gst-pack", version="0.1.0", api_compat="0.1")
+PLUGIN = PluginManifest(name="my-gst-pack", version="0.1.0", api_compat="0.2")
 
 
 def register(registry):

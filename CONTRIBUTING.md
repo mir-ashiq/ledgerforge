@@ -41,26 +41,25 @@ export LF_TEST_ADMIN_URL=postgresql+psycopg://postgres:postgres@localhost:5432/p
 
 ### Changing the schema
 
-Until 1.0, `db/schema.sql` + `db/functions.sql` stay the source of truth (keep
-them idempotent) and the Alembic baseline is re-embedded:
-
-```bash
-# 1. edit db/schema.sql / db/functions.sql
-make baseline-regen     # re-embeds them into db/migrations/versions/0001_baseline.py
-make test               # the drift guard must stay green
-```
-
-After 1.0 the baseline freezes; a schema change ships as a new revision that
-also updates the SQL files in the same PR, so fresh bootstraps and migrated
+The baseline revision `0001` is **frozen** (ADR-006, amended 2026-11-06): the
+first forward revisions (`0002_multi_currency`, `0003_period_locking`) shipped
+against it, so it can never be regenerated. A schema change ships as a **new
+revision** that also updates `db/schema.sql` + `db/functions.sql` (the
+flattened current state) in the same PR, so fresh bootstraps and migrated
 databases stay identical:
 
 ```bash
-make migration-new rev=0002_add_periods m="add periods table"
-# edit db/migrations/versions/0002_add_periods.py — handwritten raw SQL via op.execute()
+make migration-new rev=0004_your_change m="describe it"
+# edit db/migrations/versions/0004_your_change.py — handwritten raw SQL via op.execute()
 # update db/schema.sql + db/functions.sql to the new flattened state
-# include the ledgerforge_app GRANTs for any new tables
-make test
+# include the ledgerforge_app GRANTs for any new tables and sequences
+make test               # the drift guard must stay green
+make baseline-check     # 0001 still embeds db/migrations/baseline/ exactly
 ```
+
+`db/migrations/baseline/` preserves the schema as it stood at the freeze;
+`scripts/regen_baseline.py --check` (a CI step) proves `0001` still embeds it
+byte-for-byte.
 
 ## Reporting bugs
 

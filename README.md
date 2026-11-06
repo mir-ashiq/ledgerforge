@@ -45,6 +45,7 @@ TallyPrime proved that accounting software can be *faster than the accountant*. 
                     │             PostgreSQL 16+               │
                     │ groups ── group_closure (triggers)       │
                     │ vouchers ── voucher_entries (append-only)│
+                    │ currencies/fx_rates · periods (FY close) │
                     │ doc_counters (gapless numbering)         │
                     │ rpt.* reporting functions (exact NUMERIC)│
                     └──────────────────────────────────────────┘
@@ -108,15 +109,62 @@ curl -s 'localhost:8000/api/v1/reports/balance-sheet?as_of=2026-11-06'
 SELECT * FROM rpt.trial_balance('2026-11-06');
 ```
 
+## Multi-currency (issue #4)
+
+One base currency per book (`settings.base_currency`, seeded INR); every entry
+posts a **base-currency amount** — that is what balances and what the reports
+aggregate. A foreign-currency line snapshots the trio on the immutable entry:
+`currency`, `amount_fx`, `fx_rate` (base units per foreign unit,
+`NUMERIC(30,10)`), and the database itself enforces
+`amount = round(amount_fx × fx_rate, 8)` for **any** writer. Reference rates
+live in `fx_rates` (dated, correctable, never deleted); realized/unrealized
+exchange gain/loss ship as seeded system ledgers.
+
+```bash
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "JV",
+  "voucher_date": "2026-11-06",
+  "entries": [
+    {"ledger_name": "USD Bank", "dc": "D", "amount": "8350.50000000",
+     "currency": "USD", "amount_fx": "100.00", "fx_rate": "83.5050000000"},
+    {"ledger_name": "Cash", "dc": "C", "amount": "8350.50000000"}
+  ]
+}'
+```
+
+Design: [ADR-007](docs/adr/007-multi-currency.md).
+
+## Period locking & the financial-year close (issue #5)
+
+Periods are named, non-overlapping date ranges with a state machine
+`open → locked → closed`. Once any period exists, a voucher date must fall in
+an **open** one — enforced by a row-locking trigger that serializes postings
+against concurrent locks. Closing a year is two-step (lock, then close): the
+close posts `rpt.fy_close`'s sweep — zeroing every income/expense ledger into
+*Profit & Loss A/c* — as an `FYC` voucher dated the first day of the **next**
+period, so both years' reports stay correct. `closed` is final, and every
+lock/close is audited with its actor.
+
+```bash
+curl -s localhost:8000/api/v1/periods
+curl -s localhost:8000/api/v1/periods/1/close-preview   # exactly what close posts
+curl -s -X POST localhost:8000/api/v1/periods/1/lock
+curl -s -X POST localhost:8000/api/v1/periods/1/close
+```
+
+Design: [ADR-008](docs/adr/008-period-locking.md).
+
 ## What's inside
 
 ```
 db/                 schema.sql · functions.sql · seed (TallyPrime's 28 predefined groups)
-                    migrations/ — Alembic tree, 0001_baseline + drift guard (ADR-006)
+                    migrations/ — Alembic tree: frozen 0001 baseline + drift guard,
+                    0002 multi-currency, 0003 period locking (ADR-006/007/008)
 src/ledgerforge/    engine (posting/reversal/opening) · api · auth (OIDC + roles) · reporting · plugins · contrib
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen + command palette (React + Vite)
-tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth, migrations
+tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
+                    migrations, multi-currency, period locking
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
@@ -162,11 +210,13 @@ calls. Per-book permissions land together with the multi-book schema (roadmap).
 
 `db/schema.sql` remains the bootstrap path (`make init-db`, Docker) and stays
 idempotent. Alembic ([ADR-006](docs/adr/006-migration-baseline.md)) versions
-the same schema: revision `0001_baseline` embeds `schema.sql` +
-`functions.sql` verbatim, and `tests/test_migrations.py` proves that
-`alembic upgrade head` produces an identical structure — schemas, tables,
-columns, indexes, constraints, triggers, functions, grants — via catalog
-fingerprints. If the two ever drift apart, CI fails.
+the same schema: the frozen revision `0001_baseline` embeds the schema as it
+stood at the freeze (preserved under `db/migrations/baseline/`), forward
+revisions `0002_multi_currency` and `0003_period_locking` carry the rest, and
+`tests/test_migrations.py` proves that `alembic upgrade head` produces an
+identical structure to the bootstrap — schemas, tables, columns, indexes,
+constraints, triggers, functions, grants — via catalog fingerprints. If the
+two ever drift apart, CI fails.
 
 ```bash
 make migrate            # alembic upgrade head
@@ -177,23 +227,25 @@ alembic current         # where this database stands
 The bootstrap stamps `alembic_version` to head automatically, so databases
 provisioned either way converge and a later `alembic upgrade head` is a
 no-op, not a re-run. `python -m ledgerforge.migrations upgrade head` works
-from any install. Pre-1.0, schema changes land in the SQL files first and
-the baseline is regenerated (`make baseline-regen`); after 1.0 the baseline
-freezes and changes ship as new revisions — see
+from any install. The baseline is frozen (ADR-006 amendment): schema changes
+ship as new revisions that also update the SQL files in the same PR — see
 [db/migrations/README.md](db/migrations/README.md).
 
 ## Status & roadmap
 
-v0.3.0 — the accounting kernel, the voucher-entry screen **plus the command
-palette with persisted key rebinding, and OIDC authentication with the role
-model**. Next (see [docs/analysis.md §9](docs/analysis.md)):
+v0.4.0 — the accounting kernel, the voucher-entry screen, the command palette
+with persisted key rebinding, OIDC authentication **plus multi-currency books
+and period locking with the financial-year close — the first two features
+shipped as forward migrations (`0002_*`, `0003_*`) over the frozen baseline**.
+Next (see [docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
 - [x] AuthN/AuthZ: OIDC bearer tokens + `reader`/`bookkeeper`/`admin` roles
 - [x] Alembic migration baseline: `0001_baseline` + structural drift guard
-- [ ] Multi-currency, period locking/FY close, multi-book
-- [ ] Community plugin index, e-invoicing packs
+- [x] Multi-currency: base-currency posting rules, FX snapshots, gain/loss ledgers
+- [x] Period locking + FY close: the posting gate, the P&L sweep, finality
+- [ ] Multi-book support, community plugin index, e-invoicing packs
 
 ## Contributing
 
