@@ -156,8 +156,9 @@ class ApiClient:
         entries: list[dict],
         narration: str | None = None,
         client_token: str | None = None,
+        meta: dict | None = None,
     ) -> Voucher:
-        payload = {
+        payload: dict[str, Any] = {
             "voucher_type": voucher_type,
             "voucher_date": voucher_date.isoformat(),
             "narration": narration or None,
@@ -165,7 +166,16 @@ class ApiClient:
         }
         if client_token:
             payload["client_token"] = client_token
+        if meta:
+            payload["meta"] = meta
         return Voucher.from_json(self._post("/api/v1/vouchers", payload))
+
+    def pack_json(self, key: str, **params: str) -> dict:
+        """A pack report's structured payload (ADR-023, plugin API 0.8) —
+        the same fold the PDF renders from, as JSON."""
+        query = dict(params)
+        query["format"] = "json"
+        return self._get(f"/api/v1/reports/pack/{key}", **query)
 
     # -------------------------------------------------------------- reports
     def trial_balance(self, as_of: date | None = None) -> dict:

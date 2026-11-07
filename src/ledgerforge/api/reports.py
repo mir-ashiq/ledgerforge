@@ -92,7 +92,9 @@ def pack_report(
     """A pack-registered report (ADR-014, plugin API 0.6) — the statutory
     bridge serves ``pf`` and ``esi`` here. PDF through the shared
     print-bridge layout by default; ``?format=csv`` for the pack's machine
-    format. The kernel stays report-blind: the pack validates its own
+    format; ``?format=json`` for the pack's structured payload (plugin API
+    0.8, ADR-023 — the rows a UI consumes, the same fold the PDF renders
+    from). The kernel stays report-blind: the pack validates its own
     parameters (caller errors surface as 422). Reader role: reports read."""
     registry = request.app.state.plugin_manager.registry
     factory = registry.report_views.get(key)
@@ -101,6 +103,8 @@ def pack_report(
         raise NotFoundError(f"No pack report registered for {key!r} (known: {known})")
     report = factory(Resolver(session, book), dict(request.query_params))
     stem = _safe_stem(report.filename)
+    if report.data is not None and request.query_params.get("format") == "json":
+        return report.data  # plugin API 0.8 (ADR-023) — the UI surface
     if report.view is not None:
         return Response(
             content=render_view(report.view),

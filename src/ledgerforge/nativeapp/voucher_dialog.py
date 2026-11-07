@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..seeding import VOUCHER_TYPES
+from .bill_dialog import BillAllocationDialog
 from .client import ApiClient
 from .models import Voucher, money
 from .tasks import run
@@ -250,14 +251,25 @@ class _LineEditor:
 
 
 class NewVoucherDialog(QDialog):
-    """Post a voucher: type, date, narration, and balanced D/C lines."""
+    """Post a voucher: type, date, narration, and balanced D/C lines —
+    with bill-wise allocation for party lines (ADR-023): Ctrl+L opens the
+    allocation dialog, and the armed refs ride the post as meta.bills."""
 
     posted = Signal(object)  # the new Voucher
 
-    def __init__(self, client: ApiClient, ledgers: list[str], parent: QWidget | None = None):
+    def __init__(
+        self,
+        client: ApiClient,
+        ledgers: list[str],
+        parent: QWidget | None = None,
+        party_names: list[str] | None = None,
+    ):
         super().__init__(parent)
         self._client = client
         self._ledgers = ledgers
+        self._party_names = set(party_names or [])
+        self._bill_refs: list[dict] = []
+        self._bill_party: str | None = None
         self._lines: list[_LineEditor] = []
         self.setWindowTitle("New Voucher")
         self.setModal(True)
@@ -287,6 +299,8 @@ class NewVoucherDialog(QDialog):
         # TallyPrime's F4–F9: switch the voucher type without touching the mouse
         for key, code in TYPE_KEYS.items():
             QShortcut(QKeySequence(key), self, lambda code=code: self._select_type(code))
+        # bill-wise allocation (ADR-023): the same Alt+L the web entry screen binds
+        QShortcut(QKeySequence("Ctrl+L"), self, self._open_bill_dialog)
 
         layout.addWidget(QLabel("Narration"))
         self.narration = QLineEdit()
@@ -316,8 +330,15 @@ class NewVoucherDialog(QDialog):
         add_button.clicked.connect(lambda: self.add_line())
         remove_button = QPushButton("Remove last line")
         remove_button.clicked.connect(self.remove_last_line)
+        self.bills_button = QPushButton("Allocate bills… (Ctrl+L)")
+        self.bills_button.setToolTip(
+            "Bill-wise details for a party line (Sundry Debtors / Creditors) — "
+            "settle open bills; the remainder goes on account"
+        )
+        self.bills_button.clicked.connect(self._open_bill_dialog)
         line_buttons.addWidget(add_button)
         line_buttons.addWidget(remove_button)
+        line_buttons.addWidget(self.bills_button)
         line_buttons.addStretch(1)
         self.balance_label = QLabel()
         font = QFont()
@@ -325,6 +346,10 @@ class NewVoucherDialog(QDialog):
         self.balance_label.setFont(font)
         line_buttons.addWidget(self.balance_label)
         layout.addLayout(line_buttons)
+
+        self.bills_status = QLabel("")
+        self.bills_status.setStyleSheet("color: #52607a;")
+        layout.addWidget(self.bills_status)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -460,12 +485,72 @@ class NewVoucherDialog(QDialog):
             self.balance_label.setStyleSheet("color: #b42318;")
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(self.is_balanced())
 
+    # ------------------------------------------------------ bill allocation
+    def _party_movement(self) -> tuple[str, Decimal] | None:
+        """The first party line's ledger and its signed net movement
+        (Σ Dr − Σ Cr over that party's lines); None when no party line moves."""
+        party = next(
+            (
+                ln.ledger.currentText().strip()
+                for ln in self._lines
+                if ln.ledger.currentText().strip() in self._party_names
+            ),
+            None,
+        )
+        if party is None:
+            return None
+        movement = Decimal("0.00")
+        for line in self._lines:
+            if line.ledger.currentText().strip() != party:
+                continue
+            payload = line.payload()
+            if payload is None:
+                continue
+            amount = Decimal(payload["amount"])
+            movement += amount if payload["dc"] == "D" else -amount
+        return party, movement.quantize(CENT)
+
+    def _open_bill_dialog(self) -> None:
+        found = self._party_movement()
+        if found is None:
+            QMessageBox.information(
+                self,
+                "Bills",
+                "No party line yet — add a line on a Sundry Debtors / Sundry "
+                "Creditors ledger with its amount first.",
+            )
+            return
+        party, movement = found
+        if movement == 0:
+            QMessageBox.information(
+                self,
+                "Bills",
+                f"Enter {party}'s debit or credit first — the allocation follows the movement.",
+            )
+            return
+        dialog = BillAllocationDialog(self._client, party, movement, self)
+        if dialog.exec() and dialog.refs():
+            self._bill_party = party
+            self._bill_refs = dialog.refs()
+            self.bills_status.setText(
+                f"Bills armed for {party}: {len(self._bill_refs)} ref(s) — "
+                "they ride the post as meta.bills"
+            )
+        elif dialog.refs() == [] and dialog.result() == QDialog.DialogCode.Accepted:
+            # an empty allocation is a deliberate clear
+            self._bill_party = None
+            self._bill_refs = []
+            self.bills_status.setText("")
+
     # ------------------------------------------------------------- posting
     def _submit(self) -> None:
         entries = [p for p in (line.payload() for line in self._lines) if p is not None]
         voucher_date: date = self.date_edit.date().toPython()
         voucher_type = self.type_box.currentData()
         client_token = str(uuid.uuid4())  # idempotency: a retry reposts nothing
+        meta = None
+        if self._bill_party and self._bill_refs:
+            meta = {"bills": {"party": self._bill_party, "refs": self._bill_refs}}
 
         def post() -> Voucher:
             return self._client.create_voucher(
@@ -474,6 +559,7 @@ class NewVoucherDialog(QDialog):
                 entries=entries,
                 narration=self.narration.text().strip() or None,
                 client_token=client_token,
+                meta=meta,
             )
 
         self.buttons.button(QDialogButtonBox.StandardButton.Ok).setEnabled(False)

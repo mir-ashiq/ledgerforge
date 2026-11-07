@@ -25,7 +25,8 @@ is fully landed:
   OIDC auth, the balance cache and yearly entry partitions for scale-out reporting.
 - **Packs**: invoicing, inventory (weighted-average, four movements), payroll (runs, YTD,
   payslips), statutory (PF/ESI/TDS), GST (place of supply, HSN rate tables, GSTR-1/HSN
-  statements, the IRN outbox + bridge).
+  statements, the IRN outbox + bridge), bills (bill-wise, outstanding, ageing, interest —
+  ADR-023, v0.20).
 - **Surfaces**: keyboard-first web UI (command palette, rebindable Tally keymap, sandboxed
   plugin slots), native Windows application (ADR-022: a Qt window over an embedded
   PostgreSQL — no browser), CLI, REST API, dependency-free PDF printing.
@@ -57,14 +58,14 @@ subscriptions for updates and remote services.
 | Period lock / FY close | ✔ | ✔ (ADR-008) | parity; web UI lacks the period screen (Phase 1) |
 | Multi-currency | ✔ | ✔ (ADR-007, entry-level snapshots) | parity |
 | Keyboard-first UX | ✔ (its identity) | ✔ (ADR-004, rebindable keymap, palette) | parity in the web app; the native window is narrower (Phase 1) |
-| Invoicing | ✔ | ✔ (ADR-010) | parity for the invoice itself; **no bill-wise tracking** (Phase 2) |
+| Invoicing | ✔ | ✔ (ADR-010) | parity for the invoice itself; bill-wise tracking landed in **v0.20** (ADR-023) |
 | Inventory | ✔ batches/serial/expiry/godowns/re-order/mfg | weighted-average qty/value only | **gap** (Phase 6) |
 | Orders (quote/SO/PO/GRN) | ✔ | ✖ | **gap** (Phase 3) |
 | Cost centres | ✔ | ✖ | **gap** (Phase 4) |
 | Banking, BRS, cheques | ✔ (incl. connected banking) | ✖ | **gap** (Phase 5; per-bank APIs deliberately out) |
 | GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox | **partial** (Phase 7) |
 | Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS | **partial** (Phase 8) |
-| Bill-wise & outstanding, ageing, interest | ✔ | ✖ | **gap** (Phase 2 — the accounting-core gap) |
+| Bill-wise & outstanding, ageing, interest | ✔ | ✔ (ADR-023) | **parity** — landed in v0.20.0 (Phase 2) |
 | Data exchange | ✔ Excel/CSV/TDL/XML | JSON REST API only | **gap** (Phase 9 — incl. the Tally migration path) |
 | Extensibility | TDL (proprietary) | Python packs, signed index, sandbox slots | **LedgerForge leads** |
 | Deployment | Windows LAN (Silver/Gold) | Native Windows app, web container, REST API, CLI | **LedgerForge leads** on openness; **behind** on signing/auto-update (Phase 10) |
@@ -101,7 +102,7 @@ no documented event unfired, no stale docs. **Nothing new; everything finished.*
   `docs/analysis.md` §9 gains its v0.18 row; this roadmap is the plan of record;
   `cryptography` becomes a direct dependency (it is imported by the trust gate).
 
-### Phase 2 — v0.20.0 · Bill-wise & outstanding management *(ADR-023)*
+### Phase 2 — v0.20.0 · Bill-wise & outstanding management *(ADR-023, landed in v0.20.0)*
 
 The accounting-core gap. TallyPrime's party ledgers carry **bill-wise details**: every
 invoice opens a named bill, every receipt settles specific bills, and the receivables/
@@ -236,4 +237,4 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-07, at the start of Phase 1.*
+code. Last revisited: 2026-11-07, at the close of Phase 2.*

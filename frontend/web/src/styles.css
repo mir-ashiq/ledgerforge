@@ -749,3 +749,119 @@ body {
 .daybook-actions,
 .periods-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
 .close-preview { max-width: 560px; }
+
+/* ------------------------------------------------ outstandings & bill allocation (Phase 2, ADR-023) */
+.outstanding-area {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.outstanding-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.outstanding-table th,
+.outstanding-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #e9edf2;
+  text-align: left;
+}
+.outstanding-table th {
+  background: #f3f6fa;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #52607a;
+}
+.outstanding-table td.num,
+.outstanding-table th.num {
+  text-align: right;
+  font-family: var(--mono);
+}
+.outstanding-table tr.sel { background: #e8effb; }
+.outstanding-footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ageing-chip {
+  font-size: 12px;
+  color: #52607a;
+  background: #f3f6fa;
+  border: 1px solid #d9e0ea;
+  border-radius: 999px;
+  padding: 4px 10px;
+}
+.ageing-chip.total { background: #17233b; color: #fff; border-color: #17233b; }
+.ageing-chip strong { font-family: var(--mono); font-weight: 600; }
+.filter-input {
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  min-width: 180px;
+}
+.filter-input::placeholder { color: rgba(255, 255, 255, 0.65); }
+.filter-input:focus { outline: 2px solid var(--focus); }
+
+/* the bill-allocation dialog: a wide card with a settleable-bills table */
+.overlay-card.overlay-wide { min-width: 620px; max-width: 760px; }
+.alloc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 10px 0;
+}
+.alloc-table th,
+.alloc-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e9edf2;
+  text-align: left;
+}
+.alloc-table th {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #52607a;
+}
+.alloc-table td.num,
+.alloc-table th.num { text-align: right; }
+.alloc-table .row-dim { color: #9aa5ba; }
+.alloc-table .empty-note { color: #8a94a6; font-size: 12px; padding: 10px 8px; }
+.alloc-input {
+  width: 110px;
+  font-size: 13px;
+  padding: 5px 7px;
+  border: 1px solid #ccd6e3;
+  border-radius: 6px;
+  font-family: var(--mono);
+  text-align: right;
+}
+.alloc-input:focus { outline: 2px solid var(--focus); border-color: transparent; }
+.alloc-remainder {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 13px;
+  padding: 8px 0;
+}
+.alloc-remainder strong { font-family: var(--mono); }
+.alloc-remainder label { display: inline-flex; gap: 5px; align-items: center; color: #52607a; }
+.alloc-newref { display: inline-flex; gap: 6px; align-items: center; }
+.alloc-newref input {
+  font-size: 13px;
+  padding: 5px 7px;
+  border: 1px solid #ccd6e3;
+  border-radius: 6px;
+}
+.alloc-newref .alloc-input { width: 64px; text-align: right; }

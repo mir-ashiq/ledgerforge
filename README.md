@@ -340,6 +340,65 @@ names that would silently reuse an unrelated ledger.
 Design: [ADR-012](docs/adr/012-payroll-pack.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Bill-wise & outstanding management (roadmap Phase 2, ADR-023)
+
+TallyPrime's party ledgers carry **bill-wise details** — every invoice opens
+a named bill, every receipt settles specific bills, and the receivables /
+payables position is bill-level. LedgerForge's answer is the bills pack
+(`ledgerforge/contrib/bills.py`), the fourth business pack, landing with
+**zero schema change** on the pattern proven by inventory and payroll:
+documents on `vouchers.meta`, outstanding positions as a deterministic fold.
+
+Allocations ride any voucher that moves a party ledger — a plain receipt, a
+`meta.invoice` document, an opening journal — as `meta.bills` refs, each a
+dr/cr allocation exactly like a ledger line (TallyPrime's bill-wise columns):
+
+```json
+{"bills": {"party": "Acme Traders", "refs": [
+  {"kind": "new",     "ref": "INV-42", "dr": "1180.00", "due_days": 30},
+  {"kind": "against", "ref": "INV-42", "cr": "500.00"},
+  {"kind": "on_account",             "cr": "50.00"}
+]}}
+```
+
+The pack never builds allocation lines (the existing packs and plain entry
+own the accounting); it validates a Law-1-shaped conservation invariant
+*after all transformers* — **Σ ref dr − Σ ref cr == the party's net movement
+on the voucher** — from which an induction gives the master theorem the tests
+assert against the trial balance: **Σ open bills + on-account == the party's
+ledger balance**, at every point in the book's history. Settlement is
+strictly toward zero (over-settlement is refused — the excess belongs in
+`on_account`, the TallyPrime flow); `against` must name a bill a prior
+document opened; duplicate open refs collide; payroll payables are out of
+scope by design.
+
+On top of the fold (plugin API 0.8: `Resolver.ledger_entries` for the
+statement, `PackReport.data` + `?format=json` for UIs):
+
+- **Bills receivable / bills payable** with ageing buckets (not due / 0–30 /
+  31–60 / 61–90 / 90+ by due date), on-account pools as their own rows — PDF
+  through the print bridge, CSV, JSON;
+- the **party ledger statement** — every entry with its voucher's bill
+  allocations alongside, opening balance to date, closing balance equal to
+  the trial-balance figure;
+- **interest on overdue bills** — rate resolution bill → party default →
+  request (`bills-interest` previews the exact arithmetic), and the
+  `interest_charge` document mode posts Dr party / Cr Interest Income as a
+  reviewable voucher that auto-opens a bill for its total — never a side
+  effect;
+- **the on-account / against-ref decision at entry time**: `Alt+L` on a party
+  line in the web voucher screen opens the allocation dialog (open bills,
+  amount cells, the remainder offered as on-account or a new ref); the
+  native form's *Allocate bills…* (Ctrl+L) does the same; and the web gains
+  the `Alt+I` **Outstanding screen** (receivable/payable, ageing columns,
+  party filter) while the native reports page carries all four report keys.
+
+Reversals net in the fold exactly as the mirrored entries netted in the
+ledger; books are strangers; idempotent replay allocates nothing twice.
+
+Design: [ADR-023](docs/adr/023-bill-wise-outstanding.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## Print bridge: payslips & tax invoices as PDF (ADR-013)
 
 Every posted voucher prints. `GET /api/v1/vouchers/{id}/pdf` offers the
@@ -678,12 +737,13 @@ src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (O
                     + roles + per-book claims) · reporting (reports, printing:
                     the PDF writer + layout engine) · seeding · plugins ·
                     contrib (example_gst and example_slot — the teaching
-                    modules — plus the gst, invoicing, inventory, payroll and
-                    statutory packs; the gst pack ships with irn_bridge, the
-                    out-of-process e-invoicing bridge)
+                    modules — plus the gst, invoicing, inventory, payroll,
+                    statutory and bills packs; the gst pack ships with
+                    irn_bridge, the out-of-process e-invoicing bridge)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
-                    web — the voucher-entry screen (with the print chip), command
-                    palette, payslip screen, daybook browser and sandboxed slot
+                    web — the voucher-entry screen (with the print chip and the
+                    bill-allocation dialog), command palette, payslip screen,
+                    daybook browser, outstandings screen and sandboxed slot
                     host (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
@@ -770,7 +830,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.19.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.20.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -819,12 +879,21 @@ the entry bar), reversal from the daybook (`Ctrl+R`, two-key confirm — Law
 lock, unlock, the close preview, the confirmed close), the `master.created`
 event the plugin guide always promised, FX line entry and F4–F9 type keys
 in the native window's voucher form, and `cryptography` as the direct
-dependency the trust gate always imported.
+dependency the trust gate always imported — and **v0.20, bill-wise &
+outstanding management (Phase 2 of the roadmap, ADR-023)**: bill references
+(new / against / on-account) on any party-moving voucher as the fourth
+plugin pack — zero schema change — with the conservation law that keeps
+Σ open bills + on-account equal to every party's ledger balance, bills
+receivable/payable with ageing buckets, the bill-linked party ledger
+statement, interest on overdue bills posted as reviewable vouchers, and
+the allocation decision at entry time (`Alt+L` in the web form, *Allocate
+bills…* in the native one) plus the web `Alt+I` outstandings screen.
 The planned roadmap is fully landed; the desktop edition followed it. What comes
 next is written down as a plan of record — **[ROADMAP.md](ROADMAP.md): eleven
 phases to v1.0, “everything an Indian SMB's daily accounting needs, on
 LedgerForge, without wishing for TallyPrime”** — Phase 1 landed in v0.19.0,
-and Phase 2 is bill-wise & outstanding management. Each phase tracks as a
+Phase 2 (bill-wise & outstanding) in v0.20.0, and Phase 3 is order
+processing. Each phase tracks as a
 GitHub milestone with a tracking issue:
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
@@ -885,6 +954,14 @@ GitHub milestone with a tracking issue:
       the web UI (Books screen, `X-Book-Id`), reversal from the daybook,
       the periods screen, `master.created`, FX line entry + F4–F9 in the
       native form, direct `cryptography` dependency, docs honest
+- [x] Bill-wise & outstanding management (v0.20, Phase 2, ADR-023):
+      bill references as the fourth plugin pack (zero schema change) with
+      the conservation law (bills + on-account == the party's ledger
+      balance, proven against the trial balance), bills receivable/payable
+      with ageing, the bill-linked ledger statement, interest on overdue
+      bills as reviewable vouchers, allocation dialogs in both UIs and the
+      web outstandings screen (plugin API 0.8: `ledger_entries`, JSON pack
+      reports)
 
 ## Contributing
 

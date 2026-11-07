@@ -15,8 +15,8 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useCommand, useFocusScope } from '@ledgerforge/keyboard-kit/react';
 import type { ContextPredicate } from '@ledgerforge/keyboard-kit';
 import { api, type CreateLedgerInput } from '../api/client';
-import type { GroupOut, LedgerOut, VoucherOut } from '../api/types';
-import { isZero, toCanonical } from '../money/exact';
+import type { BillRef, GroupOut, LedgerOut, VoucherOut } from '../api/types';
+import { add, isZero, parseAmount, sub, toCanonical, ZERO, type Exact } from '../money/exact';
 import {
   DEFAULT_TYPE_CODE,
   VOUCHER_TYPES,
@@ -29,13 +29,14 @@ import { rankEntries } from '../voucher/pickerFilter';
 import { computeTotals, isPristine, validateForPost } from '../voucher/validate';
 import { BalanceHud } from './BalanceHud';
 import { Banner, type Notice } from './Banner';
+import { BillAllocationDialog } from './BillAllocationDialog';
 import { ConfirmOverlay } from './ConfirmOverlay';
 import { DateDialog } from './DateDialog';
 import { LedgerCreateDialog } from './LedgerCreateDialog';
 import { VoucherGrid } from './VoucherGrid';
 
 type ApiState = 'loading' | 'ready' | 'error';
-type Dialog = 'date' | 'ledgerCreate' | 'confirmNew' | null;
+type Dialog = 'date' | 'ledgerCreate' | 'confirmNew' | 'billAlloc' | null;
 
 interface VoucherScreenProps {
   ledgers: readonly LedgerOut[];
@@ -79,6 +80,8 @@ export function VoucherScreen({
   const [announce, setAnnounce] = useState('');
   const [lastPosted, setLastPosted] = useState<VoucherOut | null>(null);
   const [printing, setPrinting] = useState(false);
+  /** The armed bill allocation (ADR-023): rides the next post as meta.bills. */
+  const [billAlloc, setBillAlloc] = useState<{ party: string; refs: BillRef[] } | null>(null);
   const postingRef = useRef(false);
   const printingRef = useRef(false);
   // read at keydown/run time — always fresh, never a stale closure
@@ -102,6 +105,32 @@ export function VoucherScreen({
     groups.find((g) => g.name === 'Suspense A/c' && !g.is_root)?.name ??
     groups.find((g) => !g.is_root)?.name ??
     '';
+
+  // --- bill-wise allocation (ADR-023): the cursor line's party, when it is one
+  const PARTY_GROUPS = ['Sundry Debtors', 'Sundry Creditors'];
+  const activeLedger = activeLine?.ledgerId !== null
+    ? ledgers.find((l) => l.id === activeLine?.ledgerId) ?? null
+    : null;
+  const activeParty =
+    activeLedger && PARTY_GROUPS.includes(activeLedger.group_name) ? activeLedger : null;
+  /** The party's signed net movement in the draft (Σ Dr − Σ Cr), exact — or
+   * null while any party line is unparsable (nothing to allocate yet). */
+  const partyNet = useMemo<Exact | null>(() => {
+    if (!activeParty) return null;
+    let net = ZERO;
+    for (const line of draft.lines) {
+      if (line.ledgerId !== activeParty.id) continue;
+      const dr = line.debit.trim();
+      const cr = line.credit.trim();
+      if (dr && cr) return null;
+      const raw = dr || cr;
+      if (!raw) continue;
+      const parsed = parseAmount(raw);
+      if (!parsed.ok) return null;
+      net = dr ? add(net, parsed.value) : sub(net, parsed.value);
+    }
+    return net;
+  }, [activeParty, draft.lines]);
 
   // --- focus management ------------------------------------------------------
   function focusCell(target: Cursor) {
@@ -134,6 +163,7 @@ export function VoucherScreen({
     pickerOpen: picker !== null,
     dialogOpen: dialog !== null,
     posting,
+    partyLine: activeParty !== null,
   };
 
   // the print flow's blob URL is revoked when this screen unmounts
@@ -280,6 +310,32 @@ export function VoucherScreen({
     (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx) && ctx.inLedgerCell === true,
   );
 
+  // bill-wise allocation (ADR-023): Alt+L with the cursor on a party line —
+  // the on-account / against-ref decision at entry time, TallyPrime-style
+  useCommand(
+    {
+      id: 'voucher.allocateBills',
+      title: 'Allocate to bills (Alt+L)',
+      run: () => {
+        if (!activeParty) {
+          const hint = 'The cursor line is not a party ledger (Sundry Debtors / Creditors)';
+          setNotice({ kind: 'info', text: hint });
+          setAnnounce(hint);
+          return;
+        }
+        if (!partyNet || isZero(partyNet)) {
+          const hint = `Enter ${activeParty.name}'s debit or credit first — the allocation follows the movement`;
+          setNotice({ kind: 'info', text: hint });
+          setAnnounce(hint);
+          return;
+        }
+        setDialog('billAlloc');
+      },
+    },
+    'Alt+L',
+    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx),
+  );
+
   useCommand(
     {
       id: 'voucher.print',
@@ -362,6 +418,7 @@ export function VoucherScreen({
         voucher_date: draft.date,
         client_token: draft.clientToken,
         entries: check.lines,
+        meta: billAlloc ? { bills: billAlloc } : undefined,
       });
       const message = out.replayed
         ? `Voucher ${out.voucher_no} was already posted — idempotent replay, nothing duplicated`
@@ -369,6 +426,7 @@ export function VoucherScreen({
       setNotice({ kind: 'ok', text: message });
       setAnnounce(message);
       setLastPosted(out);
+      setBillAlloc(null); // the allocation rode its voucher; the next starts clean
       dispatch({ type: 'newDraft' }); // same type & date: chain entries at speed
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Posting failed';
@@ -450,6 +508,16 @@ export function VoucherScreen({
           ))}
         </div>
         <span className="spacer" />
+        {billAlloc && (
+          <button
+            type="button"
+            className="date-chip"
+            onClick={() => setDialog('billAlloc')}
+            title="Edit the armed bill allocation"
+          >
+            Bills: {billAlloc.party} ({billAlloc.refs.length} ref{billAlloc.refs.length === 1 ? '' : 's'})
+          </button>
+        )}
         <button type="button" className="date-chip" onClick={() => setDialog('date')}>
           {draft.date} <kbd>F2</kbd>
         </button>
@@ -520,8 +588,25 @@ export function VoucherScreen({
           confirmLabel="Discard"
           onConfirm={() => {
             dispatch({ type: 'newDraft' });
+            setBillAlloc(null);
             setNotice(null);
             closeDialog();
+          }}
+          onCancel={closeDialog}
+        />
+      )}
+      {dialog === 'billAlloc' && activeParty && partyNet && (
+        <BillAllocationDialog
+          party={activeParty.name}
+          partyNet={partyNet}
+          onApply={(refs) => {
+            setBillAlloc({ party: activeParty.name, refs });
+            closeDialog();
+            const message =
+              `Bills armed for ${activeParty.name}: ` +
+              `${refs.length} ref${refs.length === 1 ? '' : 's'} — Ctrl+A posts the voucher with them`;
+            setNotice({ kind: 'ok', text: message });
+            setAnnounce(message);
           }}
           onCancel={closeDialog}
         />

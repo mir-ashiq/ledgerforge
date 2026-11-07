@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from .. import PLUGIN_API_VERSION
 from ..errors import ValidationError
-from ..models import Book, Group, Ledger, Voucher
+from ..models import Book, Group, Ledger, Voucher, VoucherEntry
 from .trust import (
     TrustError,
     TrustStore,
@@ -94,9 +94,7 @@ class SlotSpec:
 
     def validate(self) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", self.key):
-            raise ValueError(
-                f"slot key {self.key!r} must be a short lowercase slug (a-z, 0-9, -)"
-            )
+            raise ValueError(f"slot key {self.key!r} must be a short lowercase slug (a-z, 0-9, -)")
         if not self.title or len(self.title) > 120:
             raise ValueError(f"slot {self.key!r} needs a title (1-120 chars)")
         if (self.html is None) == (self.url is None):
@@ -276,11 +274,13 @@ class DocumentContext:
 
 @dataclass(frozen=True)
 class PackReport:
-    """A pack-computed, book-scoped report (API 0.6, ADR-014): either a
-    ``DocumentView`` — rendered to PDF by the shared print-bridge layout
-    engine, the same visual language as every printed document — or
-    pre-rendered ``csv`` text for machine consumption (a statutory
-    portal's upload format). Factories validate their own parameters and
+    """A pack-computed, book-scoped report (API 0.6, ADR-014; ``data`` added
+    by API 0.8, ADR-023): a ``DocumentView`` renders to PDF through the
+    shared print-bridge layout engine (the same visual language as every
+    printed document), ``csv`` is pre-rendered text for machine consumption
+    (a statutory portal's upload format), and ``data`` is a JSON payload —
+    the structured rows a UI consumes (``?format=json``), the same fold
+    the PDF renders from. Factories validate their own parameters and
     raise ``ValidationError`` for caller errors; the kernel stays
     report-blind exactly as it stays meta-blind."""
 
@@ -289,6 +289,7 @@ class PackReport:
     view: DocumentView | None = None
     csv: str | None = None
     media_type: str = "text/csv"
+    data: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,24 @@ class PriorDocument:
     voucher_no: str
     voucher_date: date
     reversal_of: int | None
+    meta: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class LedgerEntryLine:
+    """One posted ledger entry with its voucher's provenance (plugin API
+    0.8, ADR-023): the engine-side row a ledger statement folds — amount
+    and direction exactly as posted, the carrying voucher's number/date/
+    reversal link, and that voucher's ``meta`` so a pack can correlate its
+    own documents (bill links) with the accounting truth."""
+
+    voucher_id: int
+    voucher_no: str
+    voucher_date: date
+    reversal_of: int | None
+    dc: Literal["D", "C"]
+    amount: Decimal
+    narration: str | None
     meta: dict[str, Any]
 
 
@@ -393,6 +412,46 @@ class Resolver:
             )
         ]
         return sorted(carried + reversals, key=lambda d: d.voucher_id)
+
+    def ledger_entries(self, ledger_id: int) -> list[LedgerEntryLine]:
+        """Every posted entry of this book on one ledger, oldest first
+        (plugin API 0.8, ADR-023). The engine-side half of a ledger
+        statement: rows are returned exactly as posted (reversal vouchers
+        included as their own rows, ``reversal_of`` set — the caller decides
+        how to present them), with the carrying voucher's ``meta`` so a
+        pack can join its documents to the accounting lines. Book-scoped
+        like every Resolver read: a ledger of another book answers empty."""
+        ledger = self._session.get(Ledger, ledger_id)
+        if ledger is None or ledger.book_id != self._book.id:
+            return []
+        rows = self._session.execute(
+            select(
+                VoucherEntry.voucher_id,
+                Voucher.voucher_no,
+                Voucher.voucher_date,
+                Voucher.reversal_of,
+                VoucherEntry.dc,
+                VoucherEntry.amount,
+                VoucherEntry.narration,
+                Voucher.meta,
+            )
+            .join(Voucher, Voucher.id == VoucherEntry.voucher_id)
+            .where(VoucherEntry.ledger_id == ledger_id)
+            .order_by(Voucher.voucher_date, Voucher.id, VoucherEntry.line_no)
+        )
+        return [
+            LedgerEntryLine(
+                voucher_id=r.voucher_id,
+                voucher_no=r.voucher_no,
+                voucher_date=r.voucher_date,
+                reversal_of=r.reversal_of,
+                dc=r.dc,
+                amount=r.amount,
+                narration=r.narration,
+                meta=r.meta or {},
+            )
+            for r in rows
+        ]
 
     def lock(self, name: str) -> None:
         """Transaction-scoped advisory lock on ``name`` (API 0.3, ADR-011),
@@ -494,7 +553,9 @@ class PluginManager:
             try:
                 spec.validate()
             except ValueError as exc:
-                raise RuntimeError(f"Plugin {manifest.name} declares an invalid slot: {exc}") from exc
+                raise RuntimeError(
+                    f"Plugin {manifest.name} declares an invalid slot: {exc}"
+                ) from exc
             if any(
                 other.manifest.name != manifest.name
                 and any(s.key == spec.key for s in other.manifest.slots)

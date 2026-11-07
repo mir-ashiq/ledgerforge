@@ -33,7 +33,7 @@ export function BalanceHud({ lines }: { lines: readonly GridLine[] }) {
       </div>
       <div className="hud-keys" aria-hidden="true">
         Ctrl+A accept · Ctrl+Enter fill balance · Alt+C create ledger · Alt+D delete line ·
-        F2 date · Alt+N new · Ctrl+K keys
+        Alt+L bills · F2 date · Alt+N new · Ctrl+K keys
       </div>
     </footer>
   );

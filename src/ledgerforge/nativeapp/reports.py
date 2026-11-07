@@ -1,8 +1,10 @@
-"""Reports — Trial Balance, P&L, Balance Sheet, FY-close, and the GST pack.
+"""Reports — Trial Balance, P&L, Balance Sheet, FY-close, the GST pack,
+and the bills pack's outstanding book (ADR-023: receivable/payable with
+ageing, the party ledger statement, interest on overdue bills).
 
 Every report renders into a native tree/table and exports CSV through a real
-file dialog; the GSTR-1 pack (ADR-017) additionally saves its statutory PDF —
-bytes through the same print bridge the web edition uses, written to disk by
+file dialog; pack reports additionally save their statutory PDF — bytes
+through the same print bridge the web edition uses, written to disk by
 the native app, never handed to a browser.
 """
 
@@ -31,13 +33,28 @@ from .client import ApiClient
 from .models import TrialBalanceRow, money
 from .tasks import run
 
-#: report id -> (label, needs) where needs ∈ {"as_of", "range", "period"}
+#: report id -> (label, needs) where needs ∈ {"as_of", "range", "period",
+#: "party_range"}: as_of = one date; range = from/to; period = YYYY-MM;
+#: party_range = a party (required) + an optional from/to window (ADR-023).
 REPORTS: dict[str, tuple[str, str]] = {
     "trial-balance": ("Trial Balance", "as_of"),
     "profit-loss": ("Profit & Loss", "range"),
     "balance-sheet": ("Balance Sheet", "as_of"),
     "fy-close": ("FY Close Preview", "as_of"),
     "gstr1": ("GSTR-1 (GST pack)", "period"),
+    "bills-receivable": ("Bills Receivable (ageing)", "as_of"),
+    "bills-payable": ("Bills Payable (ageing)", "as_of"),
+    "ledger-statement": ("Party Ledger Statement", "party_range"),
+    "bills-interest": ("Interest on Overdue Bills", "as_of"),
+}
+
+#: the pack keys whose PDF view "Save PDF…" offers (the statutory print).
+PDF_PACKS = {
+    "gstr1",
+    "bills-receivable",
+    "bills-payable",
+    "ledger-statement",
+    "bills-interest",
 }
 
 
@@ -83,6 +100,12 @@ class ReportsPage(QWidget):
         bar.addWidget(self.period_label)
         bar.addWidget(self.period_edit)
 
+        self.party_label = QLabel("party")
+        self.party_edit = QLineEdit()
+        self.party_edit.setPlaceholderText("e.g. Acme Traders")
+        bar.addWidget(self.party_label)
+        bar.addWidget(self.party_edit)
+
         self.run_button = QPushButton("Run")
         self.run_button.clicked.connect(self.run_report)
         bar.addWidget(self.run_button)
@@ -121,11 +144,13 @@ class ReportsPage(QWidget):
         needs = REPORTS[self.report_box.currentData()][1]
         self.as_of_label.setVisible(needs == "as_of")
         self.as_of.setVisible(needs == "as_of")
-        self.range_label.setVisible(needs == "range")
-        self.date_from.setVisible(needs == "range")
-        self.date_to.setVisible(needs == "range")
+        self.range_label.setVisible(needs in ("range", "party_range"))
+        self.date_from.setVisible(needs in ("range", "party_range"))
+        self.date_to.setVisible(needs in ("range", "party_range"))
         self.period_label.setVisible(needs == "period")
         self.period_edit.setVisible(needs == "period")
+        self.party_label.setVisible(needs == "party_range")
+        self.party_edit.setVisible(needs == "party_range")
         self.pdf_button.setEnabled(False)
 
     # --------------------------------------------------------------- running
@@ -137,6 +162,10 @@ class ReportsPage(QWidget):
             "balance-sheet": self._load_balance_sheet,
             "fy-close": self._load_fy_close,
             "gstr1": self._load_gstr1,
+            "bills-receivable": self._load_bills,
+            "bills-payable": self._load_bills,
+            "ledger-statement": self._load_statement,
+            "bills-interest": self._load_interest,
         }
         try:
             loader = loaders[key]()
@@ -167,6 +196,32 @@ class ReportsPage(QWidget):
         if len(period) != 7 or period[4] != "-":
             raise ValueError("GSTR-1 needs a period like 2026-10 (YYYY-MM).")
         return lambda: self._client.pack("gstr1", period=period, format_="csv")
+
+    def _load_bills(self):
+        key = self.report_box.currentData()  # bills-receivable | bills-payable
+        as_of = self.as_of.date().toPython()
+        return lambda: self._client.pack(key, as_of=as_of.isoformat(), format_="csv")
+
+    def _load_statement(self):
+        party = self.party_edit.text().strip()
+        if not party:
+            raise ValueError("The ledger statement needs a party (ledger name).")
+        d_from = self.date_from.date().toPython()
+        d_to = self.date_to.date().toPython()
+
+        def fetch():
+            params = {"party": party, "format_": "csv"}
+            if d_from:
+                params["from"] = d_from.isoformat()
+            if d_to:
+                params["to"] = d_to.isoformat()
+            return self._client.pack("ledger-statement", **params)
+
+        return fetch
+
+    def _load_interest(self):
+        as_of = self.as_of.date().toPython()
+        return lambda: self._client.pack("bills-interest", as_of=as_of.isoformat(), format_="csv")
 
     # -------------------------------------------------------------- rendering
     def _render(self, payload: object) -> None:
@@ -323,16 +378,28 @@ class ReportsPage(QWidget):
         QMessageBox.information(self, "Export", f"Saved {target}")
 
     def _save_pack_pdf(self) -> None:
-        if self.report_box.currentData() != "gstr1":
+        key = self.report_box.currentData()
+        if key not in PDF_PACKS:
             return
-        period = self.period_edit.text().strip()
+        params = {}
+        if key == "gstr1":
+            period = self.period_edit.text().strip()
+            params = {"period": period}
+        elif key == "ledger-statement":
+            party = self.party_edit.text().strip()
+            if not party:
+                QMessageBox.warning(self, "Reports", "The ledger statement needs a party.")
+                return
+            params = {"party": party}
+        elif key in ("bills-receivable", "bills-payable", "bills-interest"):
+            params = {"as_of": self.as_of.date().toPython().isoformat()}
 
         def fetch():
-            return self._client.pack("gstr1", period=period)  # PDF, the statutory print
+            return self._client.pack(key, **params)  # PDF, the printed report
 
         run(
             fetch,
-            lambda result: self._write_pack(result[0], result[2] or "gstr1.pdf"),
+            lambda result: self._write_pack(result[0], result[2] or f"{key}.pdf"),
             self._failed,
         )
 
@@ -349,7 +416,7 @@ class ReportsPage(QWidget):
     def _failed(self, error: object) -> None:
         detail = getattr(error, "detail", str(error))
         if "No pack report registered" in detail:
-            detail += "\n\n(the gst plugin must be installed in this build)"
+            detail += "\n\n(the plugin providing this report must be installed in this build)"
         QMessageBox.critical(self, "Reports", f"Could not run the report:\n{detail}")
 
     def refresh(self) -> None:

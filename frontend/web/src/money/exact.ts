@@ -16,6 +16,9 @@ export interface Exact {
   scale: number;
 }
 
+/** Exact zero — the additive identity, as a shared constant. */
+export const ZERO: Exact = { neg: false, int: 0n, scale: 0 };
+
 export type ParseResult = { ok: true; value: Exact } | { ok: false; error: string };
 
 const PLAIN_DECIMAL = /^\d+(\.\d*)?$/;

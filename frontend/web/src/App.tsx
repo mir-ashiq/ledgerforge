@@ -14,6 +14,7 @@ import type { BookOut, GroupOut, LedgerOut } from './api/types';
 import { BooksScreen } from './components/BooksScreen';
 import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
+import { OutstandingsScreen } from './components/OutstandingsScreen';
 import { PayslipScreen } from './components/PayslipScreen';
 import { PeriodsScreen } from './components/PeriodsScreen';
 import { PluginsScreen } from './components/PluginsScreen';
@@ -21,7 +22,15 @@ import { SlotsScreen } from './components/SlotsScreen';
 import { VoucherScreen } from './components/VoucherScreen';
 import { localStorageKeymapStore } from './keymapStore';
 
-type Screen = 'voucher' | 'payslip' | 'daybook' | 'plugins' | 'slots' | 'books' | 'periods';
+type Screen =
+  | 'voucher'
+  | 'payslip'
+  | 'daybook'
+  | 'plugins'
+  | 'slots'
+  | 'books'
+  | 'periods'
+  | 'outstandings';
 
 /** Where the remembered book id lives between launches. */
 const ACTIVE_BOOK_KEY = 'lf.activeBook';
@@ -145,6 +154,15 @@ export default function App() {
     },
     'Alt+E',
   );
+  // the outstandings screen (Phase 2 / ADR-023): Alt+I opens, Esc is back
+  useCommand(
+    {
+      id: 'outstandings.open',
+      title: 'Outstanding — bills receivable/payable with ageing',
+      run: () => setScreen('outstandings'),
+    },
+    'Alt+I',
+  );
 
   return (
     <>
@@ -173,6 +191,8 @@ export default function App() {
         />
       ) : screen === 'periods' ? (
         <PeriodsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : screen === 'outstandings' ? (
+        <OutstandingsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : (
         <SlotsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}
