@@ -191,3 +191,28 @@ its `.sig` (sample entry). Web: `components/PluginsScreen.tsx` (`Alt+X`),
 (25 tests: keygen→sign→verify, tamper/relabel/stranger-key refusal,
 execution-before-gate, ack pinning and voiding, duplicates, future API,
 index install paths, the committed sample entry, the CLI, the API).
+
+## Addendum (v0.16): rotation is tooled, not manual
+
+The accepted cost above — "rotation means re-signing entries and a PR"
+by hand — became a hazard worth closing once the index was real:
+hand-editing signature fields invites exactly the relabel attacks the
+scheme exists to refuse. Two CLI commands land the runbook
+(`community/plugins/README.md`):
+
+- **`ledgerforge plugins verify-index`** audits every entry against its
+  artifact (sha256, signature, static manifest facts, API floor) — the
+  pre-flight before *and* after any change to the index, and a general
+  integrity report for operators mirroring it.
+- **`ledgerforge plugins rotate-curator --new-key … --old-key …`**
+  re-signs every entry onto the successor key after verifying each
+  existing signature. The `sha256` claims cannot move (rotation is a
+  re-attestation of the same bytes and facts, never a republish), a
+  failing entry aborts the whole rewrite, and `--old-key` refuses a
+  mixed-key index instead of adopting a stranger's entry.
+
+The trust model is unchanged: index format stays 1, the signature
+scheme stays Ed25519, and operators' trust stores keep naming the same
+identities. What changes is only that the single-curator-key risk now
+has a mechanical, auditable retirement path. Exercised by five new
+tests in `tests/test_plugin_trust.py` (30 total).

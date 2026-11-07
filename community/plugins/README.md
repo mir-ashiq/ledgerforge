@@ -51,3 +51,38 @@ signed by the repository curator's key (fingerprint
 repository. Third-party entries must be signed by *their author's* key —
 the index records whose key vouches for which release, so an operator's
 trust store always names a real identity, not "the index".
+
+## Curator key rotation (the runbook)
+
+ADR-016 accepted a single curator key at index format 1 with manual
+rotation; v0.16 tools the rotation so it is safe and boring. Rotation is
+a **re-attestation, never a republish**: every existing signature is
+verified before anything is rewritten, the `sha256` claims cannot move,
+and the result must audit clean.
+
+1. **Generate the successor key** on the curator's machine:
+   `ledgerforge plugins keygen --out curator-2027` (private key never
+   leaves that machine).
+2. **Audit the index as it stands**:
+   `ledgerforge plugins verify-index` — a rotation never starts from a
+   broken index.
+3. **Re-sign every entry**:
+   `ledgerforge plugins rotate-curator --new-key curator-2027/publisher_ed25519.pem \
+      --old-key <current-key>.pem`
+   `--old-key` is the tripwire: any entry *not* signed by the retiring
+   key is refused (a mixed-key index must be resolved by hand, not
+   silently adopted). The command verifies each old signature first and
+   rewrites nothing if any entry fails.
+4. **Prove the result**: `ledgerforge plugins verify-index` again, then
+   commit the re-signed `index.json` and open the PR — reviewers diff
+   `publisher_key`/`signature` lines and nothing else.
+5. **Announce the retirement** of the old fingerprint. Operators holding
+   the old key in `.trust.json` keep their existing installs working;
+   the next release of a plugin they follow asks for one re-approval
+   (`ledgerforge plugins install <name>`), which lands the new key.
+6. **Destroy the old private key** once the PR is merged and mirrored
+   everywhere the index is published.
+
+Third-party authors rotate their own keys the same way, entry by entry:
+sign the release with the new key, publish the new `publisher_key` +
+`signature` in the entry, and note the change in the PR.

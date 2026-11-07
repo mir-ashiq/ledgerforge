@@ -617,3 +617,163 @@ def test_cli_ack_pins_a_reviewed_plugin(tmp_path):
     mgr.discover(extra_path=str(tmp_path))
     record = next(r for r in mgr.plugins if r.manifest.name == "hometown-pack")
     assert record.trust == "acknowledged"
+
+
+# ---------------------------------------------- curator key rotation (ADR-016)
+
+# Rotation is a re-attestation, never a republish: every old signature is
+# verified first, the entry digests cannot move, and a mixed-key index is
+# refused when --old-key pins the identity being retired.
+
+
+def test_cli_verify_index_accepts_the_committed_sample(capsys):
+    """The repo's own curated index audits clean against its artifact."""
+    sample = REPO_ROOT / "community" / "plugins" / "index.json"
+    assert cli(["plugins", "verify-index", "--file", str(sample)]) == 0
+    assert "1/1 entries verified" in capsys.readouterr().out
+
+
+def test_cli_verify_index_reports_every_failure(tmp_path, publisher, capsys):
+    private_pem, public_b64 = publisher
+    _write_plugin(tmp_path, "good", name="good-pack")
+    _write_plugin(tmp_path, "bad", name="bad-pack")
+    good_index = _mini_index(
+        tmp_path, "good", private_pem=private_pem, public_b64=public_b64, name="good-pack"
+    )
+    good_entry = json.loads(good_index.read_text())["plugins"][0]
+    bad_index = _mini_index(
+        tmp_path, "bad", private_pem=private_pem, public_b64=public_b64, name="bad-pack"
+    )
+    bad_entry = json.loads(bad_index.read_text())["plugins"][0]
+    bad_entry["sha256"] = "0" * 64  # the bytes on disk no longer match the claim
+    index = {"index_version": 1, "updated": "2026-11-07", "plugins": [good_entry, bad_entry]}
+    (tmp_path / "index.json").write_text(json.dumps(index))
+
+    assert cli(["plugins", "verify-index", "--file", str(tmp_path / "index.json")]) == 1
+    out = capsys.readouterr().out
+    assert "ok       good-pack" in out
+    assert "INVALID  bad-pack" in out
+    assert "1/2 entries verified" in out
+
+
+def test_cli_rotate_curator_re_signs_every_entry(tmp_path, publisher, capsys):
+    old_pem, old_public = publisher
+    new_pem, new_public = generate_publisher_keypair()
+    _write_plugin(tmp_path, "demo", name="demo-pack")
+    index_path = _mini_index(
+        tmp_path, "demo", private_pem=old_pem, public_b64=old_public, name="demo-pack"
+    )
+    (tmp_path / "old.pem").write_text(old_pem)
+    (tmp_path / "new.pem").write_text(new_pem)
+    old_entry = json.loads(index_path.read_text())["plugins"][0]
+
+    assert (
+        cli(
+            [
+                "plugins",
+                "rotate-curator",
+                "--new-key",
+                str(tmp_path / "new.pem"),
+                "--old-key",
+                str(tmp_path / "old.pem"),
+                "--file",
+                str(index_path),
+            ]
+        )
+        == 0
+    )
+    entry = json.loads(index_path.read_text())["plugins"][0]
+
+    # the claim re-signed onto the new key, same bytes, same facts
+    assert entry["publisher_key"] == new_public
+    assert entry["sha256"] == old_entry["sha256"]
+    artifact = (tmp_path / "demo.py").read_bytes()
+    facts = verify_signature(
+        {
+            "scheme": "ed25519",
+            "name": entry["name"],
+            "version": entry["version"],
+            "api_compat": entry["api_compat"],
+            "sha256": entry["sha256"],
+            "public_key": entry["publisher_key"],
+            "signature": entry["signature"],
+        },
+        artifact,
+    )
+    assert (facts.name, facts.version, facts.api_compat) == ("demo-pack", "0.1.0", "0.2")
+
+    # the rotated index audits clean, and the report says what happened
+    assert cli(["plugins", "verify-index", "--file", str(index_path)]) == 0
+    assert "rotated 1 entries" in capsys.readouterr().out
+
+
+def test_cli_rotate_curator_refuses_broken_entries(tmp_path, publisher, capsys):
+    """A rotation never launders an entry whose old signature fails."""
+    old_pem, old_public = publisher
+    new_pem, _ = generate_publisher_keypair()
+    _write_plugin(tmp_path, "broken", name="broken-pack")
+    index_path = _mini_index(
+        tmp_path, "broken", private_pem=old_pem, public_b64=old_public, name="broken-pack"
+    )
+    tampered = json.loads(index_path.read_text())
+    tampered["plugins"][0]["sha256"] = "0" * 64  # artifact no longer matches
+    index_path.write_text(json.dumps(tampered))
+    (tmp_path / "new.pem").write_text(new_pem)
+    before = index_path.read_text()
+
+    assert (
+        cli(
+            [
+                "plugins",
+                "rotate-curator",
+                "--new-key",
+                str(tmp_path / "new.pem"),
+                "--file",
+                str(index_path),
+            ]
+        )
+        == 1
+    )
+    assert index_path.read_text() == before  # nothing rewritten on failure
+    assert "does not verify" in capsys.readouterr().err
+
+
+def test_cli_rotate_curator_refuses_mixed_key_index(tmp_path, publisher):
+    """--old-key pins the identity being retired; an entry signed by a
+    stranger is refused instead of silently adopted by the rotation."""
+    old_pem, old_public = publisher
+    stranger_pem, stranger_public = generate_publisher_keypair()
+    new_pem, _ = generate_publisher_keypair()
+    _write_plugin(tmp_path, "one", name="pack-one")
+    _write_plugin(tmp_path, "two", name="pack-two")
+    mine = _mini_index(tmp_path, "one", private_pem=old_pem, public_b64=old_public, name="pack-one")
+    theirs = _mini_index(
+        tmp_path, "two", private_pem=stranger_pem, public_b64=stranger_public, name="pack-two"
+    )
+    plugins = [
+        json.loads(mine.read_text())["plugins"][0],
+        json.loads(theirs.read_text())["plugins"][0],
+    ]
+    index_path = tmp_path / "index.json"
+    combined = {"index_version": 1, "updated": "2026-11-07", "plugins": plugins}
+    index_path.write_text(json.dumps(combined))
+    (tmp_path / "old.pem").write_text(old_pem)
+    (tmp_path / "new.pem").write_text(new_pem)
+    before = index_path.read_text()
+
+    assert (
+        cli(
+            [
+                "plugins",
+                "rotate-curator",
+                "--new-key",
+                str(tmp_path / "new.pem"),
+                "--old-key",
+                str(tmp_path / "old.pem"),
+                "--file",
+                str(index_path),
+            ]
+        )
+        == 1
+    )
+    assert index_path.read_text() == before

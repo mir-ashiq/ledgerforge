@@ -4,8 +4,10 @@
 
 - authors: ``keygen`` (publisher identity) and ``sign`` (a detached
   Ed25519 signature over one release's facts + artifact bytes);
-- the index: ``index`` (list the community index) and ``install``
-  (fetch, verify, and land a community plugin in a drop-in directory);
+- the index: ``index`` (list the community index), ``install``
+  (fetch, verify, and land a community plugin in a drop-in directory),
+  ``verify-index`` (audit every entry against its artifact) and
+  ``rotate-curator`` (re-sign the index onto a fresh curator key);
 - operators: ``list`` (what would load, and why) and ``ack`` (pin a
   reviewed local plugin's exact bytes into the trust store).
 """
@@ -15,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,8 @@ from .plugins.trust import (
     TrustStore,
     fingerprint,
     generate_publisher_keypair,
+    load_private_key,
+    public_key_b64,
     sha256_hex,
     sign_artifact,
     static_manifest_facts,
@@ -172,6 +177,125 @@ def cmd_index(args: argparse.Namespace) -> int:
         print(
             f"  author {entry.get('author', '?')} · publisher {fingerprint(entry['publisher_key'])}"
         )
+    return 0
+
+
+def cmd_verify_index(args: argparse.Namespace) -> int:
+    """Audit the whole index in one pass: every entry's artifact must match
+    the sha256 the curator vouches for, the signature must verify, the
+    facts must match the artifact's static manifest, and the plugin API
+    floor must hold. The pre-flight check before and after a key rotation,
+    and a general integrity report for operators mirroring an index."""
+    index, base = _load_index(args.file)
+    entries = index.get("plugins", [])
+    failures = 0
+    for entry in entries:
+        where = f"{entry.get('name', '?')} {entry.get('version', '?')}"
+        try:
+            artifact = _fetch_artifact(base, entry["artifact"])
+            if sha256_hex(artifact) != entry["sha256"]:
+                raise TrustError("artifact bytes do not match the index's sha256")
+            facts = verify_signature(_entry_signature_doc(entry), artifact)
+            static = static_manifest_facts_bytes(artifact)
+            if static != {
+                "name": facts.name,
+                "version": facts.version,
+                "api_compat": facts.api_compat,
+            }:
+                raise TrustError(
+                    f"artifact declares {static}, the index entry pins "
+                    f"{facts.name} {facts.version} (API {facts.api_compat})"
+                )
+            if not _api_compatible(facts.api_compat):
+                raise TrustError(
+                    f"targets plugin API {facts.api_compat}; this build "
+                    f"supports {PLUGIN_API_VERSION}"
+                )
+        except Exception as exc:  # noqa: BLE001 — any failure is one report line
+            failures += 1
+            print(f"INVALID  {where} — {exc}")
+        else:
+            print(f"ok       {where}  publisher {fingerprint(facts.public_key)}")
+    total = len(entries)
+    verdict = "" if failures else " — index is consistent"
+    print(f"\n{total - failures}/{total} entries verified{verdict}")
+    return 1 if failures else 0
+
+
+def cmd_rotate_curator(args: argparse.Namespace) -> int:
+    """Re-sign every index entry onto a fresh curator key (ADR-016's
+    rotation runbook, tooled). The old signatures are verified first — a
+    rotation is a re-attestation, never an opportunity to smuggle in
+    bytes or facts the old key did not vouch for. Entry digests never
+    change: rotation re-signs the same claims, it does not republish."""
+    index, base = _load_index(args.file)
+    new_private_pem = Path(args.new_key).read_text()
+    try:
+        new_public = public_key_b64(load_private_key(new_private_pem).public_key())
+    except (TrustError, ValueError, TypeError) as exc:
+        raise SystemExit(f"error: --new-key is not a usable Ed25519 private key: {exc}") from exc
+
+    old_public: str | None = None
+    if args.old_key:
+        try:
+            old_public = public_key_b64(
+                load_private_key(Path(args.old_key).read_text()).public_key()
+            )
+        except (TrustError, ValueError, TypeError) as exc:
+            raise SystemExit(
+                f"error: --old-key is not a usable Ed25519 private key: {exc}"
+            ) from exc
+
+    problems: list[str] = []
+    for entry in index.get("plugins", []):
+        name = entry.get("name", "?")
+        try:
+            artifact = _fetch_artifact(base, entry["artifact"])
+            facts = verify_signature(_entry_signature_doc(entry), artifact)
+        except Exception as exc:  # noqa: BLE001 — report, never half-rotate
+            problems.append(f"{name}: the existing signature does not verify — {exc}")
+            continue
+        if old_public is not None and entry.get("publisher_key") != old_public:
+            problems.append(
+                f"{name}: signed by a different key than --old-key "
+                "(mixed-key index?) — refusing to rotate it blind"
+            )
+            continue
+        fresh = sign_artifact(
+            new_private_pem,
+            name=facts.name,
+            version=facts.version,
+            api_compat=facts.api_compat,
+            artifact=artifact,  # same bytes: the digest in the claim cannot move
+        )
+        entry["publisher_key"] = fresh["public_key"]
+        entry["signature"] = fresh["signature"]
+
+    if problems:
+        for problem in problems:
+            print(f"error: {problem}", file=sys.stderr)
+        print("index NOT rewritten — fix or drop the failing entries, then re-run", file=sys.stderr)
+        return 1
+
+    index["updated"] = datetime.now(UTC).date().isoformat()
+    if args.file.startswith(("http://", "https://")) and not args.out:
+        raise SystemExit(
+            "error: rotating a remote index requires --out (write locally, review, then publish)"
+        )
+    out_path = Path(args.out) if args.out else Path(args.file)
+    out_path.write_text(json.dumps(index, indent=2) + "\n")
+
+    count = len(index.get("plugins", []))
+    print(f"rotated {count} entries onto curator key {fingerprint(new_public)}")
+    print(f"wrote {out_path}")
+    print("\nnext steps (the runbook, community/plugins/README.md):")
+    print("  1. `ledgerforge plugins verify-index --file <index>` — prove the result")
+    print("  2. commit the re-signed index and open the PR; fresh installs now")
+    print("     approve the new key automatically")
+    print("  3. announce the old fingerprint as retired — operators holding it")
+    print("     keep their existing installs; the next release of a plugin asks")
+    print("     for one re-approval (`ledgerforge plugins install <name>`)")
+    print("  4. destroy the old private key once the PR is everywhere")
     return 0
 
 
@@ -416,6 +540,28 @@ def main(argv: list[str] | None = None) -> int:
     p = psub.add_parser("index", help="list the community plugin index")
     p.add_argument("--file", default=str(DEFAULT_INDEX), help="index path or URL")
     p.set_defaults(fn=cmd_index)
+
+    p = psub.add_parser(
+        "verify-index",
+        help="audit every entry in an index against its artifact (curator pre-flight)",
+    )
+    p.add_argument("--file", default=str(DEFAULT_INDEX), help="index path or URL")
+    p.set_defaults(fn=cmd_verify_index)
+
+    p = psub.add_parser(
+        "rotate-curator",
+        help="re-sign the index onto a fresh curator key (verifies every old "
+        "signature first; runbook in community/plugins/README.md)",
+    )
+    p.add_argument("--new-key", required=True, help="the NEW curator private key (PEM)")
+    p.add_argument(
+        "--old-key",
+        help="the OLD curator private key (PEM); when given, every entry must "
+        "carry its public half — a mixed-key index is refused",
+    )
+    p.add_argument("--file", default=str(DEFAULT_INDEX), help="index path or URL")
+    p.add_argument("--out", help="output path (default: rewrite --file; required for URLs)")
+    p.set_defaults(fn=cmd_rotate_curator)
 
     p = psub.add_parser("install", help="install a plugin from the community index")
     p.add_argument("name", help="plugin name in the index")
