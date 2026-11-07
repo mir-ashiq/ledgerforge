@@ -76,6 +76,16 @@ export interface CreateLedgerInput {
   group_name: string;
 }
 
+/** Optional browse filters for the voucher list (the daybook, ADR-015). */
+export interface VoucherQuery {
+  /** Voucher type code (`SAL`, `PYT`…); empty = all types. */
+  type?: string;
+  /** Inclusive `YYYY-MM-DD` bounds on the voucher date. */
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
 export const api = {
   ledgers: () => request<LedgerOut[]>('/ledgers'),
   groups: () => request<GroupOut[]>('/groups'),
@@ -83,8 +93,16 @@ export const api = {
     request<LedgerOut>('/ledgers', { method: 'POST', body: JSON.stringify(input) }),
   postVoucher: (payload: VoucherPostPayload) =>
     request<VoucherOut>('/vouchers', { method: 'POST', body: JSON.stringify(payload) }),
-  /** Posted vouchers, newest first (the payslip screen filters payroll runs). */
-  vouchers: (limit = 200) => request<VoucherOut[]>(`/vouchers?limit=${limit}`),
+  /** Posted vouchers, newest first — the payslip screen filters payroll runs
+   * from the bare list; the daybook passes the browse filters (ADR-015). */
+  vouchers: (query: VoucherQuery = {}) => {
+    const params = new URLSearchParams();
+    if (query.type) params.set('type', query.type);
+    if (query.from) params.set('date_from', query.from);
+    if (query.to) params.set('date_to', query.to);
+    params.set('limit', String(query.limit ?? 200));
+    return request<VoucherOut[]>(`/vouchers?${params.toString()}`);
+  },
   /** A voucher as its PDF (ADR-013): payslip for payroll runs with
    * `employee`, tax invoice for invoices, voucher slip otherwise — every
    * posting voucher prints, whatever carried it. */

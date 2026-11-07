@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, Response
@@ -44,12 +45,16 @@ def _voucher_out(session: Session, voucher: Voucher, *, replayed: bool = False) 
     ).all()
     ledger_names = {row.id: row.name for row in ledger_rows}
     vtype = session.get(VoucherType, voucher.voucher_type_id)
+    # the daybook's amount column (ADR-015): the debit-side total, engine-
+    # computed and quantized to cents — the client never sums (Law 3)
+    debit_total = sum((e.amount for e in entries if e.dc == "D"), Decimal("0"))
     return VoucherOut(
         id=voucher.id,
         uuid=voucher.uuid,
         voucher_no=voucher.voucher_no,
         voucher_type=vtype.code if vtype else "",
         voucher_date=voucher.voucher_date,
+        amount=debit_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         narration=voucher.narration,
         reversal_of=voucher.reversal_of,
         posted_at=voucher.posted_at,

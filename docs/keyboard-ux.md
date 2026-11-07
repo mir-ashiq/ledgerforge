@@ -112,6 +112,15 @@ Screens `push`/`pop` scopes; `Esc` pops the top; arrow keys move roving focus wi
 | `Ctrl+P` | `report.print` | report view |
 | `Ctrl+K` | `palette.toggle` | always |
 | `Alt+N` | `voucher.new` | gateway |
+| `Alt+P` | `payslip.open` | gateway (ADR-013) |
+| `Alt+B` | `daybook.open` | gateway (ADR-015) |
+| `↑`/`↓`, `k`/`j` | `daybook.up` / `daybook.down` | daybookScreen, filters unfocused |
+| `Enter`, `Ctrl+P` | `daybook.print` | daybookScreen, filters unfocused |
+
+The daybook browser (ADR-015) follows the same contract as the payslip
+screen: `Esc` pops back to entry, its commands are palette-visible and
+user-rebindable, and its list keys go inert while a filter control has
+focus so native keys (date pickers, selects) keep working.
 
 Users rebind with `keymap.set('voucher.accept', 'Ctrl+S')`; the setting persists and the palette/help always reflects the live map.
 

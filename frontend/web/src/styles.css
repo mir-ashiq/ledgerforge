@@ -468,3 +468,213 @@ body {
 .payslip-note { color: #52607a; font-size: 13px; margin: 0; }
 .payslip-note.bad { color: var(--bad); }
 .payslip-note code { font-family: var(--mono); font-size: 12px; }
+
+/* ---- daybook screen (ADR-015) ------------------------------------------------------ */
+
+.daybook-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 14px;
+  padding: 14px 16px;
+}
+
+.daybook-list-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.daybook-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  background: #fff;
+  border: 1px solid var(--grid-line);
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+.daybook-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #4a5568;
+}
+
+.daybook-filters select,
+.daybook-filters input {
+  font: inherit;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink);
+  border: 1px solid #b9c2cf;
+  border-radius: 4px;
+  padding: 5px 7px;
+  background: #fff;
+}
+.daybook-filters select { min-width: 110px; }
+.daybook-filters input[type='date'] { min-width: 140px; }
+.daybook-filters input[type='search'] { min-width: 180px; }
+.daybook-filters select:focus,
+.daybook-filters input:focus { outline: none; box-shadow: 0 0 0 2px var(--focus); }
+
+.daybook-find { flex: 1; min-width: 160px; }
+
+.daybook-reload {
+  font: inherit;
+  border: 1px solid #b9c2cf;
+  border-radius: 4px;
+  background: #fff;
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.daybook-reload:hover { background: #eef1f5; }
+
+.daybook-count {
+  margin-left: auto;
+  align-self: center;
+  font-size: 12px;
+  color: #52607a;
+}
+
+.daybook-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--grid-line);
+  border-radius: 6px;
+}
+
+.daybook-row {
+  display: grid;
+  grid-template-columns: 92px 148px 78px minmax(0, 1fr) 108px 84px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 12px;
+  border-bottom: 1px solid #eef1f5;
+  font-size: 13px;
+  cursor: pointer;
+}
+.daybook-row:last-child { border-bottom: 0; }
+
+.daybook-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef1f5;
+  border-bottom: 1px solid var(--grid-line);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #52607a;
+  cursor: default;
+}
+
+.daybook-row.on {
+  background: #e7edfb;
+  box-shadow: inset 3px 0 0 var(--bar);
+}
+.daybook-row:not(.daybook-head):not(.on):hover { background: #f6f8fc; }
+
+.daybook-row .num { text-align: right; }
+.daybook-row .mono { font-family: var(--mono); }
+
+.daybook-narr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #344055;
+}
+
+.daybook-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.daybook-chip {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #1d4188;
+  background: #e7edfb;
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+.daybook-chip.rev { color: var(--bad); background: #fbe9e7; }
+
+.daybook-detail {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.daybook-detail .payslip-note { padding: 0 2px; }
+.daybook-detail > .payslip-note { padding: 10px 2px; }
+
+.daybook-card { display: flex; flex-direction: column; }
+.daybook-narration {
+  margin: 0;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: #344055;
+  border-bottom: 1px solid #e9edf2;
+}
+
+.daybook-entries {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.daybook-entries th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8a94a6;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--grid-line);
+  background: #fafbfc;
+}
+.daybook-entries td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #eef1f5;
+}
+.daybook-entries .num { text-align: right; }
+.daybook-entries .mono { font-family: var(--mono); }
+.daybook-entries tr:last-child td { border-bottom: 0; }
+
+.daybook-print { margin: 12px 16px; }
+
+.daybook-hud {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 5px 16px;
+  border-top: 1px solid var(--grid-line);
+  background: #eef1f5;
+  font-size: 12px;
+  color: #52607a;
+}
+.daybook-hud kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: #fff;
+  border: 1px solid #c4ccd8;
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin: 0 1px;
+}
+
+@media (max-width: 980px) {
+  .daybook-body { grid-template-columns: 1fr; overflow-y: auto; }
+  .daybook-list { max-height: 46vh; }
+}

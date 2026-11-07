@@ -255,6 +255,14 @@ class VoucherOut(BaseModel):
     voucher_no: str
     voucher_type: str
     voucher_date: date
+    amount: AmountOut = Field(
+        default=Decimal("0.00"),
+        description=(
+            "the voucher's debit-side total in book currency, quantized to cents"
+            " by the engine — the daybook's amount column (ADR-015). A string,"
+            " so the client never sums (Law 3)."
+        ),
+    )
     narration: str | None
     reversal_of: int | None
     posted_at: datetime

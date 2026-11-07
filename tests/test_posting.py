@@ -40,6 +40,27 @@ def test_post_and_read_back(client, fresh_db):
     assert len(fetched["entries"]) == 2
 
 
+def test_voucher_amount_is_engine_computed(client, fresh_db):
+    """The daybook's amount column (ADR-015): every VoucherOut carries the
+    debit-side total, quantized to cents by the engine — the client never
+    sums (Law 3). Storage keeps 8 decimals; the field shows cents."""
+    create_ledger(client, "Amount Sales", "Sales Accounts")
+    r = post_voucher(
+        client,
+        narration="split sale",
+        entries=[
+            {"ledger_name": "Cash", "dc": "D", "amount": "1250.50"},
+            {"ledger_name": "Amount Sales", "dc": "C", "amount": "1000.00"},
+            {"ledger_name": "Amount Sales", "dc": "C", "amount": "250.50"},
+        ],
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["amount"] == "1250.50"
+
+    listed = client.get("/api/v1/vouchers?limit=10").json()
+    assert [v["amount"] for v in listed if v["id"] == r.json()["id"]] == ["1250.50"]
+
+
 def test_idempotent_replay_returns_original(client, fresh_db):
     create_ledger(client, "Replay Sales", "Sales Accounts")
     token = uuid4()

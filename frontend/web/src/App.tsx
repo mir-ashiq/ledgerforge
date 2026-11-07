@@ -1,7 +1,8 @@
 /**
  * Application root: owns the keymap lifecycle (with user-binding persistence),
  * the prefetched masters (ledger + group indexes), screen switching and the
- * command palette. Screens: VoucherScreen (entry) and PayslipScreen (ADR-013).
+ * command palette. Screens: VoucherScreen (entry), PayslipScreen (ADR-013)
+ * and DaybookScreen (ADR-015).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -9,11 +10,12 @@ import { keymap, useCommand } from '@ledgerforge/keyboard-kit/react';
 import { api } from './api/client';
 import type { GroupOut, LedgerOut } from './api/types';
 import { CommandPalette } from './components/CommandPalette';
+import { DaybookScreen } from './components/DaybookScreen';
 import { PayslipScreen } from './components/PayslipScreen';
 import { VoucherScreen } from './components/VoucherScreen';
 import { localStorageKeymapStore } from './keymapStore';
 
-type Screen = 'voucher' | 'payslip';
+type Screen = 'voucher' | 'payslip' | 'daybook';
 
 export default function App() {
   const [ledgers, setLedgers] = useState<LedgerOut[]>([]);
@@ -63,6 +65,11 @@ export default function App() {
     { id: 'payslip.open', title: 'Payslips — view & print salary slips', run: () => setScreen('payslip') },
     'Alt+P',
   );
+  // the daybook browser (ADR-015): Alt+B opens, Esc is back
+  useCommand(
+    { id: 'daybook.open', title: 'Daybook — browse & reprint posted vouchers', run: () => setScreen('daybook') },
+    'Alt+B',
+  );
 
   return (
     <>
@@ -75,8 +82,10 @@ export default function App() {
           onLedgerCreated={(ledger) => setLedgers((prev) => [...prev, ledger])}
           ctxRef={ctxRef}
         />
-      ) : (
+      ) : screen === 'payslip' ? (
         <PayslipScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : (
+        <DaybookScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} ctxRef={paletteCtxRef} />}
     </>

@@ -43,6 +43,10 @@ export interface VoucherOut {
   voucher_no: string;
   voucher_type: string;
   voucher_date: string;
+  /** The debit-side total in book currency, engine-computed and quantized
+   * to cents — the daybook's amount column (ADR-015). A string: the client
+   * never sums (Law 3). */
+  amount: string;
   narration: string | null;
   reversal_of: number | null;
   posted_at: string;

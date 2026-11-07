@@ -31,6 +31,7 @@ function voucher(id: number, meta: Record<string, unknown> | null): VoucherOut {
     voucher_no: `JV-2026-27-0000${id}`,
     voucher_type: 'JV',
     voucher_date: '2026-11-07',
+    amount: '50000.00',
     narration: null,
     reversal_of: null,
     posted_at: '2026-11-07T10:00:00Z',
