@@ -125,6 +125,19 @@ beforeEach(() => {
     if (url.endsWith('/api/v1/ledgers') && method === 'GET') return jsonResponse(LEDGERS);
     if (url.endsWith('/api/v1/groups')) return jsonResponse(GROUPS);
     if (url.startsWith('/api/v1/vouchers?')) return jsonResponse(VOUCHERS);
+    if (url.includes('/api/v1/vouchers/') && url.includes('/reverse')) {
+      const id = Number(url.split('/vouchers/')[1]?.split('/')[0]);
+      const original = VOUCHERS.find((v) => v.id === id)!;
+      return jsonResponse(
+        voucher(id + 100, {
+          voucher_no: `${original.voucher_no}R`,
+          voucher_type: original.voucher_type,
+          amount: original.amount,
+          reversal_of: id,
+        }),
+        201,
+      );
+    }
     if (url.includes('/api/v1/vouchers/') && url.includes('/pdf')) return blobResponse();
     throw new Error(`unmocked ${method} ${url}`);
   }) as typeof fetch;
@@ -313,5 +326,68 @@ describe('daybook screen — acceptance (ADR-015)', () => {
         ),
       ).toBe(true),
     );
+  });
+});
+
+describe('daybook screen — reversal from the UI (Phase 1, Law 2)', () => {
+  it('Ctrl+R posts the mirrored reversal after a two-key confirm', async () => {
+    const { user } = await setup();
+    await openDaybook(user);
+    expect(selectedRow().textContent).toContain('SAL-2026-27-00007');
+
+    await user.keyboard('{Control>}r{/Control}');
+    // the confirm states exactly what will happen: the pair nets to zero
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent(/Reverse SAL-2026-27-00007/);
+    expect(dialog).toHaveTextContent(/nets to exactly zero/);
+
+    const listCallsBefore = calls.filter((c) => c.url.startsWith('/api/v1/vouchers?')).length;
+    await user.keyboard('{Enter}');
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/vouchers/31/reverse')).toBe(
+        true,
+      ),
+    );
+    // the outcome is announced and the list refreshes with the reversal in it
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Reversed SAL-2026-27-00007 .* posted as SAL-2026-27-00007R/,
+    );
+    await waitFor(() =>
+      expect(calls.filter((c) => c.url.startsWith('/api/v1/vouchers?')).length).toBe(
+        listCallsBefore + 1,
+      ),
+    );
+  });
+
+  it('Esc on the confirm keeps the voucher — nothing is posted', async () => {
+    const { user } = await setup();
+    await openDaybook(user);
+
+    await user.keyboard('{Control>}r{/Control}');
+    await screen.findByRole('alertdialog');
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(calls.some((c) => c.url.includes('/reverse'))).toBe(false);
+    // still on the daybook
+    expect(screen.getByRole('grid', { name: 'Posted vouchers' })).toBeInTheDocument();
+  });
+
+  it('a reversal itself cannot be reversed — the button and the note say so', async () => {
+    const { user } = await setup();
+    await openDaybook(user);
+
+    // walk to the reversal row (SAL-...-00003R reverses voucher 26)
+    await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}');
+    expect(selectedRow().textContent).toContain('SAL-2026-27-00003R');
+
+    // the detail pane's button is disabled for a reversal
+    expect(screen.getByRole('button', { name: /reverse/i })).toBeDisabled();
+
+    await user.keyboard('{Control>}r{/Control}');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/reversals cannot be reversed/i);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(calls.some((c) => c.url.includes('/reverse'))).toBe(false);
   });
 });

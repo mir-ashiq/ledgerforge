@@ -117,6 +117,61 @@ def test_posted_event_recorded(client, fresh_db):
     assert gst.POSTED_EVENTS[-1]["voucher_no"] == r.json()["voucher_no"]
 
 
+def test_master_created_event_fires_for_ledger(client, fresh_db):
+    """The documented-but-never-fired taxonomy kept: creating a ledger
+    emits master.created with the master's identity and placement."""
+    events: list[dict] = []
+    client.app.state.plugin_manager.registry.on("master.created", lambda e: events.append(e.data))
+
+    body = create_ledger(client, "Event Customer", "Sundry Debtors")
+
+    assert len(events) == 1
+    assert events[0] == {
+        "kind": "ledger",
+        "book_id": events[0]["book_id"],
+        "id": body["id"],
+        "name": "Event Customer",
+        "code": body["code"],
+        "group_id": body["group_id"],
+        "group_name": "Sundry Debtors",
+    }
+    assert isinstance(events[0]["book_id"], int)  # the selected book, present and real
+
+
+def test_master_created_event_fires_for_group(client, fresh_db):
+    events: list[dict] = []
+    client.app.state.plugin_manager.registry.on("master.created", lambda e: events.append(e.data))
+
+    r = client.post(
+        "/api/v1/groups", json={"name": "Branch Debtors", "parent_name": "Sundry Debtors"}
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "group"
+    assert events[0]["name"] == "Branch Debtors"
+    assert events[0]["parent_id"] is not None
+    assert events[0]["nature"] == body["nature"]
+    assert isinstance(events[0]["book_id"], int)
+
+
+def test_master_created_event_failure_is_isolated(client, fresh_db):
+    """A broken listener never breaks the master's creation — the same
+    guarantee voucher.posted handlers get."""
+
+    def boom(_event):  # noqa: ANN001
+        raise RuntimeError("listener exploded")
+
+    registry = client.app.state.plugin_manager.registry
+    registry.on("master.created", boom)
+    r = client.post(
+        "/api/v1/ledgers", json={"name": "Survivor Ledger", "group_name": "Sundry Debtors"}
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "Survivor Ledger"
+
+
 def test_api_compatibility_guard():
     """A plugin targeting an incompatible plugin API is refused loudly."""
     from ledgerforge.plugins import PluginManager, PluginManifest

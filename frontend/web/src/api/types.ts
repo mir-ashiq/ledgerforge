@@ -135,3 +135,88 @@ export interface SlotOut {
 export interface SlotsOut {
   slots: SlotOut[];
 }
+
+// ---- books (ADR-009) --------------------------------------------------------
+
+/** One company (book): its chart of accounts, numbering, base currency. */
+export interface BookOut {
+  id: number;
+  name: string;
+  slug: string;
+  base_currency: string;
+  fy_start_month: number;
+  is_archived: boolean;
+  created_at: string;
+}
+
+/** What POST /books returns: the book plus proof of the TallyPrime seed. */
+export interface BookSeededOut {
+  book: BookOut;
+  seeded_groups: number;
+  seeded_ledgers: number;
+  seeded_voucher_types: number;
+}
+
+export interface BookCreateInput {
+  name: string;
+  slug?: string;
+  base_currency?: string;
+  fy_start_month?: number;
+}
+
+export interface BookUpdateInput {
+  name?: string;
+  is_archived?: boolean;
+}
+
+// ---- periods (ADR-008) ------------------------------------------------------
+
+export type PeriodStatus = 'open' | 'locked' | 'closed';
+
+export interface PeriodOut {
+  id: number;
+  name: string;
+  starts_on: string;
+  ends_on: string;
+  status: PeriodStatus;
+  locked_at: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
+}
+
+export interface PeriodCreateInput {
+  name: string;
+  starts_on: string;
+  ends_on: string;
+}
+
+/** One zeroing line the close sweep would post (the close preview). */
+export interface FyCloseLineOut {
+  bucket: 'income' | 'expense' | 'profit_loss';
+  ledger_id: number;
+  ledger_name: string;
+  dc: Dc;
+  amount: string;
+}
+
+export interface FyCloseReportOut {
+  as_of: string;
+  lines: FyCloseLineOut[];
+  net_profit: string;
+  totals: Record<string, string>;
+}
+
+/** What POST /periods/{id}/close returns: the closed period and the sweep. */
+export interface PeriodCloseResult {
+  period: PeriodOut;
+  sweep_voucher: VoucherOut | null;
+  sweep_posted: boolean;
+}
+
+// ---- reversal (Law 2's one correction path) ----------------------------------
+
+export interface ReversalPayload {
+  reversal_date?: string;
+  narration?: string;
+  client_token?: string;
+}

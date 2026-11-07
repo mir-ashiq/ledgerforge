@@ -49,7 +49,7 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 
 - **Transformer** `(draft: VoucherDraft, resolve: Resolver) -> VoucherDraft` — may add/adjust lines before engine validation. Runs inside the transaction; raising aborts the whole posting.
 - **Validator** `(draft, resolve) -> None` — raise `ValidationError` to veto (HTTP 422). Runs inside the transaction.
-- **Event handler** `(event: DomainEvent) -> None` — receives `voucher.posted`, `master.created`, … after commit. Failures are isolated.
+- **Event handler** `(event: DomainEvent) -> None` — receives `voucher.posted` (the full document payload) and `master.created` (`kind` of `group` or `ledger` with the master's identity and placement — fired by `POST /api/v1/groups` and `POST /api/v1/ledgers`; `Resolver.ensure_ledger` creates in-transaction and fires nothing) after commit. Failures are isolated.
 - **Document-view factory** `(ctx: DocumentContext) -> DocumentView | None` — **plugin API 0.5 (ADR-013):** owns the print layout for `meta[key]` documents. Return a view to claim, `None` to decline (the voucher slip takes over). See [Printing a document](#printing-a-document-api-05-adr-013).
 - **Report factory** `(resolver, params) -> PackReport` — **plugin API 0.6 (ADR-014):** publishes a book-scoped report under a key, served at `GET /api/v1/reports/pack/{key}` as PDF (through the shared layout engine) or CSV. See [Publishing a report](#publishing-a-report-api-06-adr-014).
 

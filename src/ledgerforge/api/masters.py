@@ -1,18 +1,24 @@
 """Masters API: groups, ledgers (the chart of accounts), currencies and FX
-rates (issue #4)."""
+rates (issue #4).
+
+Creating a master fires the documented ``master.created`` after-commit event
+(the taxonomy the plugin guide has promised since the first release): groups
+and ledgers carry their identity and placement; handler failures are isolated
+by the registry, never breaking the master's own transaction."""
 
 from __future__ import annotations
 
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..engine.currency import get_currency, resolve_rate
 from ..errors import NotFoundError, ValidationError
 from ..models import Book, Currency, FxRate, Group, Ledger
+from ..plugins import PluginManager
 from ..schemas import (
     CurrencyCreate,
     CurrencyOut,
@@ -29,6 +35,17 @@ from ..schemas import (
 from . import BookDep, BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(tags=["masters"])
+
+
+def _plugin_manager(request: Request) -> PluginManager:
+    return request.app.state.plugin_manager
+
+
+def _emit_master_created(request: Request, book: Book, kind: str, payload: dict) -> None:
+    """The documented after-commit event (see docs/plugin-guide.md): fires
+    once the master row is committed. Handler failures are isolated by the
+    registry — a listener can never break a master's creation."""
+    _plugin_manager(request).emit("master.created", {"kind": kind, "book_id": book.id, **payload})
 
 
 def _get_group(
@@ -64,7 +81,9 @@ def _group_out(session: Session, group: Group) -> GroupOut:
 
 
 @router.post("/groups", response_model=GroupOut, status_code=201)
-def create_group(payload: GroupCreate, session: SessionDep, book: BookDep, _: BookkeeperDep):
+def create_group(
+    payload: GroupCreate, request: Request, session: SessionDep, book: BookDep, _: BookkeeperDep
+):
     parent = _get_group(session, book, id=payload.parent_id, name=payload.parent_name)
     group = Group(
         book_id=book.id,
@@ -87,6 +106,19 @@ def create_group(payload: GroupCreate, session: SessionDep, book: BookDep, _: Bo
             ) from exc
         raise
     session.refresh(group)
+    _emit_master_created(
+        request,
+        book,
+        "group",
+        {
+            "id": group.id,
+            "name": group.name,
+            "code": group.code,
+            "parent_id": group.parent_id,
+            "nature": group.nature,
+            "affects_gross": group.affects_gross,
+        },
+    )
     return _group_out(session, group)
 
 
@@ -128,7 +160,9 @@ def move_group(
 
 
 @router.post("/ledgers", response_model=LedgerOut, status_code=201)
-def create_ledger(payload: LedgerCreate, session: SessionDep, book: BookDep, _: BookkeeperDep):
+def create_ledger(
+    payload: LedgerCreate, request: Request, session: SessionDep, book: BookDep, _: BookkeeperDep
+):
     group = _get_group(session, book, id=payload.group_id, name=payload.group_name)
     ledger = Ledger(book_id=book.id, name=payload.name, code=payload.code, group_id=group.id)
     session.add(ledger)
@@ -142,6 +176,18 @@ def create_ledger(payload: LedgerCreate, session: SessionDep, book: BookDep, _: 
             ) from exc
         raise
     session.refresh(ledger)
+    _emit_master_created(
+        request,
+        book,
+        "ledger",
+        {
+            "id": ledger.id,
+            "name": ledger.name,
+            "code": ledger.code,
+            "group_id": group.id,
+            "group_name": group.name,
+        },
+    )
     return LedgerOut(
         id=ledger.id,
         name=ledger.name,

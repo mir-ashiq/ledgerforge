@@ -41,6 +41,10 @@ interface VoucherScreenProps {
   ledgers: readonly LedgerOut[];
   groups: readonly GroupOut[];
   apiState: ApiState;
+  /** The active book's name (ADR-009 in the UI) — shown in the bar so the
+   *  accountant always knows which company's books are open; null when the
+   *  server auto-resolves the single active book. */
+  bookName?: string | null;
   onRetryMasters: () => void;
   onLedgerCreated: (ledger: LedgerOut) => void;
   /** Live interaction flags, read by keymap `when` predicates. */
@@ -61,6 +65,7 @@ export function VoucherScreen({
   ledgers,
   groups,
   apiState,
+  bookName = null,
   onRetryMasters,
   onLedgerCreated,
   ctxRef,
@@ -427,7 +432,9 @@ export function VoucherScreen({
     <div className="screen">
       <header className="bar">
         <span className="brand">LedgerForge</span>
-        <span className="mode">Voucher Entry</span>
+        <span className="mode">
+          Voucher Entry{bookName ? ` — ${bookName}` : ''}
+        </span>
         <div className="types" role="tablist" aria-label="Voucher type">
           {VOUCHER_TYPES.map((t) => (
             <button

@@ -1,23 +1,30 @@
 /**
  * Application root: owns the keymap lifecycle (with user-binding persistence),
- * the prefetched masters (ledger + group indexes), screen switching and the
- * command palette. Screens: VoucherScreen (entry), PayslipScreen (ADR-013),
- * DaybookScreen (ADR-015) and PluginsScreen (ADR-016).
+ * the prefetched masters (ledger + group indexes), the active book (ADR-009 —
+ * remembered across launches, switchable from the Books screen), screen
+ * switching and the command palette. Screens: VoucherScreen (entry),
+ * PayslipScreen (ADR-013), DaybookScreen (ADR-015), PluginsScreen (ADR-016),
+ * SlotsScreen (ADR-019), BooksScreen and PeriodsScreen (Phase 1).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { keymap, useCommand } from '@ledgerforge/keyboard-kit/react';
-import { api } from './api/client';
-import type { GroupOut, LedgerOut } from './api/types';
+import { api, setActiveBook } from './api/client';
+import type { BookOut, GroupOut, LedgerOut } from './api/types';
+import { BooksScreen } from './components/BooksScreen';
 import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
 import { PayslipScreen } from './components/PayslipScreen';
+import { PeriodsScreen } from './components/PeriodsScreen';
 import { PluginsScreen } from './components/PluginsScreen';
 import { SlotsScreen } from './components/SlotsScreen';
 import { VoucherScreen } from './components/VoucherScreen';
 import { localStorageKeymapStore } from './keymapStore';
 
-type Screen = 'voucher' | 'payslip' | 'daybook' | 'plugins' | 'slots';
+type Screen = 'voucher' | 'payslip' | 'daybook' | 'plugins' | 'slots' | 'books' | 'periods';
+
+/** Where the remembered book id lives between launches. */
+const ACTIVE_BOOK_KEY = 'lf.activeBook';
 
 export default function App() {
   const [ledgers, setLedgers] = useState<LedgerOut[]>([]);
@@ -25,6 +32,7 @@ export default function App() {
   const [apiState, setApiState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [showPalette, setShowPalette] = useState(false);
   const [screen, setScreen] = useState<Screen>('voucher');
+  const [activeBook, setActiveBookState] = useState<BookOut | null>(null);
   const ctxRef = useRef<Record<string, unknown>>({});
   const paletteCtxRef = useRef<Record<string, unknown>>({});
 
@@ -40,9 +48,46 @@ export default function App() {
     }
   }, []);
 
+  /** Select the book every request acts on (ADR-009): remembered between
+   * launches; null falls back to the server's single-active-book resolution. */
+  const adoptBook = useCallback((book: BookOut | null) => {
+    setActiveBook(book ? book.id : null);
+    setActiveBookState(book);
+    if (book) window.localStorage.setItem(ACTIVE_BOOK_KEY, String(book.id));
+    else window.localStorage.removeItem(ACTIVE_BOOK_KEY);
+  }, []);
+
+  // boot: resolve the book, then prefetch the masters. A failed books fetch
+  // is not fatal — the long-standing single-book mode keeps working without
+  // an explicit selection.
   useEffect(() => {
-    void loadMasters();
-  }, [loadMasters]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await api.books();
+        if (cancelled) return;
+        const stored = Number(window.localStorage.getItem(ACTIVE_BOOK_KEY));
+        const remembered = list.find((b) => b.id === stored && !b.is_archived);
+        if (remembered) adoptBook(remembered);
+        else if (list.length === 1 && !list[0].is_archived) adoptBook(list[0]);
+      } catch {
+        /* books unreachable — proceed unselected (auto-resolution) */
+      }
+      await loadMasters();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adoptBook, loadMasters]);
+
+  /** Switching books from the Books screen: adopt, remember, reload masters. */
+  const selectBook = useCallback(
+    (book: BookOut) => {
+      adoptBook(book);
+      void loadMasters();
+    },
+    [adoptBook, loadMasters],
+  );
 
   // the single capture-phase keydown pipeline (ADR-004); user rebindings
   // persist across reloads through the localStorage store (keyboard-ux §8.3)
@@ -82,6 +127,24 @@ export default function App() {
     { id: 'slots.open', title: 'Slots — sandboxed plugin dashboards', run: () => setScreen('slots') },
     'Alt+U',
   );
+  // the books screen (Phase 1 / ADR-009 in the UI): Alt+O opens, Esc is back
+  useCommand(
+    {
+      id: 'books.open',
+      title: 'Books — companies: select, create, archive',
+      run: () => setScreen('books'),
+    },
+    'Alt+O',
+  );
+  // the periods screen (Phase 1 / ADR-008 in the UI): Alt+E opens, Esc is back
+  useCommand(
+    {
+      id: 'periods.open',
+      title: 'Periods — lock & the financial-year close',
+      run: () => setScreen('periods'),
+    },
+    'Alt+E',
+  );
 
   return (
     <>
@@ -90,6 +153,7 @@ export default function App() {
           ledgers={ledgers}
           groups={groups}
           apiState={apiState}
+          bookName={activeBook?.name ?? null}
           onRetryMasters={() => void loadMasters()}
           onLedgerCreated={(ledger) => setLedgers((prev) => [...prev, ledger])}
           ctxRef={ctxRef}
@@ -100,6 +164,15 @@ export default function App() {
         <DaybookScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : screen === 'plugins' ? (
         <PluginsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : screen === 'books' ? (
+        <BooksScreen
+          activeBookId={activeBook?.id ?? null}
+          onSelect={selectBook}
+          onExit={() => setScreen('voucher')}
+          ctxRef={ctxRef}
+        />
+      ) : screen === 'periods' ? (
+        <PeriodsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : (
         <SlotsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}

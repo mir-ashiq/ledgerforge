@@ -723,3 +723,29 @@ body {
   border-radius: 8px;
   background: #fff;
 }
+
+/* ------------------------------------------------------- books & periods (Phase 1) */
+.dialog-field { display: block; margin-bottom: 12px; }
+.dialog-field > span,
+.dialog-field {
+  font-size: 12px;
+  color: #52607a;
+}
+.dialog-field input,
+.dialog-field select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  font-size: 14px;
+  padding: 7px 9px;
+  border: 1px solid #ccd6e3;
+  border-radius: 6px;
+  background: #fff;
+  color: #17233b;
+}
+.dialog-fields-row { display: flex; gap: 12px; }
+.dialog-fields-row .dialog-field { flex: 1; }
+.overlay-card .daybook-entries { max-height: 40vh; overflow: auto; }
+.daybook-actions,
+.periods-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+.close-preview { max-width: 560px; }

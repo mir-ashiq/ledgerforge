@@ -5,15 +5,47 @@
  */
 
 import type {
+  BookCreateInput,
+  BookOut,
+  BookSeededOut,
+  BookUpdateInput,
+  FyCloseReportOut,
   GroupOut,
   LedgerOut,
+  PeriodCloseResult,
+  PeriodCreateInput,
+  PeriodOut,
   PluginsOut,
+  ReversalPayload,
   SlotsOut,
   VoucherOut,
   VoucherPostPayload,
 } from './types';
 
 const BASE = '/api/v1';
+
+/** The header every book-scoped route resolves the selected book from
+ * (ADR-009 — TallyPrime's "select company", made a header). */
+const BOOK_HEADER = 'X-Book-Id';
+
+let activeBookId: number | null = null;
+
+/** Select the book every request acts on; null falls back to the server's
+ * single-active-book auto-resolution (the long-standing single-book mode). */
+export function setActiveBook(id: number | null): void {
+  activeBookId = id;
+}
+
+export function getActiveBookId(): number | null {
+  return activeBookId;
+}
+
+function requestHeaders(extra?: HeadersInit): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (extra) Object.assign(headers, extra as Record<string, string>);
+  if (activeBookId !== null) headers[BOOK_HEADER] = String(activeBookId);
+  return headers;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -29,8 +61,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${BASE}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
       ...init,
+      headers: requestHeaders(init?.headers),
     });
   } catch {
     throw new ApiError(`Cannot reach the engine at ${BASE} — is it running? (make dev)`, 0);
@@ -63,7 +95,7 @@ async function errorDetail(response: Response): Promise<string> {
 async function requestBlob(path: string): Promise<Blob> {
   let response: Response;
   try {
-    response = await fetch(`${BASE}${path}`);
+    response = await fetch(`${BASE}${path}`, { headers: requestHeaders() });
   } catch {
     throw new ApiError(`Cannot reach the engine at ${BASE} — is it running? (make dev)`, 0);
   }
@@ -120,4 +152,38 @@ export const api = {
   /** Every UI slot a loaded pack declares (ADR-019) — the host's slot
    *  registry, one palette-reachable dashboard per entry. */
   slots: () => request<SlotsOut>('/slots'),
+  /** Every book, archived last — the picker list (ADR-009). */
+  books: () => request<BookOut[]>('/books'),
+  /** Create a book and seed its chart of accounts in one action —
+   *  TallyPrime's "create company" (admin role). */
+  createBook: (input: BookCreateInput) =>
+    request<BookSeededOut>('/books', { method: 'POST', body: JSON.stringify(input) }),
+  /** Rename / archive a book (admin role). */
+  updateBook: (bookId: number, patch: BookUpdateInput) =>
+    request<BookOut>(`/books/${bookId}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  /** Post the mirrored reversal of a voucher — Law 2's one correction
+   *  path, idempotent on retry. */
+  reverseVoucher: (voucherId: number, payload: ReversalPayload = {}) =>
+    request<VoucherOut>(`/vouchers/${voucherId}/reverse`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  /** The book's fiscal periods, earliest first (ADR-008). */
+  periods: () => request<PeriodOut[]>('/periods'),
+  /** Create a period (admin role); overlapping ranges are refused. */
+  createPeriod: (input: PeriodCreateInput) =>
+    request<PeriodOut>('/periods', { method: 'POST', body: JSON.stringify(input) }),
+  /** Freeze a period's dates for review; postings into it get 409. */
+  lockPeriod: (periodId: number) =>
+    request<PeriodOut>(`/periods/${periodId}/lock`, { method: 'POST' }),
+  /** Reopen a locked period; refused once a close sweep exists. */
+  unlockPeriod: (periodId: number) =>
+    request<PeriodOut>(`/periods/${periodId}/unlock`, { method: 'POST' }),
+  /** Exactly what close would post — the sweep preview (reader role). */
+  closePreviewPeriod: (periodId: number) =>
+    request<FyCloseReportOut>(`/periods/${periodId}/close-preview`),
+  /** Lock, then close: posts the FY sweep and marks the period closed —
+   *  final (admin role). */
+  closePeriod: (periodId: number) =>
+    request<PeriodCloseResult>(`/periods/${periodId}/close`, { method: 'POST' }),
 };

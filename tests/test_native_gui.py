@@ -9,6 +9,7 @@ the real end-to-end lives in test_native_smoke.py.
 from __future__ import annotations
 
 import os
+import warnings
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -18,7 +19,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QDialogButtonBox  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialogButtonBox  # noqa: E402
 
 from ledgerforge.nativeapp.daybook import DayBookPage, current_fy_bounds  # noqa: E402
 from ledgerforge.nativeapp.main_window import PAGES, MainWindow  # noqa: E402
@@ -331,3 +333,131 @@ def test_main_window_type_box_carries_seed_codes(qtbot, stub):
     assert "JV" in codes and "SAL" in codes and "PYT" in codes
     assert "OPEN" not in codes and "FYC" not in codes
     dialog.close()
+
+
+# ------------------------------------------- FX lines & type keys (Phase 1)
+
+
+def test_voucher_dialog_fx_line_derives_the_base_amount(qtbot, stub):
+    """A USD line: type the trio, the base amount follows — computed exactly
+    as the engine's chk_entry_fx_consistent does (round(fx × rate, 8))."""
+    dialog = NewVoucherDialog(stub, ["Cash", "Bank", "Sales Account"])
+    qtbot.addWidget(dialog)
+    line0, line1 = dialog._lines[0], dialog._lines[1]
+
+    # type the FX facts on line 0; the base amount derives as 100 × 83.25
+    line0.ledger.setCurrentText("Bank")
+    line0.dc.setCurrentText("Debit")
+    line0.currency.setCurrentText("USD")
+    line0.amount_fx.setText("100")
+    line0.fx_rate.setText("83.25")
+    assert line0.amount.text() == "8325"
+
+    line1.ledger.setCurrentText("Sales Account")
+    line1.dc.setCurrentText("Credit")
+    line1.amount.setText("8325")
+
+    assert dialog._fx_problem() is None
+    assert dialog.is_balanced()
+    ok = dialog.buttons.button(QDialogButtonBox.StandardButton.Ok)
+    assert ok.isEnabled()
+    assert dialog.balance_label.text().startswith("Balanced")
+
+    # the payload carries the trio with the exact product as the amount
+    payload = line0.payload()
+    assert payload == {
+        "ledger_name": "Bank",
+        "dc": "D",
+        "amount": "8325",
+        "currency": "USD",
+        "amount_fx": "100",
+        "fx_rate": "83.25",
+        "narration": None,
+    }
+
+    # the mirrored plain line stays plain (no phantom FX fields)
+    assert line1.payload() == {
+        "ledger_name": "Sales Account",
+        "dc": "C",
+        "amount": "8325.00",
+        "narration": None,
+    }
+
+
+def test_voucher_dialog_fx_subcent_product_keeps_exact_scale(qtbot, stub):
+    """The product's full precision survives — Law 3, not a cents squeeze."""
+    dialog = NewVoucherDialog(stub, ["Bank", "Sales Account"])
+    qtbot.addWidget(dialog)
+    line0 = dialog._lines[0]
+    line0.ledger.setCurrentText("Bank")
+    line0.currency.setCurrentText("USD")
+    line0.amount_fx.setText("0.35")
+    line0.fx_rate.setText("81.12345678")
+    # 0.35 × 81.12345678 = 28.393209873 → quantized to scale 8
+    assert line0.amount.text() == "28.39320987"
+    assert line0.payload()["amount"] == "28.39320987"
+
+
+def test_voucher_dialog_fx_mismatch_and_incomplete_trio_block_posting(qtbot, stub):
+    dialog = NewVoucherDialog(stub, ["Cash", "Sales Account"])
+    qtbot.addWidget(dialog)
+    ok = dialog.buttons.button(QDialogButtonBox.StandardButton.Ok)
+    line0, line1 = dialog._lines[0], dialog._lines[1]
+
+    # a typed base amount that disagrees with the trio is a veto…
+    line0.ledger.setCurrentText("Cash")
+    line0.currency.setCurrentText("USD")
+    line0.amount_fx.setText("100")
+    line0.fx_rate.setText("83.25")
+    line0.amount.setText("8324")  # ≠ 100 × 83.25
+    line1.ledger.setCurrentText("Sales Account")
+    line1.amount.setText("8325")
+    assert dialog._fx_problem() is not None
+    assert "≠" in dialog._fx_problem()
+    assert not dialog.is_balanced()
+    assert not ok.isEnabled()
+    assert dialog.balance_label.text().startswith("FX problem")
+
+    # …and the trio is all-or-none: a rate without a currency is a veto too
+    line0.amount.clear()
+    line0.currency.setCurrentText("")
+    line0.fx_rate.setText("83.25")  # rate without currency
+    assert "all three or none" in dialog._fx_problem()
+    assert not ok.isEnabled()
+
+    # completing the trio as a plain line restores the gate
+    line0.amount_fx.clear()
+    line0.fx_rate.clear()
+    line0.amount.setText("8325")
+    line1.dc.setCurrentText("Credit")
+    assert dialog._fx_problem() is None
+    assert dialog.is_balanced()
+
+
+def test_voucher_dialog_f4_f9_switch_the_type(qtbot, stub):
+    """The TallyPrime muscle memory: F4 contra … F9 purchase, same map as
+    the web keymap presets."""
+    from ledgerforge.nativeapp.voucher_dialog import TYPE_KEYS
+
+    assert TYPE_KEYS == {
+        "F4": "CN",
+        "F5": "PYT",
+        "F6": "RCT",
+        "F7": "JV",
+        "F8": "SAL",
+        "F9": "PUR",
+    }
+
+    dialog = NewVoucherDialog(stub, ["Cash"])
+    qtbot.addWidget(dialog)
+    dialog.show()
+    # offscreen needs the dialog to be the active window for shortcuts;
+    # setActiveWindow is deprecated-but-functional here, so the warning is
+    # silenced for this one call
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        QApplication.setActiveWindow(dialog)
+
+    for key, code in TYPE_KEYS.items():
+        qtbot.keyClick(dialog, getattr(Qt.Key, f"Key_{key}"))
+        assert dialog.type_box.currentData() == code, f"{key} should select {code}"

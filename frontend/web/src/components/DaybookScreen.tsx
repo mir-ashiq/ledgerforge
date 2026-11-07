@@ -1,11 +1,13 @@
 /**
- * The daybook browser (ADR-015): every posted voucher, browsable and
- * reprintable. `Alt+B` opens it; `↑/↓` (or `j/k`) walk the list, the
- * selection's entries preview on the right, `Enter`/`Ctrl+P` print the
- * selected voucher through the same endpoint the payslip and voucher
- * screens use (ADR-013), `Esc` is back to entry — the same keyboard
- * contract as every LedgerForge screen. Amounts are displayed exactly as
- * the engine computed them: strings, never client arithmetic (Law 3).
+ * The daybook browser (ADR-015): every posted voucher, browsable,
+ * reprintable and — since Phase 1 — correctable. `Alt+B` opens it; `↑/↓`
+ * (or `j/k`) walk the list, the selection's entries preview on the right,
+ * `Enter`/`Ctrl+P` print the selected voucher through the same endpoint the
+ * payslip and voucher screens use (ADR-013), `Ctrl+R` posts the mirrored
+ * reversal (Law 2's one correction path — history is never edited, only
+ * reversed), `Esc` is back to entry — the same keyboard contract as every
+ * LedgerForge screen. Amounts are displayed exactly as the engine computed
+ * them: strings, never client arithmetic (Law 3).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -13,6 +15,7 @@ import { useCommand, useFocusScope } from '@ledgerforge/keyboard-kit/react';
 import type { ContextPredicate } from '@ledgerforge/keyboard-kit';
 import { api } from '../api/client';
 import type { VoucherOut } from '../api/types';
+import { ConfirmOverlay } from './ConfirmOverlay';
 import { DOC_KIND_LABEL, docKindOf, matchesText, money, printEmployeeArg } from '../daybook/model';
 import { VOUCHER_TYPES } from '../voucher/model';
 
@@ -40,6 +43,8 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
   const [filterFocus, setFilterFocus] = useState(false);
   const [reload, setReload] = useState(0);
   const [printing, setPrinting] = useState(false);
+  const [confirmReverse, setConfirmReverse] = useState(false);
+  const [reversing, setReversing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [announce, setAnnounce] = useState('');
   const objectUrlRef = useRef<string | null>(null);
@@ -52,7 +57,7 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
   });
 
   // live flags for keymap predicates (read at keydown time, always fresh)
-  ctxRef.current = { daybookOpen: true, filterFocus };
+  ctxRef.current = { daybookOpen: true, filterFocus, dialogOpen: confirmReverse };
   useEffect(
     () => () => {
       ctxRef.current = {};
@@ -147,6 +152,42 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
     }
   }, [selected, printing]);
 
+  // the reversal — Law 2's one correction path, from the UI (Phase 1):
+  // a confirmed Ctrl+R posts the mirrored voucher; idempotent on retry
+  const reverse = useCallback(async () => {
+    const voucher = selected;
+    if (!voucher || reversing || confirmReverse) return;
+    if (voucher.reversal_of !== null) {
+      const hint = 'This voucher is itself a reversal — reversals cannot be reversed; post a fresh voucher instead';
+      setNote(hint);
+      setAnnounce(hint);
+      return;
+    }
+    setConfirmReverse(true);
+  }, [selected, reversing, confirmReverse]);
+
+  const doReverse = useCallback(async () => {
+    const voucher = selected;
+    if (!voucher) return;
+    setConfirmReverse(false);
+    setReversing(true);
+    setNote(null);
+    try {
+      const reversal = await api.reverseVoucher(voucher.id);
+      setNote(
+        `Reversed ${voucher.voucher_no} — the mirrored voucher posted as ${reversal.voucher_no} (net effect exactly zero)`,
+      );
+      setAnnounce(`Reversal posted as ${reversal.voucher_no}`);
+      setReload((n) => n + 1);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'The reversal failed';
+      setNote(message);
+      setAnnounce(message);
+    } finally {
+      setReversing(false);
+    }
+  }, [selected]);
+
   // --- commands -------------------------------------------------------------
   useCommand(
     { id: 'daybook.up', title: 'Daybook: previous voucher', run: () => move(-1) },
@@ -184,6 +225,15 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
       run: () => void print(),
     },
     'Enter',
+    inDaybook,
+  );
+  useCommand(
+    {
+      id: 'daybook.reverse',
+      title: 'Reverse the selected voucher (Law 2 correction)',
+      run: () => void reverse(),
+    },
+    'Primary+R',
     inDaybook,
   );
 
@@ -351,14 +401,28 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
                   ))}
                 </tbody>
               </table>
-              <button
-                type="button"
-                className="payslip-print daybook-print"
-                onClick={() => void print()}
-                disabled={printing}
-              >
-                {printing ? 'Fetching…' : 'Print / reprint'} <kbd>Ctrl+P</kbd>
-              </button>
+              <div className="overlay-actions daybook-actions">
+                <button
+                  type="button"
+                  className="payslip-print daybook-print"
+                  onClick={() => void print()}
+                  disabled={printing}
+                >
+                  {printing ? 'Fetching…' : 'Print / reprint'} <kbd>Ctrl+P</kbd>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void reverse()}
+                  disabled={reversing || selected.reversal_of !== null}
+                  title={
+                    selected.reversal_of !== null
+                      ? 'This voucher is itself a reversal — it cannot be reversed'
+                      : 'Post the mirrored reversal — history is never edited (Law 2)'
+                  }
+                >
+                  {reversing ? 'Posting…' : 'Reverse'} <kbd>Ctrl+R</kbd>
+                </button>
+              </div>
               <p className="payslip-note">
                 Reprints are identical: posted entries are immutable (Law 2). The PDF opens
                 in a new tab — print or save it from there.
@@ -385,6 +449,9 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
           <kbd>Enter</kbd> / <kbd>Ctrl+P</kbd> print
         </span>
         <span>
+          <kbd>Ctrl+R</kbd> reverse
+        </span>
+        <span>
           <kbd>Esc</kbd> back
         </span>
       </footer>
@@ -392,6 +459,16 @@ export function DaybookScreen({ onExit, ctxRef }: DaybookScreenProps) {
       <div className="sr-only" aria-live="polite">
         {announce}
       </div>
+
+      {confirmReverse && selected && (
+        <ConfirmOverlay
+          message={`Reverse ${selected.voucher_no} (${money(selected.amount)})? A mirrored voucher posts today and the pair nets to exactly zero — the original is never edited (Law 2).`}
+          confirmLabel="Post the reversal"
+          cancelLabel="Keep the voucher"
+          onConfirm={() => void doReverse()}
+          onCancel={() => setConfirmReverse(false)}
+        />
+      )}
     </div>
   );
 }
