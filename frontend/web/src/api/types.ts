@@ -26,6 +26,65 @@ export interface VoucherPostLine {
   dc: Dc;
   /** Decimal string — never a JSON number (Law 3). */
   amount: string;
+  /** Cost-centre splits (ADR-025): optional per line; when present, their
+   * sum must equal ``amount`` exactly — a line is fully allocated or left
+   * unallocated. */
+  cost_allocations?: CostAllocationIn[];
+}
+
+/** One centre × amount split of a voucher line (ADR-025). */
+export interface CostAllocationIn {
+  centre_id: number;
+  /** Decimal string — never a JSON number (Law 3). */
+  amount: string;
+}
+
+/** A posted allocation as the engine returns it (centre resolved). */
+export interface CostAllocationOut {
+  centre_id: number;
+  centre_name: string;
+  dc: Dc;
+  amount: string;
+}
+
+/** GET /cost-centres (ADR-025) — the allocation tree. */
+export interface CostCentreOut {
+  id: number;
+  name: string;
+  code: string | null;
+  parent_id: number | null;
+  category_id: number | null;
+  category_name: string | null;
+  is_root: boolean;
+}
+
+/** GET /cost-categories (ADR-025) — the classification axes. */
+export interface CostCategoryOut {
+  id: number;
+  name: string;
+  parent_id: number | null;
+  is_root: boolean;
+}
+
+/** One centre row of the cost-centre summary (ADR-025) — the subtree rollup. */
+export interface CostCentreSummaryRow {
+  centre_id: number;
+  centre_name: string;
+  parent_id: number | null;
+  is_root: boolean;
+  category_id: number | null;
+  category_name: string | null;
+  dr: string;
+  cr: string;
+  net: string;
+}
+
+/** GET /reports/cost-centres?from&to (ADR-025). */
+export interface CostCentreSummaryOut {
+  from: string;
+  to: string;
+  centres: CostCentreSummaryRow[];
+  unallocated: { dr: string; cr: string; net: string };
 }
 
 export interface VoucherPostPayload {

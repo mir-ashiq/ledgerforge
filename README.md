@@ -441,6 +441,52 @@ strangers; a refused post consumes no number.
 Design: [ADR-024](docs/adr/024-order-processing.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Cost centres & cost categories: the break-up (v0.22, ADR-025)
+
+Where did this money go, and along which axis? A rent line splits across
+branches; a salary line across departments; the break-up report rolls those
+splits up trees. This is the roadmap's **first core-schema change since the
+scale-out revision** — deliberately: allocations must aggregate with the same
+rigour as entries (exact sums, closure rollups, append-only history), which
+the `meta` store cannot promise. Migration `0007`:
+
+- **Two trees, the groups' machinery twice**: cost categories (the
+  classification axes — "Department", "Location", "Project") and cost centres
+  (the allocation tree), each an adjacency list with a trigger-maintained
+  closure, one seeded root per book, cycle- and root-guards, duplicate and
+  cross-book parenting schema-impossible. Every real centre answers to
+  exactly one category (TallyPrime's rule, a CHECK constraint); the root is
+  the container and receives no allocations.
+- **`cost_allocations`** — one row per (voucher entry, centre, amount), Dr/Cr
+  preserved from the entry, amounts exact, `voucher_date` and `book_id`
+  denormalized so reports never join the write path, append-only. The
+  **conservation law** is database-enforced like Law 1: a deferrable
+  constraint trigger proves Σallocation = entry amount *exactly* at commit —
+  a line is fully allocated or left unallocated, never partly — and the
+  engine mirrors it with a clean 422 naming the line.
+- **Both shapes of `voucher_entries`**: the allocation→entry FK exists on the
+  plain shape; on ADR-018's partitioned shape (whose PK is `(id,
+  voucher_date)`) it cannot, so the insert-time trigger keeps every guarantee
+  there, the partition swap drops it, and unpartitioning re-adds it.
+- **The break-up reports**, through the same closure-table machinery as group
+  rollups: the **centre summary** (a parent carries its subtree) with the
+  **Unallocated** mass surfaced so allocated + unallocated is always the
+  window's whole entry mass; one centre's **ledger-wise break-up** (own
+  allocations, total proven against the rows); the **category rollup**
+  (primary categories carry their secondaries). FYC sweeps excluded on both
+  sides.
+- **At entry time, both UIs**: the web's `Alt+K` and the native `Ctrl+K`
+  open the split dialog — every line with its allocated-so-far and its
+  remainder (always visible), exact client-side arithmetic, inline centre
+  creation, "Leave unallocated" as the explicit other honest state. The
+  native Masters page gains Cost Centres / Cost Categories tabs and the
+  Reports page the break-up trio; reversals mirror the splits so every
+  centre's net walks back to exactly zero. Plugin API 0.10:
+  `DraftLine.cost_allocations` ride the draft through every hook.
+
+Design: [ADR-025](docs/adr/025-cost-centres.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## Print bridge: payslips & tax invoices as PDF (ADR-013)
 
 Every posted voucher prints. `GET /api/v1/vouchers/{id}/pdf` offers the
@@ -872,7 +918,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.21.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.22.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -1012,6 +1058,14 @@ phase tracks as a GitHub milestone with a tracking issue:
       never move the trial balance), the position fold with cap guards,
       the order→invoice settle annotation, pending-orders reports both
       sides, and the native Orders page + document pickers
+- [x] Cost centres & cost categories (v0.22, Phase 4, ADR-025): the first
+      core-schema change since the scale-out — cost_centres/cost_categories
+      trees with closures (migration 0007), cost_allocations with the
+      database-enforced conservation law (fully allocated or unallocated,
+      never partly — the deferrable Law-1 discipline), the break-up reports
+      through the closure machinery (centre summary + Unallocated,
+      ledger-wise within centre, category rollup), and the split dialogs in
+      both UIs (Alt+K / Ctrl+K, plugin API 0.10)
 - [x] Bill-wise & outstanding management (v0.20, Phase 2, ADR-023):
       bill references as the fourth plugin pack (zero schema change) with
       the conservation law (bills + on-account == the party's ledger
@@ -1027,6 +1081,14 @@ phase tracks as a GitHub milestone with a tracking issue:
       never move the trial balance), the position fold with cap guards,
       the order→invoice settle annotation, pending-orders reports both
       sides, and the native Orders page + document pickers
+- [x] Cost centres & cost categories (v0.22, Phase 4, ADR-025): the first
+      core-schema change since the scale-out — cost_centres/cost_categories
+      trees with closures (migration 0007), cost_allocations with the
+      database-enforced conservation law (fully allocated or unallocated,
+      never partly — the deferrable Law-1 discipline), the break-up reports
+      through the closure machinery (centre summary + Unallocated,
+      ledger-wise within centre, category rollup), and the split dialogs in
+      both UIs (Alt+K / Ctrl+K, plugin API 0.10)
 
 ## Contributing
 

@@ -9,6 +9,9 @@ import type {
   BookOut,
   BookSeededOut,
   BookUpdateInput,
+  CostCategoryOut,
+  CostCentreOut,
+  CostCentreSummaryOut,
   FyCloseReportOut,
   GroupOut,
   LedgerOut,
@@ -193,6 +196,20 @@ export const api = {
   openBills: (party: string) =>
     request<OpenBillsOut>(
       `/reports/pack/bills-open?party=${encodeURIComponent(party)}&format=json`,
+    ),
+  /** The cost trees (ADR-025): centres and their categories — the Alt+K
+   *  split dialog's feed. */
+  costCentres: () => request<CostCentreOut[]>('/cost-centres'),
+  costCategories: () => request<CostCategoryOut[]>('/cost-categories'),
+  createCostCentre: (input: { name: string; parent_name: string; category_name: string }) =>
+    request<CostCentreOut>('/cost-centres', { method: 'POST', body: JSON.stringify(input) }),
+  createCostCategory: (input: { name: string; parent_name: string }) =>
+    request<CostCategoryOut>('/cost-categories', { method: 'POST', body: JSON.stringify(input) }),
+  /** The centre rollup over a window (ADR-025) — centres + the Unallocated
+   *  mass, allocated + unallocated = the window's whole entry mass. */
+  costCentreSummary: (from: string, to: string) =>
+    request<CostCentreSummaryOut>(
+      `/reports/cost-centres?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
     ),
   /** The outstanding book with ageing — receivable ('dr') or payable ('cr'),
    * optionally one party (ADR-023). */

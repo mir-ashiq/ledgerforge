@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.21.0** |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.22.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -22,7 +22,8 @@ is fully landed:
 
 - **Engine**: exact-decimal append-only double-entry posting, gapless numbering, reversal,
   opening balances, period lock/FY close, multi-currency with FX snapshots, multi-book,
-  OIDC auth, the balance cache and yearly entry partitions for scale-out reporting.
+  OIDC auth, the balance cache and yearly entry partitions for scale-out reporting, cost
+  centres & categories with their allocation store (ADR-025, v0.22).
 - **Packs**: invoicing, inventory (weighted-average, four movements), payroll (runs, YTD,
   payslips), statutory (PF/ESI/TDS), GST (place of supply, HSN rate tables, GSTR-1/HSN
   statements, the IRN outbox + bridge), bills (bill-wise, outstanding, ageing, interest —
@@ -30,7 +31,8 @@ is fully landed:
   ADR-024, v0.21).
 - **Surfaces**: keyboard-first web UI (command palette, rebindable Tally keymap, sandboxed
   plugin slots), native Windows application (ADR-022: a Qt window over an embedded
-  PostgreSQL — no browser; the Orders page and document pickers joined in v0.21), CLI,
+  PostgreSQL — no browser; the Orders page and document pickers joined in v0.21, the
+  cost split dialog and masters tabs in v0.22), CLI,
   REST API, dependency-free PDF printing.
 - **Trust**: signed community plugin distribution with the curator index, Ed25519
   signatures, operator acknowledgement.
@@ -63,7 +65,7 @@ subscriptions for updates and remote services.
 | Invoicing | ✔ | ✔ (ADR-010) | parity for the invoice itself; bill-wise tracking landed in **v0.20** (ADR-023) |
 | Inventory | ✔ batches/serial/expiry/godowns/re-order/mfg | weighted-average qty/value only | **gap** (Phase 6) |
 | Orders (quote/SO/PO/GRN) | ✔ | ✔ (ADR-024) | **parity** — landed in v0.21.0 (Phase 3) |
-| Cost centres | ✔ | ✖ | **gap** (Phase 4) |
+| Cost centres | ✔ | ✔ (ADR-025) | **parity** — landed in v0.22.0 (Phase 4) |
 | Banking, BRS, cheques | ✔ (incl. connected banking) | ✖ | **gap** (Phase 5; per-bank APIs deliberately out) |
 | GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox | **partial** (Phase 7) |
 | Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS | **partial** (Phase 8) |
@@ -133,7 +135,7 @@ The quote-to-cash and procure-to-pay chains TallyPrime users live in.
   updates) and PO → GRN → purchase invoice linkage, same mechanism.
 - The native window gains the document pickers alongside vouchers.
 
-### Phase 4 — v0.22.0 · Cost centres & cost categories *(ADR-025)*
+### Phase 4 — v0.22.0 · Cost centres & cost categories *(ADR-025, landed in v0.22.0)*
 
 The first core-schema change since 0006 (a `cost_allocations` table: voucher entry ×
 cost centre × amount, Dr/Cr preserved, Σallocation = entry amount enforced exactly) —

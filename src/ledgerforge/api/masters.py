@@ -17,9 +17,15 @@ from sqlalchemy.orm import Session
 
 from ..engine.currency import get_currency, resolve_rate
 from ..errors import NotFoundError, ValidationError
-from ..models import Book, Currency, FxRate, Group, Ledger
+from ..models import Book, CostCategory, CostCentre, Currency, FxRate, Group, Ledger
 from ..plugins import PluginManager
 from ..schemas import (
+    CostCategoryCreate,
+    CostCategoryOut,
+    CostCategoryUpdate,
+    CostCentreCreate,
+    CostCentreOut,
+    CostCentreUpdate,
     CurrencyCreate,
     CurrencyOut,
     CurrencyUpdate,
@@ -225,6 +231,218 @@ def list_ledgers(
         )
         for ledger, group in rows
     ]
+
+
+# ================================================================ cost masters
+def _get_cost_category(
+    session: Session, book: Book, *, id: int | None = None, name: str | None = None
+) -> CostCategory:
+    """A cost category of ``book`` — another book's id or name is a 404
+    (ADR-009's discipline, ADR-025's tables)."""
+    stmt = select(CostCategory).where(CostCategory.book_id == book.id)
+    if id is not None:
+        stmt = stmt.where(CostCategory.id == id)
+    elif name is not None:
+        stmt = stmt.where(CostCategory.name == name)
+    else:
+        raise ValidationError("provide id or name")
+    category = session.scalar(stmt)
+    if category is None:
+        raise NotFoundError(
+            f"Cost category {'id ' + str(id) if id else name!r} does not exist "
+            f"in book {book.name!r}"
+        )
+    return category
+
+
+def _category_out(category: CostCategory) -> CostCategoryOut:
+    return CostCategoryOut(
+        id=category.id,
+        name=category.name,
+        parent_id=category.parent_id,
+        is_root=category.is_root,
+    )
+
+
+@router.post("/cost-categories", response_model=CostCategoryOut, status_code=201)
+def create_cost_category(
+    payload: CostCategoryCreate,
+    request: Request,
+    session: SessionDep,
+    book: BookDep,
+    _: BookkeeperDep,
+):
+    """A classification axis for cost centres (ADR-025): "Department",
+    "Location", "Project"… The closure table follows by trigger."""
+    parent = _get_cost_category(session, book, id=payload.parent_id, name=payload.parent_name)
+    category = CostCategory(book_id=book.id, name=payload.name, parent_id=parent.id)
+    session.add(category)
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        if "duplicate key" in str(exc).lower():
+            raise ValidationError(
+                f"Cost category name {payload.name!r} already exists in book {book.name!r}"
+            ) from exc
+        raise
+    session.refresh(category)
+    _emit_master_created(
+        request,
+        book,
+        "cost_category",
+        {"id": category.id, "name": category.name, "parent_id": category.parent_id},
+    )
+    return _category_out(category)
+
+
+@router.get("/cost-categories", response_model=list[CostCategoryOut])
+def list_cost_categories(session: SessionDep, book: BookDep, _: ReaderDep):
+    categories = session.scalars(
+        select(CostCategory).where(CostCategory.book_id == book.id).order_by(CostCategory.id)
+    ).all()
+    return [_category_out(c) for c in categories]
+
+
+@router.patch("/cost-categories/{category_id}", response_model=CostCategoryOut)
+def move_cost_category(
+    category_id: int,
+    payload: CostCategoryUpdate,
+    session: SessionDep,
+    book: BookDep,
+    _: BookkeeperDep,
+):
+    """Re-parent a cost category; the closure follows atomically and the
+    database rejects cycles and root moves."""
+    category = session.get(CostCategory, category_id)
+    if category is None or category.book_id != book.id:
+        raise NotFoundError(f"Cost category {category_id} does not exist in book {book.name!r}")
+    if payload.parent_id is not None or payload.parent_name is not None:
+        parent = _get_cost_category(session, book, id=payload.parent_id, name=payload.parent_name)
+        category.parent_id = parent.id
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise ValidationError(str(exc.orig if hasattr(exc, "orig") else exc)) from exc
+    session.refresh(category)
+    return _category_out(category)
+
+
+def _get_cost_centre(
+    session: Session, book: Book, *, id: int | None = None, name: str | None = None
+) -> CostCentre:
+    stmt = select(CostCentre).where(CostCentre.book_id == book.id)
+    if id is not None:
+        stmt = stmt.where(CostCentre.id == id)
+    elif name is not None:
+        stmt = stmt.where(CostCentre.name == name)
+    else:
+        raise ValidationError("provide id or name")
+    centre = session.scalar(stmt)
+    if centre is None:
+        raise NotFoundError(
+            f"Cost centre {'id ' + str(id) if id else name!r} does not exist in book {book.name!r}"
+        )
+    return centre
+
+
+def _centre_out(session: Session, centre: CostCentre) -> CostCentreOut:
+    category = session.get(CostCategory, centre.category_id) if centre.category_id else None
+    return CostCentreOut(
+        id=centre.id,
+        name=centre.name,
+        code=centre.code,
+        parent_id=centre.parent_id,
+        category_id=centre.category_id,
+        category_name=category.name if category else None,
+        is_root=centre.is_root,
+    )
+
+
+@router.post("/cost-centres", response_model=CostCentreOut, status_code=201)
+def create_cost_centre(
+    payload: CostCentreCreate,
+    request: Request,
+    session: SessionDep,
+    book: BookDep,
+    _: BookkeeperDep,
+):
+    """An allocation node (ADR-025). Every real centre answers to exactly
+    one cost category — TallyPrime's rule, made a schema constraint."""
+    parent = _get_cost_centre(session, book, id=payload.parent_id, name=payload.parent_name)
+    category = _get_cost_category(session, book, id=payload.category_id, name=payload.category_name)
+    centre = CostCentre(
+        book_id=book.id,
+        name=payload.name,
+        code=payload.code,
+        parent_id=parent.id,
+        category_id=category.id,
+    )
+    session.add(centre)
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        if "duplicate key" in str(exc).lower():
+            raise ValidationError(
+                f"Cost centre name {payload.name!r} already exists in book {book.name!r}"
+            ) from exc
+        raise
+    session.refresh(centre)
+    _emit_master_created(
+        request,
+        book,
+        "cost_centre",
+        {
+            "id": centre.id,
+            "name": centre.name,
+            "code": centre.code,
+            "parent_id": centre.parent_id,
+            "category_id": centre.category_id,
+        },
+    )
+    return _centre_out(session, centre)
+
+
+@router.get("/cost-centres", response_model=list[CostCentreOut])
+def list_cost_centres(session: SessionDep, book: BookDep, _: ReaderDep):
+    centres = session.scalars(
+        select(CostCentre).where(CostCentre.book_id == book.id).order_by(CostCentre.id)
+    ).all()
+    return [_centre_out(session, c) for c in centres]
+
+
+@router.patch("/cost-centres/{centre_id}", response_model=CostCentreOut)
+def move_cost_centre(
+    centre_id: int,
+    payload: CostCentreUpdate,
+    session: SessionDep,
+    book: BookDep,
+    _: BookkeeperDep,
+):
+    """Re-parent a centre or reclassify it to another category; cycles and
+    root moves are rejected by the database."""
+    centre = session.get(CostCentre, centre_id)
+    if centre is None or centre.book_id != book.id:
+        raise NotFoundError(f"Cost centre {centre_id} does not exist in book {book.name!r}")
+    if payload.parent_id is not None or payload.parent_name is not None:
+        parent = _get_cost_centre(session, book, id=payload.parent_id, name=payload.parent_name)
+        centre.parent_id = parent.id
+    if payload.category_id is not None or payload.category_name is not None:
+        category = _get_cost_category(
+            session, book, id=payload.category_id, name=payload.category_name
+        )
+        centre.category_id = category.id
+    if payload.code is not None:
+        centre.code = payload.code
+    try:
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        raise ValidationError(str(exc.orig if hasattr(exc, "orig") else exc)) from exc
+    session.refresh(centre)
+    return _centre_out(session, centre)
 
 
 # ==================================================================== currencies

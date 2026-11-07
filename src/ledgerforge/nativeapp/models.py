@@ -28,6 +28,7 @@ class VoucherLine:
     currency: str | None = None
     amount_fx: Decimal | None = None
     fx_rate: Decimal | None = None
+    cost_allocations: tuple[CostAllocation, ...] = ()
 
     @classmethod
     def from_json(cls, raw: dict) -> VoucherLine:
@@ -41,6 +42,9 @@ class VoucherLine:
             currency=raw.get("currency"),
             amount_fx=dec(raw["amount_fx"]) if raw.get("amount_fx") is not None else None,
             fx_rate=dec(raw["fx_rate"]) if raw.get("fx_rate") is not None else None,
+            cost_allocations=tuple(
+                CostAllocation.from_json(a) for a in raw.get("cost_allocations", ())
+            ),
         )
 
 
@@ -79,6 +83,68 @@ class Voucher:
     @property
     def is_reversal(self) -> bool:
         return self.reversal_of is not None
+
+
+@dataclass(frozen=True, slots=True)
+class CostCategory:
+    id: int
+    name: str
+    parent_id: int | None
+    is_root: bool
+
+    @classmethod
+    def from_json(cls, raw: dict) -> CostCategory:
+        return cls(
+            id=raw["id"],
+            name=raw["name"],
+            parent_id=raw.get("parent_id"),
+            is_root=raw.get("is_root", False),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CostCentre:
+    id: int
+    name: str
+    code: str | None
+    parent_id: int | None
+    category_id: int | None
+    category_name: str | None
+    is_root: bool
+
+    @classmethod
+    def from_json(cls, raw: dict) -> CostCentre:
+        return cls(
+            id=raw["id"],
+            name=raw["name"],
+            code=raw.get("code"),
+            parent_id=raw.get("parent_id"),
+            category_id=raw.get("category_id"),
+            category_name=raw.get("category_name"),
+            is_root=raw.get("is_root", False),
+        )
+
+    @property
+    def label(self) -> str:
+        """The picker label: "Mumbai (Location)"."""
+        return f"{self.name} ({self.category_name})" if self.category_name else self.name
+
+
+@dataclass(frozen=True, slots=True)
+class CostAllocation:
+    centre_id: int
+    centre_name: str
+    dc: str
+    amount: Decimal
+
+    @classmethod
+    def from_json(cls, raw: dict) -> CostAllocation:
+        return cls(
+            centre_id=raw["centre_id"],
+            centre_name=raw["centre_name"],
+            dc=raw["dc"],
+            amount=dec(raw["amount"]),
+        )
 
 
 @dataclass(frozen=True, slots=True)

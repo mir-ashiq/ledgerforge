@@ -18,8 +18,18 @@ from ..errors import (
     UnbalancedVoucherError,
     ValidationError,
 )
-from ..models import Book, DocCounter, Ledger, Period, Voucher, VoucherEntry, VoucherType
-from ..plugins import DraftLine, PluginManager, Resolver, VoucherDraft
+from ..models import (
+    Book,
+    CostAllocation,
+    CostCentre,
+    DocCounter,
+    Ledger,
+    Period,
+    Voucher,
+    VoucherEntry,
+    VoucherType,
+)
+from ..plugins import DraftCostAllocation, DraftLine, PluginManager, Resolver, VoucherDraft
 from ..schemas import VoucherCreate, _coerce_amount
 from ..settings import Settings
 from .currency import validate_fx_lines
@@ -135,6 +145,62 @@ def _period_gate_error(exc: Exception) -> EngineError | None:
     return None
 
 
+def _validate_cost_allocations(draft: VoucherDraft) -> None:
+    """The allocation half of the posting law (ADR-025): a line is fully
+    allocated or left unallocated — Σallocation = amount, exact Decimal
+    equality, no epsilon. Runs after every plugin hook, so a transformer
+    that split a line without splitting its allocations is caught here."""
+    for i, line in enumerate(draft.lines, start=1):
+        if not line.cost_allocations:
+            continue
+        for j, alloc in enumerate(line.cost_allocations, start=1):
+            if alloc.centre_id is None and not alloc.centre_name:
+                raise ValidationError(f"Line {i}, allocation {j}: provide centre_id or centre_name")
+            if alloc.amount is None or alloc.amount <= 0:
+                raise ValidationError(
+                    f"Line {i}, allocation {j}: the allocation amount must be positive"
+                )
+        allocated = sum((a.amount for a in line.cost_allocations), Decimal(0))
+        if allocated != line.amount:
+            raise ValidationError(
+                f"Line {i}: cost allocations sum to {allocated} against an amount of "
+                f"{line.amount} — a line is fully allocated or left unallocated, never partly"
+            )
+
+
+def _resolve_centres_by_id(session: Session, book: Book, lines: list[DraftLine]) -> None:
+    """Resolve and NORMALISE every allocation's centre inside ``book``
+    (ADR-025, with ADR-009's discipline: another book's centre id is a 404,
+    never a cross-book allocation). Each allocation's ``centre_id`` is set
+    to the resolved row (name lookups collapse to ids); the root centre is
+    the tree's container and can never receive an allocation."""
+    for i, line in enumerate(lines, start=1):
+        for j, alloc in enumerate(line.cost_allocations, start=1):
+            stmt = (
+                select(CostCentre).where(
+                    CostCentre.id == alloc.centre_id, CostCentre.book_id == book.id
+                )
+                if alloc.centre_id is not None
+                else select(CostCentre).where(
+                    CostCentre.book_id == book.id, CostCentre.name == alloc.centre_name
+                )
+            )
+            centre = session.scalar(stmt)
+            if centre is None:
+                ref = f"id {alloc.centre_id}" if alloc.centre_id else f"name {alloc.centre_name!r}"
+                raise NotFoundError(
+                    f"Line {i}, allocation {j}: cost centre {ref} does not exist "
+                    f"in book {book.name!r}"
+                )
+            if centre.is_root:
+                raise ValidationError(
+                    f"Line {i}, allocation {j}: the root cost centre is the tree's "
+                    "container — allocate to a real centre"
+                )
+            alloc.centre_id = centre.id
+            alloc.centre_name = None
+
+
 # ------------------------------------------------------------------ posting
 def post_voucher(
     session: Session,
@@ -170,6 +236,12 @@ def post_voucher(
                 currency=ln.currency,
                 amount_fx=ln.amount_fx,
                 fx_rate=ln.fx_rate,
+                cost_allocations=[
+                    DraftCostAllocation(
+                        centre_id=a.centre_id, centre_name=a.centre_name, amount=a.amount
+                    )
+                    for a in ln.cost_allocations
+                ],
             )
             for ln in payload.entries
         ],
@@ -184,9 +256,11 @@ def post_voucher(
     draft = manager.transform(draft, resolver)
     manager.validate(draft, resolver)
 
-    # 4. Engine validation — the three laws, the FX rules, the period gate
+    # 4. Engine validation — the three laws, the FX rules, the allocation
+    # law (ADR-025), the period gate
     _validate_draft(draft, settings)
     validate_fx_lines(session, draft, book.base_currency)
+    _validate_cost_allocations(draft)
     _check_period_open(session, book, draft.voucher_date)
 
     # 5. Resolve masters (every lookup lives inside the book)
@@ -200,6 +274,7 @@ def post_voucher(
             f"Voucher type {draft.voucher_type!r} does not exist in book {book.name!r}"
         )
     resolved = _resolve_ledgers(session, book, draft.lines)
+    _resolve_centres_by_id(session, book, draft.lines)
 
     # 6. Gapless numbering: lock the counter row (the only locked row —
     # ADR-002). Scope is '{book}:{vtype}:{fy}' — every book numbers from 1.
@@ -242,21 +317,32 @@ def post_voucher(
         raise
 
     for line_no, (line, ledger) in enumerate(resolved, start=1):
-        session.add(
-            VoucherEntry(
-                voucher_id=voucher.id,
-                line_no=line_no,
-                ledger_id=ledger.id,
-                book_id=book.id,
-                dc=line.dc,
-                amount=line.amount,
-                voucher_date=voucher.voucher_date,
-                narration=line.narration,
-                currency=line.currency,
-                amount_fx=line.amount_fx,
-                fx_rate=line.fx_rate,
-            )
+        entry = VoucherEntry(
+            voucher_id=voucher.id,
+            line_no=line_no,
+            ledger_id=ledger.id,
+            book_id=book.id,
+            dc=line.dc,
+            amount=line.amount,
+            voucher_date=voucher.voucher_date,
+            narration=line.narration,
+            currency=line.currency,
+            amount_fx=line.amount_fx,
+            fx_rate=line.fx_rate,
         )
+        session.add(entry)
+        session.flush()  # entry.id for the allocations that split it
+        for alloc in line.cost_allocations:
+            session.add(
+                CostAllocation(
+                    entry_id=entry.id,
+                    centre_id=alloc.centre_id,
+                    book_id=book.id,
+                    dc=line.dc,  # Dr/Cr preserved from the entry (ADR-025)
+                    amount=alloc.amount,
+                    voucher_date=voucher.voucher_date,
+                )
+            )
 
     # 8. Commit — the deferred constraint trigger re-verifies Law 1 here
     try:

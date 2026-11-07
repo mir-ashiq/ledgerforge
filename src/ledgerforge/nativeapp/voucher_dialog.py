@@ -38,7 +38,8 @@ from PySide6.QtWidgets import (
 from ..seeding import VOUCHER_TYPES
 from .bill_dialog import BillAllocationDialog
 from .client import ApiClient
-from .models import Voucher, money
+from .cost_dialog import CostAllocationDialog
+from .models import CostCategory, CostCentre, Voucher, money
 from .order_dialog import OrderAllocationDialog
 from .tasks import run
 from .widgets import error_detail, fill_table, make_table
@@ -223,11 +224,17 @@ class _LineEditor:
 
     # --------------------------------------------------------------- payload
     def payload(self) -> dict | None:
-        """The engine's VoucherLineIn — None when the row is not usable."""
+        """The engine's VoucherLineIn — None when the row is not usable.
+        A row with a blank amount and no FX trio is UNTOUCHED — skipped,
+        not judged (the web screen's rule for auto-appended rows); a typed
+        amount goes to the wire and the engine stays the judge."""
         name = self.ledger.currentText().strip()
         if not name:
             return None
         ccy, fx_raw, rate_raw = self._fx_texts()
+        amount_raw = self.amount.text().strip()
+        if not amount_raw and not (ccy or fx_raw or rate_raw):
+            return None  # untouched row
         if ccy or fx_raw or rate_raw:
             # an FX line: the base amount is the product, exactly as the
             # engine's chk_entry_fx_consistent computes it
@@ -256,7 +263,9 @@ class NewVoucherDialog(QDialog):
     with bill-wise allocation for party lines (ADR-023): Ctrl+L opens the
     allocation dialog, and the armed refs ride the post as meta.bills.
     Order settlement rides alongside (ADR-024): Ctrl+O picks the open
-    orders this voucher bills, arming meta.orders.settle on the post."""
+    orders this voucher bills, arming meta.orders.settle on the post.
+    Cost-centre splits ride the lines themselves (ADR-025): Ctrl+K arms
+    per-line cost_allocations, the remainder always visible."""
 
     posted = Signal(object)  # the new Voucher
 
@@ -266,15 +275,23 @@ class NewVoucherDialog(QDialog):
         ledgers: list[str],
         parent: QWidget | None = None,
         party_names: list[str] | None = None,
+        cost_centres: list[CostCentre] | None = None,
+        cost_categories: list[CostCategory] | None = None,
     ):
         super().__init__(parent)
         self._client = client
         self._ledgers = ledgers
         self._party_names = set(party_names or [])
+        self._cost_centres = list(cost_centres or [])
+        self._cost_categories = list(cost_categories or [])
         self._bill_refs: list[dict] = []
         self._bill_party: str | None = None
         self._order_settle: list[dict] = []
         self._order_party: str | None = None
+        #: per-line cost splits (ADR-025): parallel to the form's lines —
+        #: [(centre_id, amount), ...] per line, [] = left unallocated
+        self._cost_splits: list[list[dict]] = []
+        self._cost_lines: list[tuple[str, str, Decimal]] = []  # what they were armed against
         self._lines: list[_LineEditor] = []
         self.setWindowTitle("New Voucher")
         self.setModal(True)
@@ -308,6 +325,8 @@ class NewVoucherDialog(QDialog):
         QShortcut(QKeySequence("Ctrl+L"), self, self._open_bill_dialog)
         # order settlement (ADR-024): pick the orders this voucher bills
         QShortcut(QKeySequence("Ctrl+O"), self, self._open_order_dialog)
+        # cost-centre splits (ADR-025): every line, the remainder always visible
+        QShortcut(QKeySequence("Ctrl+K"), self, self._open_cost_dialog)
 
         layout.addWidget(QLabel("Narration"))
         self.narration = QLineEdit()
@@ -349,10 +368,17 @@ class NewVoucherDialog(QDialog):
             "quantities it bills ride the post as meta.orders.settle (ADR-024)"
         )
         self.order_button.clicked.connect(self._open_order_dialog)
+        self.cost_button = QPushButton("Cost centres… (Ctrl+K)")
+        self.cost_button.setToolTip(
+            "Split lines across cost centres (ADR-025) — every line fully "
+            "allocated or left unallocated; the remainder is always visible"
+        )
+        self.cost_button.clicked.connect(self._open_cost_dialog)
         line_buttons.addWidget(add_button)
         line_buttons.addWidget(remove_button)
         line_buttons.addWidget(self.bills_button)
         line_buttons.addWidget(self.order_button)
+        line_buttons.addWidget(self.cost_button)
         line_buttons.addStretch(1)
         self.balance_label = QLabel()
         font = QFont()
@@ -368,6 +394,10 @@ class NewVoucherDialog(QDialog):
         self.order_status = QLabel("")
         self.order_status.setStyleSheet("color: #52607a;")
         layout.addWidget(self.order_status)
+
+        self.cost_status = QLabel("")
+        self.cost_status.setStyleSheet("color: #52607a;")
+        layout.addWidget(self.cost_status)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -593,9 +623,69 @@ class NewVoucherDialog(QDialog):
             self._order_settle = []
             self.order_status.setText("")
 
+    # -------------------------------------------------- cost-centre splits
+    def _complete_lines(self) -> list[tuple[str, str, Decimal]]:
+        """The form's complete lines as (ledger_name, dc, amount) — the
+        allocation dialog's view of the draft."""
+        rows: list[tuple[str, str, Decimal]] = []
+        for line in self._lines:
+            payload = line.payload()
+            if payload is None:
+                continue
+            rows.append(
+                (payload["ledger_name"], payload["dc"], Decimal(payload["amount"]).quantize(CENT))
+            )
+        return rows
+
+    def _open_cost_dialog(self) -> None:
+        lines = self._complete_lines()
+        if not lines:
+            QMessageBox.information(
+                self,
+                "Cost centres",
+                "No complete line yet — fill a ledger and its amount first; "
+                "the splits follow the lines.",
+            )
+            return
+        dialog = CostAllocationDialog(
+            self._client, lines, self._cost_centres, self._cost_categories, self
+        )
+        if dialog.exec():
+            self._cost_lines = lines
+            self._cost_splits = dialog.allocations()
+            armed = sum(1 for splits in self._cost_splits if splits)
+            total = len(lines)
+            self.cost_status.setText(
+                f"Cost centres armed: {armed} of {total} line(s) allocated — "
+                "they ride the post as the lines' cost_allocations (ADR-025)"
+            )
+
+    def _armed_splits_for(self, entries: list[dict]) -> list[list[dict]]:
+        """The armed splits, matched against the entries as they are NOW:
+        a split survives only on the same ledger name AND amount it was
+        armed against — an edited line loses its stale arming honestly
+        (it stays unallocated, the engine would refuse a partial split)."""
+        matched: list[list[dict]] = [[] for _ in entries]
+        if not self._cost_splits:
+            return matched
+        for cursor, entry in enumerate(entries):
+            key = (entry.get("ledger_name"), entry.get("dc"))
+            amount = Decimal(str(entry.get("amount", "0"))).quantize(CENT)
+            if cursor < len(self._cost_lines) and self._cost_lines[cursor] == (
+                key[0],
+                key[1],
+                amount,
+            ):
+                matched[cursor] = self._cost_splits[cursor]
+        return matched
+
     # ------------------------------------------------------------- posting
     def _submit(self) -> None:
         entries = [p for p in (line.payload() for line in self._lines) if p is not None]
+        splits = self._armed_splits_for(entries)
+        for entry, line_splits in zip(entries, splits, strict=False):
+            if line_splits:
+                entry["cost_allocations"] = line_splits
         voucher_date: date = self.date_edit.date().toPython()
         voucher_type = self.type_box.currentData()
         client_token = str(uuid.uuid4())  # idempotency: a retry reposts nothing

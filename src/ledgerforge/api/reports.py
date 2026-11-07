@@ -10,8 +10,18 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request, Response
 
 from ..errors import NotFoundError
+from ..models import CostCentre
 from ..plugins import Resolver
-from ..reporting import balance_sheet, fy_close, group_rollups, profit_loss, trial_balance
+from ..reporting import (
+    balance_sheet,
+    cost_category_summary,
+    cost_centre_breakup,
+    cost_centre_summary,
+    fy_close,
+    group_rollups,
+    profit_loss,
+    trial_balance,
+)
 from ..reporting.printing import render_view
 from . import BookDep, ReaderDep, SessionDep
 
@@ -73,6 +83,53 @@ def get_fy_close(
     every income/expense ledger as of ``as_of`` and move the net result to
     Profit & Loss A/c. ``POST /api/v1/periods/{id}/close`` posts them."""
     return fy_close(session, book.id, as_of)
+
+
+# ------------------------------------------------------------- cost centres
+@router.get("/cost-centres")
+def get_cost_centre_summary(
+    session: SessionDep,
+    book: BookDep,
+    _: ReaderDep,
+    date_from: Annotated[date, Query(alias="from")],
+    date_to: Annotated[date, Query(alias="to")],
+):
+    """The cost-centre break-up's top view (ADR-025): every centre's
+    allocation rollup through the closure, plus the Unallocated mass —
+    allocated + unallocated is the window's whole entry mass."""
+    return cost_centre_summary(session, book.id, date_from, date_to)
+
+
+@router.get("/cost-centres/{centre_id}/breakup")
+def get_cost_centre_breakup(
+    centre_id: int,
+    session: SessionDep,
+    book: BookDep,
+    _: ReaderDep,
+    date_from: Annotated[date, Query(alias="from")],
+    date_to: Annotated[date, Query(alias="to")],
+):
+    """Ledger-wise within one centre (ADR-025): the centre's own allocations
+    per ledger, with the total the shaper proves against the rows."""
+    centre = session.get(CostCentre, centre_id)
+    if centre is None or centre.book_id != book.id or centre.is_root:
+        raise NotFoundError(f"Cost centre {centre_id} does not exist in book {book.name!r}")
+    payload = cost_centre_breakup(session, book.id, centre_id, date_from, date_to)
+    payload["centre_name"] = centre.name
+    return payload
+
+
+@router.get("/cost-categories")
+def get_cost_category_summary(
+    session: SessionDep,
+    book: BookDep,
+    _: ReaderDep,
+    date_from: Annotated[date, Query(alias="from")],
+    date_to: Annotated[date, Query(alias="to")],
+):
+    """The category rollup (ADR-025): allocations through the centre→
+    category edge and the category closure."""
+    return cost_category_summary(session, book.id, date_from, date_to)
 
 
 def _safe_stem(name: str) -> str:

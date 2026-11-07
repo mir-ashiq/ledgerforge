@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 from ..engine.opening import post_opening
 from ..engine.posting import get_voucher_with_entries, post_voucher
 from ..engine.reversal import reverse_voucher
-from ..models import Voucher, VoucherEntry, VoucherType
+from ..models import CostAllocation, CostCentre, Voucher, VoucherEntry, VoucherType
 from ..plugins import PluginManager
 from ..schemas import (
+    CostAllocationOut,
     OpeningCreate,
     ReversalCreate,
     VoucherCreate,
@@ -44,6 +45,24 @@ def _voucher_out(session: Session, voucher: Voucher, *, replayed: bool = False) 
         select(Ledger).where(Ledger.id.in_({e.ledger_id for e in entries}))
     ).all()
     ledger_names = {row.id: row.name for row in ledger_rows}
+    # cost allocations ride the entries out (ADR-025): centre names resolved
+    # once, grouped per entry — the client never joins
+    alloc_rows = session.execute(
+        select(CostAllocation, CostCentre)
+        .join(CostCentre, CostCentre.id == CostAllocation.centre_id)
+        .where(CostAllocation.entry_id.in_({e.id for e in entries}))
+        .order_by(CostAllocation.id)
+    ).all()
+    allocs_by_entry: dict[int, list[CostAllocationOut]] = {}
+    for alloc, centre in alloc_rows:
+        allocs_by_entry.setdefault(alloc.entry_id, []).append(
+            CostAllocationOut(
+                centre_id=centre.id,
+                centre_name=centre.name,
+                dc=alloc.dc,
+                amount=alloc.amount,
+            )
+        )
     vtype = session.get(VoucherType, voucher.voucher_type_id)
     # the daybook's amount column (ADR-015): the debit-side total, engine-
     # computed and quantized to cents — the client never sums (Law 3)
@@ -72,6 +91,7 @@ def _voucher_out(session: Session, voucher: Voucher, *, replayed: bool = False) 
                 currency=e.currency,
                 amount_fx=e.amount_fx,
                 fx_rate=e.fx_rate,
+                cost_allocations=allocs_by_entry.get(e.id, []),
             )
             for e in entries
         ],

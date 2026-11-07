@@ -609,6 +609,374 @@ CREATE TRIGGER trg_audit_periods
     FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
 
 -- ----------------------------------------------------------------------------
+-- Cost categories (Phase 4, ADR-025; migration 0007) — the axes along which
+-- money is classified ("Department", "Location", "Project"…). A tree with
+-- one root per book, the same adjacency+closure pair as groups (ADR-001):
+-- categories classify CENTRES, centres carry the allocations.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cost_categories (
+    id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    book_id    BIGINT NOT NULL REFERENCES books(id),
+    name       TEXT NOT NULL,
+    parent_id  BIGINT,
+    is_root    BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_cost_categories_book_id UNIQUE (book_id, id),
+    CONSTRAINT uq_cost_categories_book_name UNIQUE (book_id, name),
+    CONSTRAINT fk_cost_categories_parent_same_book FOREIGN KEY (book_id, parent_id)
+        REFERENCES cost_categories (book_id, id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_categories_parent ON cost_categories (parent_id);
+
+-- Exactly one root cost category per book.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cost_categories_single_root
+    ON cost_categories (book_id) WHERE is_root;
+
+-- Category closure — the same trigger-maintained read model as group_closure.
+CREATE TABLE IF NOT EXISTS cost_category_closure (
+    ancestor_id   BIGINT NOT NULL REFERENCES cost_categories(id) ON DELETE CASCADE,
+    descendant_id BIGINT NOT NULL REFERENCES cost_categories(id) ON DELETE CASCADE,
+    depth         INT NOT NULL CHECK (depth >= 0),
+    PRIMARY KEY (ancestor_id, descendant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_category_closure_descendant
+    ON cost_category_closure (descendant_id);
+
+-- ----------------------------------------------------------------------------
+-- Cost centres — the allocation tree (like groups: adjacency is the source
+-- of truth, the closure answers hierarchy questions). Every real centre
+-- answers to exactly one cost category (TallyPrime's rule); the root is the
+-- tree's container and receives no allocations.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cost_centres (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    book_id     BIGINT NOT NULL REFERENCES books(id),
+    name        TEXT NOT NULL,
+    code        TEXT,
+    parent_id   BIGINT,
+    category_id BIGINT,
+    is_root     BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_cost_centres_book_id UNIQUE (book_id, id),
+    CONSTRAINT uq_cost_centres_book_name UNIQUE (book_id, name),
+    CONSTRAINT fk_cost_centres_parent_same_book FOREIGN KEY (book_id, parent_id)
+        REFERENCES cost_centres (book_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_cost_centres_category_same_book FOREIGN KEY (book_id, category_id)
+        REFERENCES cost_categories (book_id, id) ON DELETE RESTRICT,
+    -- the root is the container (no category of its own); every real centre
+    -- is classified by exactly one category
+    CONSTRAINT chk_cost_centre_root_category
+        CHECK ((is_root AND category_id IS NULL) OR (NOT is_root AND category_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_centres_parent ON cost_centres (parent_id);
+CREATE INDEX IF NOT EXISTS idx_cost_centres_category ON cost_centres (category_id);
+
+-- Exactly one root cost centre per book.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_cost_centres_single_root
+    ON cost_centres (book_id) WHERE is_root;
+
+-- Centre closure — trigger-maintained, the machinery reports read ONLY.
+CREATE TABLE IF NOT EXISTS cost_centre_closure (
+    ancestor_id   BIGINT NOT NULL REFERENCES cost_centres(id) ON DELETE CASCADE,
+    descendant_id BIGINT NOT NULL REFERENCES cost_centres(id) ON DELETE CASCADE,
+    depth         INT NOT NULL CHECK (depth >= 0),
+    PRIMARY KEY (ancestor_id, descendant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_centre_closure_descendant
+    ON cost_centre_closure (descendant_id);
+
+-- Category closure maintenance — the group triggers (ADR-001) with the
+-- tables renamed: insert inherits the parent's ancestor chain, re-parenting
+-- is guarded against cycles and root unrooting, a move rewrites the subtree.
+CREATE OR REPLACE FUNCTION trg_cost_categories_after_insert() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO cost_category_closure (ancestor_id, descendant_id, depth)
+    SELECT a.ancestor_id, NEW.id, a.depth + 1
+    FROM cost_category_closure a
+    WHERE a.descendant_id = NEW.parent_id;
+
+    INSERT INTO cost_category_closure (ancestor_id, descendant_id, depth)
+    VALUES (NEW.id, NEW.id, 0);
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_cost_categories_before_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.is_root AND (NOT NEW.is_root OR NEW.parent_id IS NOT NULL) THEN
+        RAISE EXCEPTION 'The root cost category cannot be re-parented or unrooted';
+    END IF;
+    IF NEW.parent_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM cost_category_closure
+        WHERE ancestor_id = NEW.id AND descendant_id = NEW.parent_id
+    ) THEN
+        RAISE EXCEPTION 'Cycle detected: cost category "%" cannot be moved under its own descendant', NEW.name;
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_cost_categories_after_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.parent_id IS NOT DISTINCT FROM OLD.parent_id THEN
+        RETURN NEW;
+    END IF;
+
+    DELETE FROM cost_category_closure
+    WHERE descendant_id IN (SELECT descendant_id FROM cost_category_closure WHERE ancestor_id = NEW.id)
+      AND ancestor_id IN (SELECT ancestor_id FROM cost_category_closure WHERE descendant_id = OLD.parent_id);
+
+    INSERT INTO cost_category_closure (ancestor_id, descendant_id, depth)
+    SELECT sup.ancestor_id, sub.descendant_id, sup.depth + sub.depth + 1
+    FROM cost_category_closure sup, cost_category_closure sub
+    WHERE sup.descendant_id = NEW.parent_id
+      AND sub.ancestor_id = NEW.id;
+
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_cost_categories_before_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.is_root THEN
+        RAISE EXCEPTION 'The root cost category cannot be deleted';
+    END IF;
+    RETURN OLD;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_cost_categories_ins ON cost_categories;
+CREATE TRIGGER trg_cost_categories_ins
+    AFTER INSERT ON cost_categories
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_categories_after_insert();
+
+DROP TRIGGER IF EXISTS trg_cost_categories_upd_cycle ON cost_categories;
+CREATE TRIGGER trg_cost_categories_upd_cycle
+    BEFORE UPDATE OF parent_id, is_root ON cost_categories
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_categories_before_update();
+
+DROP TRIGGER IF EXISTS trg_cost_categories_upd ON cost_categories;
+CREATE TRIGGER trg_cost_categories_upd
+    AFTER UPDATE OF parent_id ON cost_categories
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_categories_after_update();
+
+DROP TRIGGER IF EXISTS trg_cost_categories_del ON cost_categories;
+CREATE TRIGGER trg_cost_categories_del
+    BEFORE DELETE ON cost_categories
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_categories_before_delete();
+
+-- Centre closure maintenance — the same four triggers, the centre tables.
+CREATE OR REPLACE FUNCTION trg_cost_centres_after_insert() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO cost_centre_closure (ancestor_id, descendant_id, depth)
+    SELECT a.ancestor_id, NEW.id, a.depth + 1
+    FROM cost_centre_closure a
+    WHERE a.descendant_id = NEW.parent_id;
+
+    INSERT INTO cost_centre_closure (ancestor_id, descendant_id, depth)
+    VALUES (NEW.id, NEW.id, 0);
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_cost_centres_before_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.is_root AND (NOT NEW.is_root OR NEW.parent_id IS NOT NULL) THEN
+        RAISE EXCEPTION 'The root cost centre cannot be re-parented or unrooted';
+    END IF;
+    IF NEW.parent_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM cost_centre_closure
+        WHERE ancestor_id = NEW.id AND descendant_id = NEW.parent_id
+    ) THEN
+        RAISE EXCEPTION 'Cycle detected: cost centre "%" cannot be moved under its own descendant', NEW.name;
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_cost_centres_after_update() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.parent_id IS NOT DISTINCT FROM OLD.parent_id THEN
+        RETURN NEW;
+    END IF;
+
+    DELETE FROM cost_centre_closure
+    WHERE descendant_id IN (SELECT descendant_id FROM cost_centre_closure WHERE ancestor_id = NEW.id)
+      AND ancestor_id IN (SELECT ancestor_id FROM cost_centre_closure WHERE descendant_id = OLD.parent_id);
+
+    INSERT INTO cost_centre_closure (ancestor_id, descendant_id, depth)
+    SELECT sup.ancestor_id, sub.descendant_id, sup.depth + sub.depth + 1
+    FROM cost_centre_closure sup, cost_centre_closure sub
+    WHERE sup.descendant_id = NEW.parent_id
+      AND sub.ancestor_id = NEW.id;
+
+    RETURN NEW;
+END $$;
+
+CREATE OR REPLACE FUNCTION trg_cost_centres_before_delete() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.is_root THEN
+        RAISE EXCEPTION 'The root cost centre cannot be deleted';
+    END IF;
+    RETURN OLD;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_cost_centres_ins ON cost_centres;
+CREATE TRIGGER trg_cost_centres_ins
+    AFTER INSERT ON cost_centres
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_centres_after_insert();
+
+DROP TRIGGER IF EXISTS trg_cost_centres_upd_cycle ON cost_centres;
+CREATE TRIGGER trg_cost_centres_upd_cycle
+    BEFORE UPDATE OF parent_id, is_root ON cost_centres
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_centres_before_update();
+
+DROP TRIGGER IF EXISTS trg_cost_centres_upd ON cost_centres;
+CREATE TRIGGER trg_cost_centres_upd
+    AFTER UPDATE OF parent_id ON cost_centres
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_centres_after_update();
+
+DROP TRIGGER IF EXISTS trg_cost_centres_del ON cost_centres;
+CREATE TRIGGER trg_cost_centres_del
+    BEFORE DELETE ON cost_centres
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_centres_before_delete();
+
+DROP TRIGGER IF EXISTS trg_audit_cost_categories ON cost_categories;
+CREATE TRIGGER trg_audit_cost_categories
+    AFTER INSERT OR UPDATE OR DELETE ON cost_categories
+    FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
+
+DROP TRIGGER IF EXISTS trg_audit_cost_centres ON cost_centres;
+CREATE TRIGGER trg_audit_cost_centres
+    AFTER INSERT OR UPDATE OR DELETE ON cost_centres
+    FOR EACH ROW EXECUTE FUNCTION trg_audit_master();
+
+-- ----------------------------------------------------------------------------
+-- Cost allocations (ADR-025) — the first core financial table since the
+-- baseline that is not a voucher: one row per (entry, centre, amount),
+-- Dr/Cr preserved from the entry, amount exact (Law 3). The conservation
+-- law is database-enforced like Law 1: at commit, an entry's allocations
+-- sum to the entry's amount EXACTLY — a line is either fully allocated or
+-- carries no allocations at all, never partly. voucher_date and book_id
+-- are denormalized from the entry (mirroring voucher_entries) so reports
+-- never join the write path. Append-only like the entries they split.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cost_allocations (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    entry_id     BIGINT NOT NULL,
+    centre_id    BIGINT NOT NULL REFERENCES cost_centres(id) ON DELETE RESTRICT,
+    book_id      BIGINT NOT NULL REFERENCES books(id),
+    dc           TEXT NOT NULL CHECK (dc IN ('D', 'C')),
+    amount       NUMERIC(26, 8) NOT NULL CHECK (amount > 0),
+    voucher_date DATE NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The entry FK exists only on the PLAIN voucher_entries shape: once
+-- ops.partition_entries_by_year swaps in the partitioned table, the PK is
+-- (id, voucher_date) and no unique index on id alone can exist. On that
+-- shape the insert-time trigger below keeps the integrity (same book, same
+-- D/C, same date, the entry exists) — and ops.unpartition_entries re-adds
+-- this constraint when the plain shape returns.
+DO $$
+BEGIN
+    IF (SELECT c.relkind FROM pg_class c
+        WHERE c.oid = 'public.voucher_entries'::regclass) = 'r'
+       AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint
+           WHERE conname = 'cost_allocations_entry_id_fkey'
+             AND conrelid = 'public.cost_allocations'::regclass) THEN
+        ALTER TABLE public.cost_allocations
+            ADD CONSTRAINT cost_allocations_entry_id_fkey
+            FOREIGN KEY (entry_id) REFERENCES public.voucher_entries(id) ON DELETE RESTRICT;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_cost_allocations_entry ON cost_allocations (entry_id);
+CREATE INDEX IF NOT EXISTS idx_cost_allocations_centre ON cost_allocations (centre_id);
+CREATE INDEX IF NOT EXISTS idx_cost_allocations_book_date ON cost_allocations (book_id, voucher_date);
+
+-- Per-row integrity at insert time: same book (entry, centre), Dr/Cr
+-- preserved from the entry, the entry's own voucher_date, and never the
+-- root centre (the container receives no allocations — TallyPrime's rule).
+CREATE OR REPLACE FUNCTION trg_cost_allocations_check() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_book       BIGINT;
+    v_dc         TEXT;
+    v_date       DATE;
+    v_centre     RECORD;
+BEGIN
+    SELECT book_id, dc, voucher_date INTO v_book, v_dc, v_date
+    FROM voucher_entries WHERE id = NEW.entry_id;
+    IF v_book IS NULL THEN
+        RAISE EXCEPTION 'Cost allocation references unknown entry %', NEW.entry_id;
+    END IF;
+    IF NEW.book_id <> v_book THEN
+        RAISE EXCEPTION 'Cost allocation book mismatch: entry % belongs to book %, the allocation claims %',
+            NEW.entry_id, v_book, NEW.book_id;
+    END IF;
+    IF NEW.dc <> v_dc THEN
+        RAISE EXCEPTION 'Cost allocation D/C mismatch on entry %: allocations preserve the entry''s Dr/Cr (%)',
+            NEW.entry_id, v_dc;
+    END IF;
+    IF NEW.voucher_date <> v_date THEN
+        RAISE EXCEPTION 'Cost allocation date mismatch on entry %: % is not the voucher''s date %',
+            NEW.entry_id, NEW.voucher_date, v_date;
+    END IF;
+    SELECT book_id, is_root INTO v_centre FROM cost_centres WHERE id = NEW.centre_id;
+    IF v_centre IS NULL THEN
+        RAISE EXCEPTION 'Cost allocation references unknown cost centre %', NEW.centre_id;
+    END IF;
+    IF v_centre.book_id <> NEW.book_id THEN
+        RAISE EXCEPTION 'Cost allocation centre % belongs to another book', NEW.centre_id;
+    END IF;
+    IF v_centre.is_root THEN
+        RAISE EXCEPTION 'The root cost centre is the tree''s container — allocate to a real centre';
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_cost_allocations_check ON cost_allocations;
+CREATE TRIGGER trg_cost_allocations_check
+    BEFORE INSERT ON cost_allocations
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_allocations_check();
+
+-- The conservation law, database-enforced at commit (deferrable so a
+-- voucher's allocations all land before the verdict — the same discipline
+-- as Law 1's trg_entries_balanced).
+CREATE OR REPLACE FUNCTION trg_cost_allocations_exact() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_amount   NUMERIC;
+    v_allocated NUMERIC;
+BEGIN
+    SELECT amount INTO v_amount FROM voucher_entries WHERE id = NEW.entry_id;
+    SELECT COALESCE(SUM(amount), 0) INTO v_allocated
+    FROM cost_allocations WHERE entry_id = NEW.entry_id;
+
+    IF v_allocated <> v_amount THEN
+        RAISE EXCEPTION 'Cost allocation mismatch on entry %: % allocated against an amount of % — a line is fully allocated or left unallocated, never partly',
+            NEW.entry_id, v_allocated, v_amount;
+    END IF;
+    RETURN NULL;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_cost_allocations_exact ON cost_allocations;
+CREATE CONSTRAINT TRIGGER trg_cost_allocations_exact
+    AFTER INSERT ON cost_allocations
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION trg_cost_allocations_exact();
+
+-- ----------------------------------------------------------------------------
 -- Law 2 defense in depth: financial history is append-only at the trigger
 -- level and at the privilege level.
 -- ----------------------------------------------------------------------------
@@ -628,6 +996,13 @@ CREATE TRIGGER trg_vouchers_immutable
 DROP TRIGGER IF EXISTS trg_voucher_entries_immutable ON voucher_entries;
 CREATE TRIGGER trg_voucher_entries_immutable
     BEFORE UPDATE OR DELETE ON voucher_entries
+    FOR EACH ROW EXECUTE FUNCTION trg_forbid_mutation();
+
+-- Cost allocations are financial history too (ADR-025): they split entries,
+-- they are corrected by reversing the voucher — never by editing the split.
+DROP TRIGGER IF EXISTS trg_cost_allocations_immutable ON cost_allocations;
+CREATE TRIGGER trg_cost_allocations_immutable
+    BEFORE UPDATE OR DELETE ON cost_allocations
     FOR EACH ROW EXECUTE FUNCTION trg_forbid_mutation();
 
 DROP TRIGGER IF EXISTS trg_audit_log_immutable ON audit_log;
@@ -660,4 +1035,14 @@ GRANT SELECT, INSERT, UPDATE ON fx_rates TO ledgerforge_app;
 GRANT SELECT, INSERT, UPDATE ON books TO ledgerforge_app;
 -- Period locking (0003): control data — never part of financial history.
 GRANT SELECT, INSERT, UPDATE, DELETE ON periods TO ledgerforge_app;
+-- Cost centres (0007/ADR-025): masters like groups (closure follows by
+-- trigger, the group_closure precedent); allocations are financial history —
+-- INSERT only, append-only like voucher_entries. The last two lines are
+-- what the blanket grants above already give the new objects — stated here
+-- so the migration path (which has no blanket re-run) matches exactly.
+GRANT SELECT, INSERT, UPDATE, DELETE ON cost_categories, cost_centres TO ledgerforge_app;
+GRANT INSERT ON cost_allocations TO ledgerforge_app;
+GRANT SELECT ON cost_allocations, cost_category_closure, cost_centre_closure TO ledgerforge_app;
+GRANT USAGE ON SEQUENCE cost_categories_id_seq, cost_centres_id_seq, cost_allocations_id_seq
+    TO ledgerforge_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ledgerforge_app;

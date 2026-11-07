@@ -865,3 +865,12 @@ body {
   border-radius: 6px;
 }
 .alloc-newref .alloc-input { width: 64px; text-align: right; }
+
+/* --- cost allocation dialog (ADR-025) ---------------------------------- */
+.alloc-table tr.picked {
+  outline: 2px solid var(--accent, #1f6feb);
+  outline-offset: -2px;
+}
+.alloc-table tr.picked td {
+  font-weight: 600;
+}

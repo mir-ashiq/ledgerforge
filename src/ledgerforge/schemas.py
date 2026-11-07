@@ -202,6 +202,96 @@ class LedgerOut(BaseModel):
     is_system: bool
 
 
+# ------------------------------------------------------------- cost centres
+class CostCategoryCreate(BaseModel):
+    """POST /api/v1/cost-categories (ADR-025): a classification axis for
+    cost centres. Children name their parent; the root "Primary" is
+    seeded and unparented."""
+
+    name: str = Field(min_length=1, max_length=200)
+    parent_id: int | None = None
+    parent_name: str | None = None
+
+    @model_validator(mode="after")
+    def _parent_given(self):
+        if self.parent_id is None and self.parent_name is None:
+            raise ValueError("provide parent_id or parent_name")
+        return self
+
+
+class CostCategoryUpdate(BaseModel):
+    parent_id: int | None = None
+    parent_name: str | None = None
+
+
+class CostCategoryOut(BaseModel):
+    id: int
+    name: str
+    parent_id: int | None
+    is_root: bool
+
+
+class CostCentreCreate(BaseModel):
+    """POST /api/v1/cost-centres (ADR-025): an allocation node. Every real
+    centre answers to exactly one cost category (TallyPrime's rule)."""
+
+    name: str = Field(min_length=1, max_length=200)
+    code: str | None = None
+    parent_id: int | None = None
+    parent_name: str | None = None
+    category_id: int | None = None
+    category_name: str | None = None
+
+    @model_validator(mode="after")
+    def _refs_given(self):
+        if self.parent_id is None and self.parent_name is None:
+            raise ValueError("provide parent_id or parent_name")
+        if self.category_id is None and self.category_name is None:
+            raise ValueError("provide category_id or category_name")
+        return self
+
+
+class CostCentreUpdate(BaseModel):
+    parent_id: int | None = None
+    parent_name: str | None = None
+    category_id: int | None = None
+    category_name: str | None = None
+    code: str | None = None
+
+
+class CostCentreOut(BaseModel):
+    id: int
+    name: str
+    code: str | None
+    parent_id: int | None
+    category_id: int | None
+    category_name: str | None
+    is_root: bool
+
+
+class CostAllocationIn(BaseModel):
+    """One centre × amount split of a voucher line (ADR-025). The engine
+    enforces Σallocation = the line's amount exactly — a line is fully
+    allocated or carries no allocations at all."""
+
+    centre_id: int | None = None
+    centre_name: str | None = None
+    amount: Amount
+
+    @model_validator(mode="after")
+    def _centre_given(self):
+        if self.centre_id is None and self.centre_name is None:
+            raise ValueError("provide centre_id or centre_name")
+        return self
+
+
+class CostAllocationOut(BaseModel):
+    centre_id: int
+    centre_name: str
+    dc: Dc
+    amount: AmountOut
+
+
 # ----------------------------------------------------------------- vouchers
 class VoucherLineIn(BaseModel):
     ledger_id: int | None = None
@@ -214,6 +304,10 @@ class VoucherLineIn(BaseModel):
     currency: CurrencyCode | None = Field(default=None, min_length=3, max_length=3)
     amount_fx: Amount | None = None
     fx_rate: FxRateIn | None = None
+    # Cost-centre allocations (ADR-025): optional per line; when present,
+    # their sum must equal ``amount`` exactly (the engine and the database
+    # both enforce it — a line is fully allocated or left unallocated).
+    cost_allocations: list[CostAllocationIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _ledger_given(self):
@@ -247,6 +341,7 @@ class VoucherLineOut(BaseModel):
     currency: str | None = None
     amount_fx: AmountOut | None = None
     fx_rate: RateOut | None = None
+    cost_allocations: list[CostAllocationOut] = Field(default_factory=list)
 
 
 class VoucherOut(BaseModel):

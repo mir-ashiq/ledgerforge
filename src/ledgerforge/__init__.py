@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.21.0"
+__version__ = "0.22.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -41,4 +41,8 @@ __version__ = "0.21.0"
 #:       numbering series (orders: QT/SO/DN/PO/GRN) creates it inside the
 #:       posting transaction; the engine resolves the draft's type after
 #:       transformers, so a transformer may rewrite ``voucher_type`` (ADR-024).
-PLUGIN_API_VERSION = "0.9"
+#: 0.10 — ``DraftLine.cost_allocations`` (with ``DraftCostAllocation``):
+#:       cost-centre splits ride voucher lines through every transformer —
+#:       Σallocation = amount is re-proven after each hook, and transformers
+#:       that split lines must split the allocations with them (ADR-025).
+PLUGIN_API_VERSION = "0.10"

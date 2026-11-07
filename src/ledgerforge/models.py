@@ -213,3 +213,62 @@ class AuditLog(Base):
     operation: Mapped[str]
     record_id: Mapped[int | None] = mapped_column(BigInteger)
     row_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class CostCategory(Base):
+    """The classification axis for cost centres (ADR-025, migration 0007):
+    "Department", "Location", "Project"… A tree with one root ("Primary")
+    per book — the same adjacency+closure pair as groups (ADR-001)."""
+
+    __tablename__ = "cost_categories"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    name: Mapped[str] = mapped_column(Text)  # unique per book
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cost_categories.id", ondelete="RESTRICT")
+    )
+    is_root: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class CostCentre(Base):
+    """The allocation tree (ADR-025, migration 0007). Every real centre
+    answers to exactly one :class:`CostCategory` (TallyPrime's rule); the
+    root is the tree's container and receives no allocations."""
+
+    __tablename__ = "cost_centres"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    name: Mapped[str] = mapped_column(Text)  # unique per book
+    code: Mapped[str | None]
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cost_centres.id", ondelete="RESTRICT")
+    )
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cost_categories.id", ondelete="RESTRICT")
+    )
+    is_root: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class CostAllocation(Base):
+    """One (voucher entry, cost centre, amount) split (ADR-025, migration
+    0007) — the first core financial table since the baseline that is not a
+    voucher. Dr/Cr is preserved from the entry; the conservation law
+    (Σallocation = entry amount, exactly) is enforced by the database at
+    commit, the same deferrable discipline as Law 1. Append-only."""
+
+    __tablename__ = "cost_allocations"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("voucher_entries.id", ondelete="RESTRICT"))
+    centre_id: Mapped[int] = mapped_column(ForeignKey("cost_centres.id", ondelete="RESTRICT"))
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    dc: Mapped[str] = mapped_column(Text, CheckConstraint("dc IN ('D', 'C')"))
+    amount: Mapped[Decimal]
+    voucher_date: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)

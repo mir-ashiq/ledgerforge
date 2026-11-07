@@ -73,6 +73,22 @@ class StubClient:
 
         return [Group(11, "Cash-in-Hand", None, 2, "asset", False, False)]
 
+    def cost_categories(self):
+        from ledgerforge.nativeapp.models import CostCategory
+
+        return [
+            CostCategory(21, "Primary", None, True),
+            CostCategory(22, "Location", 21, False),
+        ]
+
+    def cost_centres(self):
+        from ledgerforge.nativeapp.models import CostCentre
+
+        return [
+            CostCentre(31, "Primary", None, None, None, None, True),
+            CostCentre(32, "Mumbai", None, 31, 22, "Location", False),
+        ]
+
     def periods(self):
         return []
 

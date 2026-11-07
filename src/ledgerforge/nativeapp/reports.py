@@ -1,7 +1,9 @@
 """Reports — Trial Balance, P&L, Balance Sheet, FY-close, the GST pack,
 the bills pack's outstanding book (ADR-023: receivable/payable with
-ageing, the party ledger statement, interest on overdue bills), and the
-orders pack's pending book (ADR-024: sales and purchase sides).
+ageing, the party ledger statement, interest on overdue bills), the
+orders pack's pending book (ADR-024: sales and purchase sides), and the
+cost-centre break-up trio (ADR-025: centre summary, one centre's
+ledger-wise detail, the category rollup).
 
 Every report renders into a native tree/table and exports CSV through a real
 file dialog; pack reports additionally save their statutory PDF — bytes
@@ -35,8 +37,10 @@ from .models import TrialBalanceRow, money
 from .tasks import run
 
 #: report id -> (label, needs) where needs ∈ {"as_of", "range", "period",
-#: "party_range"}: as_of = one date; range = from/to; period = YYYY-MM;
-#: party_range = a party (required) + an optional from/to window (ADR-023).
+#: "party_range", "centre_range"}: as_of = one date; range = from/to;
+#: period = YYYY-MM; party_range = a party (required) + an optional
+#: from/to window (ADR-023); centre_range = a cost centre name (required)
+#: + from/to (ADR-025).
 REPORTS: dict[str, tuple[str, str]] = {
     "trial-balance": ("Trial Balance", "as_of"),
     "profit-loss": ("Profit & Loss", "range"),
@@ -49,6 +53,9 @@ REPORTS: dict[str, tuple[str, str]] = {
     "bills-interest": ("Interest on Overdue Bills", "as_of"),
     "pending-sales": ("Pending Orders (sales)", "as_of"),
     "pending-purchase": ("Pending Orders (purchase)", "as_of"),
+    "cost-summary": ("Cost Centre Summary", "range"),
+    "cost-breakup": ("Cost Centre Break-up", "centre_range"),
+    "cost-category": ("Cost Category Summary", "range"),
 }
 
 #: the pack keys whose PDF view "Save PDF…" offers (the statutory print).
@@ -118,6 +125,12 @@ class ReportsPage(QWidget):
         bar.addWidget(self.party_label)
         bar.addWidget(self.party_edit)
 
+        self.centre_label = QLabel("cost centre")
+        self.centre_edit = QLineEdit()
+        self.centre_edit.setPlaceholderText("e.g. Mumbai")
+        bar.addWidget(self.centre_label)
+        bar.addWidget(self.centre_edit)
+
         self.run_button = QPushButton("Run")
         self.run_button.clicked.connect(self.run_report)
         bar.addWidget(self.run_button)
@@ -162,13 +175,15 @@ class ReportsPage(QWidget):
         needs = REPORTS[self.report_box.currentData()][1]
         self.as_of_label.setVisible(needs == "as_of")
         self.as_of.setVisible(needs == "as_of")
-        self.range_label.setVisible(needs in ("range", "party_range"))
-        self.date_from.setVisible(needs in ("range", "party_range"))
-        self.date_to.setVisible(needs in ("range", "party_range"))
+        self.range_label.setVisible(needs in ("range", "party_range", "centre_range"))
+        self.date_from.setVisible(needs in ("range", "party_range", "centre_range"))
+        self.date_to.setVisible(needs in ("range", "party_range", "centre_range"))
         self.period_label.setVisible(needs == "period")
         self.period_edit.setVisible(needs == "period")
         self.party_label.setVisible(needs == "party_range")
         self.party_edit.setVisible(needs == "party_range")
+        self.centre_label.setVisible(needs == "centre_range")
+        self.centre_edit.setVisible(needs == "centre_range")
         self.pdf_button.setEnabled(False)
 
     # --------------------------------------------------------------- running
@@ -186,6 +201,9 @@ class ReportsPage(QWidget):
             "bills-interest": self._load_interest,
             "pending-sales": self._load_pending_sales,
             "pending-purchase": self._load_pending_purchase,
+            "cost-summary": self._load_cost_summary,
+            "cost-breakup": self._load_cost_breakup,
+            "cost-category": self._load_cost_category,
         }
         try:
             loader = loaders[key]()
@@ -255,6 +273,36 @@ class ReportsPage(QWidget):
             "pending-orders", side="purchase", as_of=as_of.isoformat(), format_="csv"
         )
 
+    def _load_cost_summary(self):
+        d_from = self.date_from.date().toPython()
+        d_to = self.date_to.date().toPython()
+        return lambda: ("cost-summary", self._client.cost_centre_summary(d_from, d_to))
+
+    def _load_cost_breakup(self):
+        centre = self.centre_edit.text().strip()
+        if not centre:
+            raise ValueError("The break-up needs a cost centre name (e.g. Mumbai).")
+
+        def fetch():
+            centres = self._client.cost_centres()
+            match = next(
+                (c for c in centres if not c.is_root and c.name.lower() == centre.lower()), None
+            )
+            if match is None:
+                raise ValueError(f"No cost centre named {centre!r} in this book.")
+            d_from = self.date_from.date().toPython()
+            d_to = self.date_to.date().toPython()
+            payload = self._client.cost_centre_breakup(match.id, d_from, d_to)
+            payload["centre_name"] = match.name
+            return ("cost-breakup", payload)
+
+        return fetch
+
+    def _load_cost_category(self):
+        d_from = self.date_from.date().toPython()
+        d_to = self.date_to.date().toPython()
+        return lambda: ("cost-category", self._client.cost_category_summary(d_from, d_to))
+
     # -------------------------------------------------------------- rendering
     def _render(self, payload: object) -> None:
         self.tree.clear()
@@ -275,6 +323,12 @@ class ReportsPage(QWidget):
                 self._render_profit_loss(data)
             elif kind == "balance-sheet":
                 self._render_balance_sheet(data)
+            elif kind == "cost-summary":
+                self._render_cost_summary(data)
+            elif kind == "cost-breakup":
+                self._render_cost_breakup(data)
+            elif kind == "cost-category":
+                self._render_cost_category(data)
             else:
                 self._render_fy_close(data)
         else:  # pragma: no cover - defensive: an unexpected payload
@@ -377,6 +431,108 @@ class ReportsPage(QWidget):
         self.note_label.setText(
             "the close sweep zeroes every income/expense ledger and moves the "
             f"net to Profit & Loss A/c — balanced: {balanced}"
+        )
+
+    # ----------------------------------------------------- cost-centre reports
+    def _render_cost_summary(self, data: dict) -> None:
+        """The centre tree with each node's subtree totals (ADR-025) — the
+        rollup the closure computes; the Unallocated mass rides at the end."""
+        rows = data.get("centres", [])
+        by_id = {row["centre_id"]: row for row in rows}
+        items: dict[int, QTreeWidgetItem] = {}
+        # parents first (id order is creation order; parents are older)
+        for row in rows:
+            node = self._top(
+                row["centre_name"] + (" (root)" if row["is_root"] else ""),
+                money(row["dr"]) if row["dr"] != "0" else "",
+                money(row["cr"]) if row["cr"] != "0" else "",
+            )
+            items[row["centre_id"]] = node
+        for row in rows:
+            parent = by_id.get(row["parent_id"]) if row["parent_id"] else None
+            if parent is not None and parent["centre_id"] in items:
+                items[parent["centre_id"]].addChild(items[row["centre_id"]])
+            else:
+                self.tree.addTopLevelItem(items[row["centre_id"]])
+            self._last_csv.append(
+                [
+                    row["centre_name"],
+                    row["dr"],
+                    row["cr"],
+                    row.get("category_name") or "",
+                    "root" if row["is_root"] else "",
+                ]
+            )
+        unallocated = data.get("unallocated", {"dr": "0", "cr": "0", "net": "0"})
+        self.tree.addTopLevelItem(
+            self._top(
+                "Unallocated",
+                money(unallocated["dr"]) if unallocated["dr"] != "0" else "",
+                money(unallocated["cr"]) if unallocated["cr"] != "0" else "",
+            )
+        )
+        self._last_csv.append(["Unallocated", unallocated["dr"], unallocated["cr"], "", ""])
+        self.note_label.setText(
+            f"{data.get('from', '')} → {data.get('to', '')} — each centre carries its "
+            "subtree; allocated + Unallocated is the window's whole entry mass (ADR-025)"
+        )
+
+    def _render_cost_breakup(self, data: dict) -> None:
+        """One centre's ledger-wise detail (ADR-025) — its own allocations,
+        not its subtree's."""
+        centre_name = data.get("centre_name", "")
+        for row in data.get("ledgers", []):
+            self.tree.addTopLevelItem(
+                self._top(
+                    f"{row['ledger_name']} ({row['nature']})",
+                    money(row["dr"]) if row["dr"] != "0" else "",
+                    money(row["cr"]) if row["cr"] != "0" else "",
+                )
+            )
+            self._last_csv.append(
+                [row["ledger_name"], row["dr"], row["cr"], row["group_name"], row["nature"]]
+            )
+        totals = data.get("totals", {"dr": "0", "cr": "0"})
+        self.tree.addTopLevelItem(
+            self._top("TOTAL", money(totals["dr"]), money(totals["cr"]), bold=True)
+        )
+        self._last_csv.append(["TOTAL", totals["dr"], totals["cr"], "", ""])
+        self.note_label.setText(
+            f"{centre_name} — {data.get('from', '')} → {data.get('to', '')}; the engine "
+            "proved the total against the ledger rows"
+        )
+
+    def _render_cost_category(self, data: dict) -> None:
+        """The category rollup (ADR-025) — primary categories carry their
+        secondaries' centres."""
+        rows = data.get("categories", [])
+        by_id = {row["category_id"]: row for row in rows}
+        items: dict[int, QTreeWidgetItem] = {}
+        for row in rows:
+            items[row["category_id"]] = self._top(
+                row["category_name"] + (" (root)" if row["is_root"] else ""),
+                money(row["dr"]) if row["dr"] != "0" else "",
+                money(row["cr"]) if row["cr"] != "0" else "",
+            )
+        for row in rows:
+            parent = by_id.get(row["parent_id"]) if row["parent_id"] else None
+            if parent is not None and parent["category_id"] in items:
+                items[parent["category_id"]].addChild(items[row["category_id"]])
+            else:
+                self.tree.addTopLevelItem(items[row["category_id"]])
+            self._last_csv.append([row["category_name"], row["dr"], row["cr"], "", ""])
+        unallocated = data.get("unallocated", {"dr": "0", "cr": "0", "net": "0"})
+        self.tree.addTopLevelItem(
+            self._top(
+                "Unallocated",
+                money(unallocated["dr"]) if unallocated["dr"] != "0" else "",
+                money(unallocated["cr"]) if unallocated["cr"] != "0" else "",
+            )
+        )
+        self._last_csv.append(["Unallocated", unallocated["dr"], unallocated["cr"], "", ""])
+        self.note_label.setText(
+            f"{data.get('from', '')} → {data.get('to', '')} — a category carries its "
+            "descendant categories' centres (ADR-025)"
         )
 
     def _render_csv(self, text: str) -> None:

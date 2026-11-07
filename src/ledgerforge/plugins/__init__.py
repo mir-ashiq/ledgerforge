@@ -157,6 +157,20 @@ def _import_plugin_file(path: Path) -> Any:
 
 
 @dataclass
+class DraftCostAllocation:
+    """One centre × amount split riding a :class:`DraftLine` (plugin API
+    0.10, ADR-025). ``dc`` is NOT carried here — it is inherited from the
+    line (allocations preserve the entry's Dr/Cr; the database enforces
+    it). Transformers that split or rebuild lines must carry the line's
+    allocations along, split to the new amounts — the engine re-validates
+    Σallocation = amount on every line after every hook."""
+
+    centre_id: int | None = None
+    centre_name: str | None = None
+    amount: Decimal = Decimal(0)
+
+
+@dataclass
 class DraftLine:
     """One voucher line while still a draft (before ledger resolution).
 
@@ -165,6 +179,10 @@ class DraftLine:
     figure. Transformers that rebuild or split lines must either keep the
     trio intact or drop it — an inconsistent trio is rejected by the engine
     (and by the database) even if a plugin produced it.
+
+    Cost allocations (plugin API 0.10, ADR-025): optional per line; when
+    present, their sum must equal ``amount`` exactly after every hook —
+    a line is fully allocated or left unallocated, never partly.
     """
 
     dc: Literal["D", "C"]
@@ -175,6 +193,7 @@ class DraftLine:
     currency: str | None = None
     amount_fx: Decimal | None = None
     fx_rate: Decimal | None = None
+    cost_allocations: list[DraftCostAllocation] = field(default_factory=list)
 
 
 @dataclass

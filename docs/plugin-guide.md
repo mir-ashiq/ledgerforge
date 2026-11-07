@@ -137,6 +137,33 @@ document consumes no number. The design contract is
 [ADR-024](adr/024-order-processing.md); the worked pack is
 `ledgerforge/contrib/orders.py`.
 
+## Cost allocations ride the draft (API 0.10, ADR-025)
+
+Cost-centre splits are **core schema** (migration 0007), not a pack document
+— and they ride the draft like FX does: every `DraftLine` may carry
+`cost_allocations: list[DraftCostAllocation]`, and the engine re-proves the
+law (Σallocation = the line's amount, exactly) after every hook:
+
+```python
+from ledgerforge.plugins import DraftCostAllocation
+
+
+def transform(draft, resolver):
+    # a transformer that splits a line MUST split its allocations with it
+    big = next(ln for ln in draft.lines if ln.amount > 10_000)
+    big.cost_allocations = [
+        DraftCostAllocation(centre_name="Mumbai", amount=big.amount / 2),
+        DraftCostAllocation(centre_name="Pune", amount=big.amount / 2),
+    ]
+    return draft
+```
+
+A line is fully allocated or left unallocated — a partial split is a clean
+422 naming the line, and the database re-proves it at commit (the Law-1
+discipline). `dc` is not carried on the allocation: it is inherited from the
+line, preserved exactly. Packs that never touch allocations see nothing
+change; the design contract is [ADR-025](adr/025-cost-centres.md).
+
 ## Publishing a report (API 0.6, ADR-014)
 
 A document view prints *one voucher*; a report folds *many* — a month of

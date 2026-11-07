@@ -238,7 +238,14 @@ class MainWindow(QMainWindow):
     def _build_new_voucher(
         self, names: list[str], party_names: list[str] | None = None
     ) -> NewVoucherDialog:
-        dialog = NewVoucherDialog(self._client, names, self, party_names=party_names)
+        dialog = NewVoucherDialog(
+            self._client,
+            names,
+            self,
+            party_names=party_names,
+            cost_centres=self.masters.cost_centres(),
+            cost_categories=self.masters.cost_categories(),
+        )
         dialog.posted.connect(lambda _v: self.daybook.reload())
         return dialog
 
@@ -259,7 +266,10 @@ class MainWindow(QMainWindow):
         """The New Order dialog (ADR-024) — the five documents, their own
         series, the against-picker fed by orders-open."""
         dialog = NewOrderDialog(
-            self._client, self.masters.ledger_names(), self, party_names=self.masters.party_names()
+            self._client,
+            self.masters.ledger_names(),
+            self,
+            party_names=self.masters.party_names(),
         )
         dialog.exec()
         self.orders.reload()

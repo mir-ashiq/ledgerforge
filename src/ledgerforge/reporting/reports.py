@@ -261,3 +261,144 @@ def balance_sheet(session: Session, book_id: int, as_of: date, fast: bool = Fals
             "difference": "0",
         },
     }
+
+
+# ------------------------------------------------------------- cost centres
+def cost_centre_summary(session: Session, book_id: int, d_from: date, d_to: date) -> dict:
+    """The centre rollup (ADR-025): every centre's allocation subtree totals
+    through the closure — the group_rollups shape — over [d_from, d_to],
+    with the Unallocated mass (entries nobody allocated) surfaced so
+    allocated + unallocated is always the window's whole entry mass. FYC
+    sweeps are excluded (they transfer results, they are not operating
+    facts — the profit_and_loss precedent)."""
+    rows = (
+        session.execute(
+            text("SELECT * FROM rpt.cost_centre_summary(:book, :d_from, :d_to)"),
+            {"book": book_id, "d_from": d_from, "d_to": d_to},
+        )
+        .mappings()
+        .all()
+    )
+    centres = [
+        {
+            "centre_id": r.out_centre_id,
+            "centre_name": r.out_centre_name,
+            "parent_id": r.out_parent_id,
+            "is_root": r.out_is_root,
+            "category_id": r.out_category_id,
+            "category_name": r.out_category_name,
+            "dr": _fmt(r.out_dr),
+            "cr": _fmt(r.out_cr),
+            "net": _fmt(r.out_net),
+        }
+        for r in rows
+        if r.out_centre_id is not None
+    ]
+    unallocated = next(
+        (
+            {"dr": _fmt(r.out_dr), "cr": _fmt(r.out_cr), "net": _fmt(r.out_net)}
+            for r in rows
+            if r.out_centre_id is None
+        ),
+        {"dr": "0", "cr": "0", "net": "0"},
+    )
+    return {
+        "from": d_from,
+        "to": d_to,
+        "centres": centres,
+        "unallocated": unallocated,
+    }
+
+
+def cost_centre_breakup(
+    session: Session, book_id: int, centre_id: int, d_from: date, d_to: date
+) -> dict:
+    """Ledger-wise within ONE centre (ADR-025): the centre's own allocations
+    (not its subtree — sub-centres have their own break-ups), one row per
+    ledger with its nature-signed net, and the total row the shaper proves
+    against the ledger rows (the trial-balance discipline: the engine's own
+    output is never trusted unproven)."""
+    rows = (
+        session.execute(
+            text("SELECT * FROM rpt.cost_centre_breakup(:book, :centre, :d_from, :d_to)"),
+            {"book": book_id, "centre": centre_id, "d_from": d_from, "d_to": d_to},
+        )
+        .mappings()
+        .all()
+    )
+    ledgers = [
+        {
+            "ledger_id": r.out_ledger_id,
+            "ledger_name": r.out_ledger_name,
+            "group_name": r.out_group_name,
+            "nature": r.out_nature,
+            "dr": _fmt(r.out_dr),
+            "cr": _fmt(r.out_cr),
+            "net": _fmt(r.out_net),
+        }
+        for r in rows
+        if r.out_bucket == "ledger"
+    ]
+    total = next(
+        (r for r in rows if r.out_bucket == "total"),
+        None,
+    )
+    total_dr = sum((r.out_dr for r in rows if r.out_bucket == "ledger"), Decimal(0))
+    total_cr = sum((r.out_cr for r in rows if r.out_bucket == "ledger"), Decimal(0))
+    if total is None or total.out_dr != total_dr or total.out_cr != total_cr:
+        raise InvariantViolation(
+            "Cost centre break-up total does not equal the sum of its ledger rows"
+        )
+    return {
+        "from": d_from,
+        "to": d_to,
+        "centre_id": centre_id,
+        "ledgers": ledgers,
+        "totals": {
+            "dr": _fmt(total_dr),
+            "cr": _fmt(total_cr),
+            "net": _fmt(total.out_net),
+        },
+    }
+
+
+def cost_category_summary(session: Session, book_id: int, d_from: date, d_to: date) -> dict:
+    """The category rollup (ADR-025): allocations through the centre→
+    category edge and the category closure — a primary category carries its
+    secondaries' centres. The Unallocated row rides along for the same
+    conservation story as the centre summary."""
+    rows = (
+        session.execute(
+            text("SELECT * FROM rpt.cost_category_summary(:book, :d_from, :d_to)"),
+            {"book": book_id, "d_from": d_from, "d_to": d_to},
+        )
+        .mappings()
+        .all()
+    )
+    categories = [
+        {
+            "category_id": r.out_category_id,
+            "category_name": r.out_category_name,
+            "parent_id": r.out_parent_id,
+            "is_root": r.out_is_root,
+            "dr": _fmt(r.out_dr),
+            "cr": _fmt(r.out_cr),
+            "net": _fmt(r.out_net),
+        }
+        for r in rows
+        if r.out_category_id is not None
+    ]
+    unallocated = next(
+        (
+            {"dr": _fmt(r.out_dr), "cr": _fmt(r.out_cr), "net": _fmt(r.out_net)}
+            for r in rows
+            if r.out_category_id is None
+        ),
+        {"dr": "0", "cr": "0", "net": "0"},
+    )
+    return {
+        "from": d_from,
+        "to": d_to,
+        "categories": categories,
+        "unallocated": unallocated,
+    }

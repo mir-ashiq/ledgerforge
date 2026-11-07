@@ -2,6 +2,9 @@
 
 from .reports import (  # noqa: F401
     balance_sheet,
+    cost_category_summary,
+    cost_centre_breakup,
+    cost_centre_summary,
     fy_close,
     group_rollups,
     profit_loss,

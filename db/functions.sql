@@ -802,6 +802,13 @@ BEGIN
     RETURN QUERY SELECT 'swap', format(
         '%s rows, max id %s — atomic rename-and-drop', v_rows, COALESCE(v_max_id::text, 'n/a'));
 
+    -- Cost allocations reference entries (0007/ADR-025); the partitioned
+    -- shape's PK is (id, voucher_date) — an FK on id alone cannot exist
+    -- there. It comes off before the swap; trg_cost_allocations_check
+    -- keeps the integrity on both shapes; ops.unpartition_entries re-adds
+    -- it when the plain shape returns.
+    ALTER TABLE public.cost_allocations DROP CONSTRAINT IF EXISTS cost_allocations_entry_id_fkey;
+
     ALTER TABLE public.voucher_entries RENAME TO voucher_entries_plain;
     ALTER TABLE public.voucher_entries_part RENAME TO voucher_entries;
     DROP TABLE public.voucher_entries_plain;
@@ -919,6 +926,25 @@ BEGIN
     CREATE INDEX idx_entries_ledger_date
         ON public.voucher_entries (book_id, ledger_id, voucher_date) INCLUDE (dc, amount);
 
+    -- The plain shape is back: the allocation→entry FK returns with it
+    -- (it cannot exist on the partitioned shape — see partition_entries_
+    -- by_year). Guarded so a DB that never had it (partitioned before
+    -- 0007) simply gains it now, with existing rows validated by ADD's
+    -- default check — allocations always had real entries (the trigger).
+    -- A tagged DO (not bare dollar-dollar): this block sits inside the
+    -- function's own dollar-quoted body.
+    DO $fk$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'cost_allocations_entry_id_fkey'
+              AND conrelid = 'public.cost_allocations'::regclass) THEN
+            ALTER TABLE public.cost_allocations
+                ADD CONSTRAINT cost_allocations_entry_id_fkey
+                FOREIGN KEY (entry_id) REFERENCES public.voucher_entries(id) ON DELETE RESTRICT;
+        END IF;
+    END $fk$;
+
     GRANT SELECT, INSERT ON public.voucher_entries TO ledgerforge_app;
     GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ledgerforge_app;
 
@@ -955,6 +981,172 @@ LANGUAGE sql STABLE AS $$
     LEFT JOIN rpt.balance_cache c ON c.book_id = b.id
     GROUP BY b.name
     ORDER BY 1
+$$;
+
+-- ============================================================================
+-- Cost centres & cost categories — the break-up reports (Phase 4, ADR-025).
+--
+-- The same closure-table pass as group_rollups, twice: centre allocations
+-- roll up through cost_centre_closure (a parent centre carries its subtree),
+-- and the centre→category edge rolls up through cost_category_closure (a
+-- primary category carries its secondaries). Financial-year close sweeps
+-- (voucher type FYC) are excluded on both sides — they transfer results,
+-- they are not operating facts (the profit_and_loss precedent). Entries
+-- nobody allocated surface as the 'Unallocated' row (out_centre_id /
+-- out_category_id NULL), so allocated + unallocated is always the window's
+-- whole entry mass.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION rpt.cost_centre_summary(p_book_id BIGINT, p_from DATE, p_to DATE)
+RETURNS TABLE (
+    out_centre_id    BIGINT,
+    out_centre_name  TEXT,
+    out_parent_id    BIGINT,
+    out_is_root      BOOLEAN,
+    out_category_id  BIGINT,
+    out_category_name TEXT,
+    out_dr           NUMERIC,
+    out_cr           NUMERIC,
+    out_net          NUMERIC
+)
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    WITH alloc AS (
+        SELECT ca.centre_id AS cid,
+               CASE WHEN ca.dc = 'D' THEN ca.amount ELSE 0 END AS dr,
+               CASE WHEN ca.dc = 'C' THEN ca.amount ELSE 0 END AS cr
+        FROM cost_allocations ca
+        JOIN voucher_entries ve ON ve.id = ca.entry_id
+        JOIN vouchers v ON v.id = ve.voucher_id
+        JOIN voucher_types vt ON vt.id = v.voucher_type_id
+        WHERE ca.book_id = p_book_id
+          AND ca.voucher_date BETWEEN p_from AND p_to
+          AND vt.code <> 'FYC'
+    ),
+    per_centre AS (
+        SELECT c.ancestor_id AS cid, SUM(a.dr) AS dr, SUM(a.cr) AS cr
+        FROM alloc a
+        JOIN cost_centre_closure c ON c.descendant_id = a.cid
+        GROUP BY c.ancestor_id
+    )
+    SELECT cc.id, cc.name, cc.parent_id, cc.is_root, cc.category_id, cat.name,
+           pc.dr, pc.cr, pc.dr - pc.cr
+    FROM per_centre pc
+    JOIN cost_centres cc ON cc.id = pc.cid
+    LEFT JOIN cost_categories cat ON cat.id = cc.category_id
+    WHERE cc.book_id = p_book_id
+
+    UNION ALL
+    SELECT NULL, 'Unallocated', NULL, false, NULL, NULL,
+           COALESCE(SUM(u.dr), 0), COALESCE(SUM(u.cr), 0),
+           COALESCE(SUM(u.dr), 0) - COALESCE(SUM(u.cr), 0)
+    FROM (
+        SELECT CASE WHEN ve.dc = 'D' THEN ve.amount ELSE 0 END AS dr,
+               CASE WHEN ve.dc = 'C' THEN ve.amount ELSE 0 END AS cr
+        FROM voucher_entries ve
+        JOIN vouchers v ON v.id = ve.voucher_id
+        JOIN voucher_types vt ON vt.id = v.voucher_type_id
+        WHERE ve.book_id = p_book_id
+          AND ve.voucher_date BETWEEN p_from AND p_to
+          AND vt.code <> 'FYC'
+          AND NOT EXISTS (SELECT 1 FROM cost_allocations ca WHERE ca.entry_id = ve.id)
+    ) u
+    ORDER BY 1 NULLS LAST
+$$;
+
+CREATE OR REPLACE FUNCTION rpt.cost_centre_breakup(
+    p_book_id BIGINT, p_centre_id BIGINT, p_from DATE, p_to DATE)
+RETURNS TABLE (
+    out_bucket      TEXT,
+    out_ledger_id   BIGINT,
+    out_ledger_name TEXT,
+    out_group_name  TEXT,
+    out_nature      TEXT,
+    out_dr          NUMERIC,
+    out_cr          NUMERIC,
+    out_net         NUMERIC
+)
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    WITH lines AS (
+        SELECT ve.ledger_id AS lid,
+               CASE WHEN ca.dc = 'D' THEN ca.amount ELSE 0 END AS dr,
+               CASE WHEN ca.dc = 'C' THEN ca.amount ELSE 0 END AS cr
+        FROM cost_allocations ca
+        JOIN voucher_entries ve ON ve.id = ca.entry_id
+        JOIN vouchers v ON v.id = ve.voucher_id
+        JOIN voucher_types vt ON vt.id = v.voucher_type_id
+        WHERE ca.book_id = p_book_id
+          AND ca.centre_id = p_centre_id
+          AND ca.voucher_date BETWEEN p_from AND p_to
+          AND vt.code <> 'FYC'
+    ),
+    per_ledger AS (
+        SELECT lid, SUM(dr) AS dr, SUM(cr) AS cr FROM lines GROUP BY lid
+    )
+    SELECT 'ledger', l.id, l.name, g.name, g.nature, pl.dr, pl.cr,
+           CASE WHEN g.nature IN ('asset', 'expense') THEN pl.dr - pl.cr
+                ELSE pl.cr - pl.dr END
+    FROM per_ledger pl
+    JOIN ledgers l ON l.id = pl.lid
+    JOIN groups g ON g.id = l.group_id
+
+    UNION ALL
+    SELECT 'total', NULL, NULL, NULL, NULL,
+           COALESCE((SELECT SUM(dr) FROM lines), 0),
+           COALESCE((SELECT SUM(cr) FROM lines), 0),
+           COALESCE((SELECT SUM(dr) FROM lines), 0) - COALESCE((SELECT SUM(cr) FROM lines), 0)
+$$;
+
+CREATE OR REPLACE FUNCTION rpt.cost_category_summary(p_book_id BIGINT, p_from DATE, p_to DATE)
+RETURNS TABLE (
+    out_category_id   BIGINT,
+    out_category_name TEXT,
+    out_parent_id     BIGINT,
+    out_is_root       BOOLEAN,
+    out_dr            NUMERIC,
+    out_cr            NUMERIC,
+    out_net           NUMERIC
+)
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+    WITH alloc AS (
+        SELECT cs.category_id AS catid,
+               CASE WHEN ca.dc = 'D' THEN ca.amount ELSE 0 END AS dr,
+               CASE WHEN ca.dc = 'C' THEN ca.amount ELSE 0 END AS cr
+        FROM cost_allocations ca
+        JOIN cost_centres cs ON cs.id = ca.centre_id
+        JOIN voucher_entries ve ON ve.id = ca.entry_id
+        JOIN vouchers v ON v.id = ve.voucher_id
+        JOIN voucher_types vt ON vt.id = v.voucher_type_id
+        WHERE ca.book_id = p_book_id
+          AND ca.voucher_date BETWEEN p_from AND p_to
+          AND vt.code <> 'FYC'
+    ),
+    per_category AS (
+        SELECT c.ancestor_id AS catid, SUM(a.dr) AS dr, SUM(a.cr) AS cr
+        FROM alloc a
+        JOIN cost_category_closure c ON c.descendant_id = a.catid
+        GROUP BY c.ancestor_id
+    )
+    SELECT cc.id, cc.name, cc.parent_id, cc.is_root, pc.dr, pc.cr, pc.dr - pc.cr
+    FROM per_category pc
+    JOIN cost_categories cc ON cc.id = pc.catid
+    WHERE cc.book_id = p_book_id
+
+    UNION ALL
+    SELECT NULL, 'Unallocated', NULL, false,
+           COALESCE(SUM(u.dr), 0), COALESCE(SUM(u.cr), 0),
+           COALESCE(SUM(u.dr), 0) - COALESCE(SUM(u.cr), 0)
+    FROM (
+        SELECT CASE WHEN ve.dc = 'D' THEN ve.amount ELSE 0 END AS dr,
+               CASE WHEN ve.dc = 'C' THEN ve.amount ELSE 0 END AS cr
+        FROM voucher_entries ve
+        JOIN vouchers v ON v.id = ve.voucher_id
+        JOIN voucher_types vt ON vt.id = v.voucher_type_id
+        WHERE ve.book_id = p_book_id
+          AND ve.voucher_date BETWEEN p_from AND p_to
+          AND vt.code <> 'FYC'
+          AND NOT EXISTS (SELECT 1 FROM cost_allocations ca WHERE ca.entry_id = ve.id)
+    ) u
+    ORDER BY 1 NULLS LAST
 $$;
 
 -- Partition/unpartition are owner-only (maintenance-window DDL); the status

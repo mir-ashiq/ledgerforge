@@ -13,9 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..errors import ConflictError, NotFoundError, ValidationError
-from ..models import Book, Voucher, VoucherType
+from ..models import Book, CostAllocation, Voucher, VoucherType
 from ..plugins import PluginManager
-from ..schemas import VoucherCreate, VoucherLineIn
+from ..schemas import CostAllocationIn, VoucherCreate, VoucherLineIn
 from ..settings import Settings
 from .posting import get_voucher_with_entries, post_voucher
 
@@ -54,6 +54,15 @@ def reverse_voucher(
     vtype = session.get(VoucherType, original.voucher_type_id)
     assert vtype is not None
 
+    # The original's cost allocations mirror onto the reversal (ADR-025):
+    # same centres, same amounts — the flipped Dr/Cr rides the flipped
+    # line, so every centre's net walks back to exactly zero.
+    allocations_by_entry: dict[int, list[CostAllocation]] = {}
+    for alloc in session.scalars(
+        select(CostAllocation).where(CostAllocation.entry_id.in_({e.id for e in entries}))
+    ):
+        allocations_by_entry.setdefault(alloc.entry_id, []).append(alloc)
+
     payload = VoucherCreate(
         voucher_type=vtype.code,
         voucher_date=reversal_date or date.today(),
@@ -70,6 +79,10 @@ def reverse_voucher(
                 currency=e.currency,
                 amount_fx=e.amount_fx,
                 fx_rate=e.fx_rate,
+                cost_allocations=[
+                    CostAllocationIn(centre_id=a.centre_id, amount=a.amount)
+                    for a in allocations_by_entry.get(e.id, [])
+                ],
             )
             for e in entries
         ],

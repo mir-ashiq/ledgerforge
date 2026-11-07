@@ -260,7 +260,7 @@ def test_head_revision_is_single_and_parseable():
     from alembic.script import ScriptDirectory
 
     head = lf_migrations.head_revision()
-    assert head == "0006_report_scale_out"
+    assert head == "0007_cost_centres"
     assert lf_migrations.revisions() == {
         "0001_baseline": None,
         "0002_multi_currency": "0001_baseline",
@@ -268,6 +268,7 @@ def test_head_revision_is_single_and_parseable():
         "0004_multi_book": "0003_period_locking",
         "0005_voucher_meta": "0004_multi_book",
         "0006_report_scale_out": "0005_voucher_meta",
+        "0007_cost_centres": "0006_report_scale_out",
     }
     scripts = ScriptDirectory(str(lf_migrations.migrations_dir()))
     assert scripts.get_current_head() == head

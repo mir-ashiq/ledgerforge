@@ -15,7 +15,15 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useCommand, useFocusScope } from '@ledgerforge/keyboard-kit/react';
 import type { ContextPredicate } from '@ledgerforge/keyboard-kit';
 import { api, type CreateLedgerInput } from '../api/client';
-import type { BillRef, GroupOut, LedgerOut, VoucherOut } from '../api/types';
+import type {
+  BillRef,
+  CostAllocationIn,
+  CostCategoryOut,
+  CostCentreOut,
+  GroupOut,
+  LedgerOut,
+  VoucherOut,
+} from '../api/types';
 import { add, isZero, parseAmount, sub, toCanonical, ZERO, type Exact } from '../money/exact';
 import {
   DEFAULT_TYPE_CODE,
@@ -31,12 +39,13 @@ import { BalanceHud } from './BalanceHud';
 import { Banner, type Notice } from './Banner';
 import { BillAllocationDialog } from './BillAllocationDialog';
 import { ConfirmOverlay } from './ConfirmOverlay';
+import { CostAllocationDialog, type AllocatableLine } from './CostAllocationDialog';
 import { DateDialog } from './DateDialog';
 import { LedgerCreateDialog } from './LedgerCreateDialog';
 import { VoucherGrid } from './VoucherGrid';
 
 type ApiState = 'loading' | 'ready' | 'error';
-type Dialog = 'date' | 'ledgerCreate' | 'confirmNew' | 'billAlloc' | null;
+type Dialog = 'date' | 'ledgerCreate' | 'confirmNew' | 'billAlloc' | 'costAlloc' | null;
 
 interface VoucherScreenProps {
   ledgers: readonly LedgerOut[];
@@ -82,6 +91,17 @@ export function VoucherScreen({
   const [printing, setPrinting] = useState(false);
   /** The armed bill allocation (ADR-023): rides the next post as meta.bills. */
   const [billAlloc, setBillAlloc] = useState<{ party: string; refs: BillRef[] } | null>(null);
+  /** The armed cost splits (ADR-025): parallel to the draft's complete
+   * lines, riding each line's cost_allocations on the post. */
+  const [costAlloc, setCostAlloc] = useState<{
+    lines: AllocatableLine[];
+    splits: CostAllocationIn[][];
+  } | null>(null);
+  /** The cost masters, fetched lazily when Alt+K first opens the dialog. */
+  const [costMasters, setCostMasters] = useState<{
+    centres: CostCentreOut[];
+    categories: CostCategoryOut[];
+  } | null>(null);
   const postingRef = useRef(false);
   const printingRef = useRef(false);
   // read at keydown/run time — always fresh, never a stale closure
@@ -131,6 +151,30 @@ export function VoucherScreen({
     }
     return net;
   }, [activeParty, draft.lines]);
+
+  /** The draft's complete lines as the allocation dialog sees them
+   * (ADR-025): ledger + exactly one positive amount, in row order. */
+  const allocatableLines = useMemo<AllocatableLine[]>(() => {
+    const rows: AllocatableLine[] = [];
+    for (const line of draft.lines) {
+      const dr = line.debit.trim();
+      const cr = line.credit.trim();
+      if (line.ledgerId === null && line.ledgerName.trim() === '') continue;
+      if (dr && cr) continue; // both sides filled: not postable as-is
+      const raw = dr || cr;
+      if (!raw) continue;
+      const parsed = parseAmount(raw);
+      if (!parsed.ok || parsed.value.int === 0n) continue;
+      const ledger =
+        line.ledgerId !== null ? ledgers.find((l) => l.id === line.ledgerId) : undefined;
+      rows.push({
+        ledgerName: ledger?.name ?? line.ledgerName.trim(),
+        dc: dr ? 'D' : 'C',
+        amount: parsed.value,
+      });
+    }
+    return rows;
+  }, [draft.lines, ledgers]);
 
   // --- focus management ------------------------------------------------------
   function focusCell(target: Cursor) {
@@ -336,6 +380,45 @@ export function VoucherScreen({
     (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx),
   );
 
+  // cost-centre splits (ADR-025): Alt+K opens the per-line split dialog —
+  // the remainder is always visible, every line fully allocated or left
+  // unallocated. The masters load once, lazily.
+  useCommand(
+    {
+      id: 'voucher.allocateCost',
+      title: 'Allocate to cost centres (Alt+K)',
+      run: () => {
+        if (!allocatableLines.length) {
+          const hint = 'No complete line yet — fill a ledger and its amount first; the splits follow the lines';
+          setNotice({ kind: 'info', text: hint });
+          setAnnounce(hint);
+          return;
+        }
+        if (!costMasters) {
+          void (async () => {
+            try {
+              const [centres, categories] = await Promise.all([
+                api.costCentres(),
+                api.costCategories(),
+              ]);
+              setCostMasters({ centres, categories });
+            } catch {
+              const hint = 'Could not load the cost centres — is the engine reachable?';
+              setNotice({ kind: 'err', text: hint });
+              setAnnounce(hint);
+              return;
+            }
+            setDialog('costAlloc');
+          })();
+          return;
+        }
+        setDialog('costAlloc');
+      },
+    },
+    'Alt+K',
+    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx),
+  );
+
   useCommand(
     {
       id: 'voucher.print',
@@ -413,11 +496,31 @@ export function VoucherScreen({
     setPosting(true);
     setNotice({ kind: 'info', text: 'Posting…' });
     try {
+      // the armed cost splits (ADR-025) attach to the lines they were armed
+      // against — same ledger name AND amount, in order; an edited line
+      // honestly loses its stale arming (it stays unallocated)
+      const entries = [...check.lines];
+      if (costAlloc) {
+        let cursor = 0;
+        for (const line of allocatableLines) {
+          const splits = costAlloc.splits[cursor] ?? [];
+          cursor += 1;
+          if (!splits.length) continue;
+          const target = entries.find(
+            (e) =>
+              e.ledger_id ===
+                (ledgers.find((l) => l.name === line.ledgerName)?.id ?? -1) &&
+              e.dc === line.dc &&
+              e.amount === toCanonical(line.amount),
+          );
+          if (target) target.cost_allocations = splits;
+        }
+      }
       const out = await api.postVoucher({
         voucher_type: draft.typeCode,
         voucher_date: draft.date,
         client_token: draft.clientToken,
-        entries: check.lines,
+        entries,
         meta: billAlloc ? { bills: billAlloc } : undefined,
       });
       const message = out.replayed
@@ -427,6 +530,7 @@ export function VoucherScreen({
       setAnnounce(message);
       setLastPosted(out);
       setBillAlloc(null); // the allocation rode its voucher; the next starts clean
+      setCostAlloc(null); // same for the cost splits (ADR-025)
       dispatch({ type: 'newDraft' }); // same type & date: chain entries at speed
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Posting failed';
@@ -518,6 +622,18 @@ export function VoucherScreen({
             Bills: {billAlloc.party} ({billAlloc.refs.length} ref{billAlloc.refs.length === 1 ? '' : 's'})
           </button>
         )}
+        {costAlloc && (
+          <button
+            type="button"
+            className="date-chip"
+            onClick={() => setDialog('costAlloc')}
+            title="Edit the armed cost-centre splits"
+          >
+            Cost: {costAlloc.splits.filter((s) => s.length > 0).length} of{' '}
+            {costAlloc.lines.length} line
+            {costAlloc.lines.length === 1 ? '' : 's'} <kbd>Alt+K</kbd>
+          </button>
+        )}
         <button type="button" className="date-chip" onClick={() => setDialog('date')}>
           {draft.date} <kbd>F2</kbd>
         </button>
@@ -589,8 +705,27 @@ export function VoucherScreen({
           onConfirm={() => {
             dispatch({ type: 'newDraft' });
             setBillAlloc(null);
+            setCostAlloc(null);
             setNotice(null);
             closeDialog();
+          }}
+          onCancel={closeDialog}
+        />
+      )}
+      {dialog === 'costAlloc' && costMasters && allocatableLines.length > 0 && (
+        <CostAllocationDialog
+          lines={allocatableLines}
+          centres={costMasters.centres}
+          categories={costMasters.categories}
+          onApply={(splits) => {
+            setCostAlloc({ lines: allocatableLines, splits });
+            closeDialog();
+            const armed = splits.filter((s) => s.length > 0).length;
+            const message =
+              `Cost centres armed: ${armed} of ${allocatableLines.length} line(s) allocated — ` +
+              'Ctrl+A posts the voucher with them';
+            setNotice({ kind: 'ok', text: message });
+            setAnnounce(message);
           }}
           onCancel={closeDialog}
         />

@@ -13,7 +13,17 @@ from typing import Any
 
 import httpx
 
-from .models import Book, Group, Ledger, Period, Slot, TrialBalanceRow, Voucher
+from .models import (
+    Book,
+    CostCategory,
+    CostCentre,
+    Group,
+    Ledger,
+    Period,
+    Slot,
+    TrialBalanceRow,
+    Voucher,
+)
 
 
 class ApiError(RuntimeError):
@@ -116,6 +126,34 @@ class ApiClient:
     def groups(self) -> list[Group]:
         return [Group.from_json(r) for r in self._get("/api/v1/groups")]
 
+    def cost_categories(self) -> list[CostCategory]:
+        return [CostCategory.from_json(r) for r in self._get("/api/v1/cost-categories")]
+
+    def create_cost_category(self, name: str, *, parent_name: str | None = None) -> CostCategory:
+        payload: dict[str, Any] = {"name": name, "parent_name": parent_name}
+        return CostCategory.from_json(self._post("/api/v1/cost-categories", payload))
+
+    def cost_centres(self) -> list[CostCentre]:
+        return [CostCentre.from_json(r) for r in self._get("/api/v1/cost-centres")]
+
+    def create_cost_centre(
+        self,
+        name: str,
+        *,
+        parent_name: str | None = None,
+        category_name: str | None = None,
+        category_id: int | None = None,
+        code: str | None = None,
+    ) -> CostCentre:
+        payload: dict[str, Any] = {"name": name, "code": code}
+        if parent_name is not None:
+            payload["parent_name"] = parent_name
+        if category_id is not None:
+            payload["category_id"] = category_id
+        elif category_name is not None:
+            payload["category_name"] = category_name
+        return CostCentre.from_json(self._post("/api/v1/cost-centres", payload))
+
     # ------------------------------------------------------------- vouchers
     def vouchers(
         self,
@@ -194,6 +232,24 @@ class ApiClient:
 
     def fy_close(self, as_of: date) -> dict:
         return self._get("/api/v1/reports/fy-close", as_of=as_of.isoformat())
+
+    def cost_centre_summary(self, date_from: date, date_to: date) -> dict:
+        return self._get(
+            "/api/v1/reports/cost-centres",
+            **{"from": date_from.isoformat(), "to": date_to.isoformat()},
+        )
+
+    def cost_centre_breakup(self, centre_id: int, date_from: date, date_to: date) -> dict:
+        return self._get(
+            f"/api/v1/reports/cost-centres/{centre_id}/breakup",
+            **{"from": date_from.isoformat(), "to": date_to.isoformat()},
+        )
+
+    def cost_category_summary(self, date_from: date, date_to: date) -> dict:
+        return self._get(
+            "/api/v1/reports/cost-categories",
+            **{"from": date_from.isoformat(), "to": date_to.isoformat()},
+        )
 
     def pack(
         self, key: str, *, format_: str | None = None, **params: str

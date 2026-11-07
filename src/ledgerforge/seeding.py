@@ -18,7 +18,15 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Book, Currency, Group, Ledger, VoucherType
+from .models import (
+    Book,
+    CostCategory,
+    CostCentre,
+    Currency,
+    Group,
+    Ledger,
+    VoucherType,
+)
 
 DEFAULT_BOOK_SLUG = "default"
 DEFAULT_BOOK_NAME = "My Company"
@@ -123,7 +131,8 @@ def ensure_default_book(session: Session) -> Book:
 def seed_book(session: Session, book: Book) -> Book:
     """Idempotently create the TallyPrime defaults inside ``book``:
     root + 28 groups (closure follows by trigger), system ledgers, voucher
-    types. Safe to re-run; existing masters are never touched."""
+    types, and the cost-category/cost-centre roots (ADR-025). Safe to
+    re-run; existing masters are never touched."""
     existing = set(session.scalars(select(Group.name).where(Group.book_id == book.id)).all())
 
     def _add_group(name: str, parent_id: int | None, nature: str, affects_gross: bool) -> Group:
@@ -192,6 +201,31 @@ def seed_book(session: Session, book: Book) -> Book:
                     is_system=is_system,
                 )
             )
+
+    # Cost centres (ADR-025): the roots every allocation tree hangs from —
+    # a "Primary" category and a "Primary" centre, the groups' pattern.
+    # Both trees start empty of real members; the accountant grows them.
+    root_category = session.scalar(
+        select(CostCategory).where(CostCategory.book_id == book.id, CostCategory.is_root.is_(True))
+    )
+    if root_category is None:
+        root_category = CostCategory(book_id=book.id, name="Primary", parent_id=None, is_root=True)
+        session.add(root_category)
+        session.flush()
+
+    has_centre_root = session.scalar(
+        select(CostCentre.id).where(CostCentre.book_id == book.id, CostCentre.is_root.is_(True))
+    )
+    if has_centre_root is None:
+        session.add(
+            CostCentre(
+                book_id=book.id,
+                name="Primary",
+                parent_id=None,
+                category_id=None,
+                is_root=True,
+            )
+        )
 
     session.commit()
     session.refresh(book)
