@@ -72,9 +72,11 @@ jobs:
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TITLE: "LedgerForge ${{ github.ref_name }} — the native Windows application"
+        # the title is the release notes' own H1 ("# LedgerForge 0.19.0 — the
+        # completeness pass") — one source of truth, correct every phase
         run: >
+          $title = (Get-Content desktop/RELEASE_NOTES.md -TotalCount 1) -replace '^#\s*LedgerForge\s*\d+(\.\d+)*\s*—\s*', "LedgerForge ${{ github.ref_name }} — ";
           gh release create "${{ github.ref_name }}"
           "LedgerForge-${{ github.ref_name }}-win64.zip" checksums.txt
-          --title "$env:RELEASE_TITLE"
+          --title "$title"
           --notes-file desktop/RELEASE_NOTES.md
