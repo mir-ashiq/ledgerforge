@@ -328,6 +328,41 @@ names that would silently reuse an unrelated ledger.
 Design: [ADR-012](docs/adr/012-payroll-pack.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Print bridge: payslips & tax invoices as PDF (ADR-013)
+
+Every posted voucher prints. `GET /api/v1/vouchers/{id}/pdf` offers the
+voucher's meta keys to the plugin registry's **document-view factories**
+(plugin API 0.5): the payroll pack claims runs and prints the **payslip**
+of `?employee=` — components with YTD, gross/deductions/net, and the
+payable position replayed through the pack's own fold, so a payslip that
+disagrees with the ledger is impossible by construction. The invoicing
+pack claims invoices and prints the **tax invoice** (items, GST slabs,
+computed totals, due date). Everything else — plain vouchers, reversals,
+payouts — prints as the **voucher slip** (Dr/Cr table, equal totals,
+Law 2 note). Nothing 404s for lack of a layout.
+
+The writer is core and **dependency-free**: PDF 1.4, base-14 Helvetica
+(nothing to embed, nothing to install), exact-decimal formatting at the
+edge, uncompressed streams. Packs describe *what* a document says
+(`DocumentView`); one layout engine owns pagination and geometry — one
+visual language across every pack's documents, and a community pack
+ships a printable document by registering one function.
+
+```bash
+# The payslip of one employee on a multi-employee run
+curl -s "localhost:8000/api/v1/vouchers/42/pdf?employee=Asha%20Verma" -o payslip.pdf
+
+# Any other voucher: the voucher slip
+curl -s localhost:8000/api/v1/vouchers/7/pdf -o voucher.pdf
+```
+
+In the web UI: `Alt+P` opens the payslip screen — posted runs indexed by
+employee and period, figures previewed as strings (Law 3), `Ctrl+P`
+prints the PDF, `Esc` is back.
+
+Design: [ADR-013](docs/adr/013-print-bridge.md),
+[plugin guide](docs/plugin-guide.md#printing-a-document-api-05-adr-013).
+
 ## What's inside
 
 ```
@@ -338,14 +373,16 @@ db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
                     The chart-of-accounts seed is code: ledgerforge/seeding.py
                     (one definition for bootstrap and POST /books — ADR-009).
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
-                    + roles + per-book claims) · reporting · seeding · plugins ·
+                    + roles + per-book claims) · reporting (reports, printing:
+                    the PDF writer + layout engine) · seeding · plugins ·
                     contrib (example_gst + the invoicing, inventory and payroll packs)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
-                    web — the voucher-entry screen + command palette (React + Vite)
+                    web — the voucher-entry screen, command palette and payslip
+                    screen (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
-                    inventory, payroll, deep audit (adversarial: races, rounding
-                    boundaries, gate bypasses)
+                    inventory, payroll, printing, deep audit (adversarial: races,
+                    rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
@@ -417,13 +454,16 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.8.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.9.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
-change (plugin API 0.3) — **and payroll as the third: runs and payouts as
+change (plugin API 0.3) — payroll as the third: runs and payouts as
 documents, fiscal-year YTD folds, zero schema change (plugin API 0.4:
-Resolver.fy_start_month)**. The planned roadmap is now fully landed; what
+Resolver.fy_start_month) — **and the print bridge (v0.9): every voucher
+as PDF via plugin document views (plugin API 0.5) — payslips, tax
+invoices, and the voucher-slip fallback — plus the payslip screen
+(`Alt+P`, `Ctrl+P`)**. The planned roadmap is fully landed; what
 remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
 
@@ -439,6 +479,9 @@ remains is deliberately conditional (see
       positions as a plugin pack (ADR-011)
 - [x] Payroll: runs/payouts, fiscal-year YTD and all-time payable folds
       as a plugin pack (ADR-012)
+- [x] Print bridge: every voucher as PDF — payslips & tax invoices as
+      plugin document views, voucher-slip fallback, payslip screen
+      (ADR-013, plugin API 0.5)
 - [ ] Community plugin index, signed plugin trust model
 - [ ] Report scale-out (partitioning + BRIN) — only when books pass
       millions of entries
