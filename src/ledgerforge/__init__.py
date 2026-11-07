@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -33,4 +33,12 @@ __version__ = "0.20.0"
 #:       renders in a hardened iframe. Slots never receive keyboard scope:
 #:       they register commands with the host over postMessage and the host
 #:       binds keys to them (M4 + D4, ADR-019).
-PLUGIN_API_VERSION = "0.8"
+#: 0.8 — ``Resolver.ledger_entries`` and ``PackReport.data``: the engine-side
+#:       rows a ledger statement folds, and the JSON payload a UI consumes —
+#:       one fold, every surface (ADR-023).
+#: 0.9 — ``Resolver.ensure_voucher_type(code, name, prefix, restart_yearly)``:
+#:       book-scoped, idempotent — a pack whose documents deserve their own
+#:       numbering series (orders: QT/SO/DN/PO/GRN) creates it inside the
+#:       posting transaction; the engine resolves the draft's type after
+#:       transformers, so a transformer may rewrite ``voucher_type`` (ADR-024).
+PLUGIN_API_VERSION = "0.9"

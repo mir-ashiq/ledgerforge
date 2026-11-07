@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.21.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -26,13 +26,15 @@ is fully landed:
 - **Packs**: invoicing, inventory (weighted-average, four movements), payroll (runs, YTD,
   payslips), statutory (PF/ESI/TDS), GST (place of supply, HSN rate tables, GSTR-1/HSN
   statements, the IRN outbox + bridge), bills (bill-wise, outstanding, ageing, interest —
-  ADR-023, v0.20).
+  ADR-023, v0.20), orders (quotation/SO/DN/PO/GRN, position fold, pending reports —
+  ADR-024, v0.21).
 - **Surfaces**: keyboard-first web UI (command palette, rebindable Tally keymap, sandboxed
   plugin slots), native Windows application (ADR-022: a Qt window over an embedded
-  PostgreSQL — no browser), CLI, REST API, dependency-free PDF printing.
+  PostgreSQL — no browser; the Orders page and document pickers joined in v0.21), CLI,
+  REST API, dependency-free PDF printing.
 - **Trust**: signed community plugin distribution with the curator index, Ed25519
   signatures, operator acknowledgement.
-- **Ops**: CI on real PostgreSQL (337 backend tests + 99 web tests + Playwright E2E),
+- **Ops**: CI on real PostgreSQL (403 backend tests + 99 web tests + Playwright E2E),
   backup/restore drills, production compose, deployment runbook.
 
 ## 2. The benchmark: TallyPrime today
@@ -60,7 +62,7 @@ subscriptions for updates and remote services.
 | Keyboard-first UX | ✔ (its identity) | ✔ (ADR-004, rebindable keymap, palette) | parity in the web app; the native window is narrower (Phase 1) |
 | Invoicing | ✔ | ✔ (ADR-010) | parity for the invoice itself; bill-wise tracking landed in **v0.20** (ADR-023) |
 | Inventory | ✔ batches/serial/expiry/godowns/re-order/mfg | weighted-average qty/value only | **gap** (Phase 6) |
-| Orders (quote/SO/PO/GRN) | ✔ | ✖ | **gap** (Phase 3) |
+| Orders (quote/SO/PO/GRN) | ✔ | ✔ (ADR-024) | **parity** — landed in v0.21.0 (Phase 3) |
 | Cost centres | ✔ | ✖ | **gap** (Phase 4) |
 | Banking, BRS, cheques | ✔ (incl. connected banking) | ✖ | **gap** (Phase 5; per-bank APIs deliberately out) |
 | GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox | **partial** (Phase 7) |
@@ -119,7 +121,7 @@ payables position is bill-level, not ledger-level.
 - Receipt allocation UX: the on-account/against-ref decision at entry time in the web UI
   and the native dialog.
 
-### Phase 3 — v0.21.0 · Order processing *(ADR-024)*
+### Phase 3 — v0.21.0 · Order processing *(ADR-024, landed in v0.21.0)*
 
 The quote-to-cash and procure-to-pay chains TallyPrime users live in.
 
@@ -237,4 +239,4 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-07, at the close of Phase 2.*
+code. Last revisited: 2026-11-08, at the close of Phase 3.*

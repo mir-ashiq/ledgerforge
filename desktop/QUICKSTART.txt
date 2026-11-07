@@ -20,15 +20,21 @@ FIRST RUN
      Ctrl+N, pick a type (JV, PYT, RCT, SAL…), type a ledger name (the
      box autocompletes), an amount, Debit; add the Credit line; when the
      balance label turns green, press "Post voucher". Enter opens the
-     selected voucher from the day book; F5 refreshes; Alt+1..5 jump
+     selected voucher from the day book; F5 refreshes; Alt+1..6 jump
      between pages; Ctrl+Q quits.
 
 THE PAGES
   Day Book   your vouchers: date/type filters, search, double-click to view
              (Save as PDF is in the voucher window)
   Masters    the chart of accounts: ledgers and groups, New Ledger…
+  Orders     the order documents: quotations, sales orders, delivery notes,
+             purchase orders, goods receipt notes — each on its own
+             numbering series, each printing as its commercial document;
+             Pending Orders opens the sales/purchase position report
   Reports    Trial Balance, Profit & Loss, Balance Sheet, FY-close preview,
-             and the GSTR-1 pack (save the statutory PDF or export CSV)
+             the GSTR-1 pack, bills receivable/payable with ageing, the
+             party ledger statement, interest on overdue bills, and
+             pending orders (sales / purchase)
   Periods    financial years: lock, unlock, close preview, close
   Sandbox    plugin dashboards registered by installed plugins (ADR-019)
 

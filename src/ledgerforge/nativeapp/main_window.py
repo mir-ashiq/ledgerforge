@@ -24,6 +24,8 @@ from .client import ApiClient
 from .daybook import DayBookPage
 from .masters import MastersPage
 from .models import Book
+from .order_dialog import NewOrderDialog
+from .orders import OrdersPage
 from .periods import PeriodsPage
 from .reports import ReportsPage
 from .sandbox import SandboxPage
@@ -31,10 +33,14 @@ from .tasks import run
 from .voucher_dialog import NewVoucherDialog, VoucherViewDialog
 from .widgets import app_icon, error_detail
 
-#: (page key, sidebar label) in navigation order.
+#: (page key, sidebar label) in navigation order — the Orders page joins
+#: after Masters (ADR-024): the quote-to-cash and procure-to-pay documents
+#: get their own home between the masters they name and the reports they
+#: feed. Alt+1..6 follow the list.
 PAGES = [
     ("daybook", "Day Book"),
     ("masters", "Masters"),
+    ("orders", "Orders"),
     ("reports", "Reports"),
     ("periods", "Periods"),
     ("sandbox", "Sandbox"),
@@ -56,14 +62,25 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.daybook = DayBookPage(client)
         self.masters = MastersPage(client)
+        self.orders = OrdersPage(client)
         self.reports = ReportsPage(client)
         self.periods = PeriodsPage(client)
         self.sandbox = SandboxPage(client)
-        for page in (self.daybook, self.masters, self.reports, self.periods, self.sandbox):
+        for page in (
+            self.daybook,
+            self.masters,
+            self.orders,
+            self.reports,
+            self.periods,
+            self.sandbox,
+        ):
             self.pages.addWidget(page)
 
         self.daybook.open_voucher_requested.connect(self.open_voucher)
         self.daybook.new_voucher_requested.connect(self.new_voucher)
+        self.orders.open_voucher_requested.connect(self.open_voucher)
+        self.orders.new_order_requested.connect(self.new_order)
+        self.orders.pending_report_requested.connect(self._goto_pending_report)
 
         # ---- sidebar ----------------------------------------------------
         self.sidebar = QListWidget()
@@ -94,6 +111,7 @@ class MainWindow(QMainWindow):
         self._load_books()
         self.daybook.reload()
         self.masters.reload()
+        self.orders.reload()
         self.sandbox.reload()
 
     # ---------------------------------------------------------------- menus
@@ -104,6 +122,11 @@ class MainWindow(QMainWindow):
         new_action.setShortcut(QKeySequence("Ctrl+N"))
         new_action.triggered.connect(self.new_voucher)
         file_menu.addAction(new_action)
+
+        new_order_action = QAction("New &order document…", self)
+        new_order_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        new_order_action.triggered.connect(self.new_order)
+        file_menu.addAction(new_order_action)
 
         refresh_action = QAction("&Refresh", self)
         refresh_action.setShortcut(QKeySequence("F5"))
@@ -230,3 +253,18 @@ class MainWindow(QMainWindow):
 
     def _show_voucher(self, voucher) -> None:
         VoucherViewDialog(self._client, voucher, self).exec()
+
+    # ---------------------------------------------------------------- orders
+    def new_order(self) -> None:
+        """The New Order dialog (ADR-024) — the five documents, their own
+        series, the against-picker fed by orders-open."""
+        dialog = NewOrderDialog(
+            self._client, self.masters.ledger_names(), self, party_names=self.masters.party_names()
+        )
+        dialog.exec()
+        self.orders.reload()
+
+    def _goto_pending_report(self, key: str) -> None:
+        """The Orders page's pending button: jump to Reports, pre-selected."""
+        self.reports.select_report(key)
+        self._goto(3)  # Reports is the fourth page now (Orders is third)

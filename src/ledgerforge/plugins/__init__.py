@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from .. import PLUGIN_API_VERSION
 from ..errors import ValidationError
-from ..models import Book, Group, Ledger, Voucher, VoucherEntry
+from ..models import Book, Group, Ledger, Voucher, VoucherEntry, VoucherType
 from .trust import (
     TrustError,
     TrustStore,
@@ -373,6 +373,36 @@ class Resolver:
         self._session.add(ledger)
         self._session.flush()
         return ledger
+
+    def ensure_voucher_type(
+        self, code: str, name: str, prefix: str | None = None, *, restart_yearly: bool = True
+    ) -> VoucherType:
+        """Return the book's voucher type ``code``, creating it if absent
+        (plugin API 0.9, ADR-024) — book-scoped and idempotent, the
+        ``ensure_ledger`` pattern applied to document numbering. The engine
+        resolves a draft's voucher type *after* transformers run, so a
+        transformer may rewrite ``draft.voucher_type`` to the returned type's
+        code and its documents number in their own gapless series
+        (``prefix-FY-seq``, yearly when ``restart_yearly``)."""
+        code = code.strip().upper()
+        existing = self._session.scalar(
+            select(VoucherType).where(
+                VoucherType.book_id == self._book.id, VoucherType.code == code
+            )
+        )
+        if existing is not None:
+            return existing
+        vtype = VoucherType(
+            book_id=self._book.id,
+            code=code,
+            name=name,
+            number_prefix=prefix if prefix is not None else code,
+            restart_yearly=restart_yearly,
+            is_system=False,
+        )
+        self._session.add(vtype)
+        self._session.flush()
+        return vtype
 
     def prior_documents(self, key: str) -> list[PriorDocument]:
         """Every posted voucher of this book whose ``meta`` carries ``key``,

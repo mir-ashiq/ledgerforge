@@ -117,6 +117,26 @@ The contract:
 - **Decline with `None`** — the payroll factory declines payouts; unregistered keys fall through the same way.
 - The web app's payslip screen is the reference consumer: `Alt+P` → pick employee and period → `Ctrl+P` prints (`tests/test_printing.py` + `frontend/web/tests/payslipScreen.spec.tsx` pin the whole path).
 
+## Creating your own voucher-type series (API 0.9, ADR-024)
+
+A pack whose documents deserve their own numbering — the orders pack's
+QT/SO/DN/PO/GRN series — creates the voucher type lazily, inside the
+posting transaction:
+
+```python
+vtype = resolver.ensure_voucher_type("WO", "Work Order", "WO")
+draft.voucher_type = vtype.code  # the engine resolves the type AFTER transformers
+```
+
+`ensure_voucher_type(code, name, prefix, restart_yearly=True)` is
+book-scoped and idempotent (the `ensure_ledger` pattern applied to
+document numbering); a rewrite of `draft.voucher_type` in a transformer
+lands in the numbering because the engine resolves the type after every
+transformer has run. The type rolls back with a failed post — a refused
+document consumes no number. The design contract is
+[ADR-024](adr/024-order-processing.md); the worked pack is
+`ledgerforge/contrib/orders.py`.
+
 ## Publishing a report (API 0.6, ADR-014)
 
 A document view prints *one voucher*; a report folds *many* — a month of

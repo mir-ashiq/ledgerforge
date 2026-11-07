@@ -39,6 +39,7 @@ from ..seeding import VOUCHER_TYPES
 from .bill_dialog import BillAllocationDialog
 from .client import ApiClient
 from .models import Voucher, money
+from .order_dialog import OrderAllocationDialog
 from .tasks import run
 from .widgets import error_detail, fill_table, make_table
 
@@ -253,7 +254,9 @@ class _LineEditor:
 class NewVoucherDialog(QDialog):
     """Post a voucher: type, date, narration, and balanced D/C lines —
     with bill-wise allocation for party lines (ADR-023): Ctrl+L opens the
-    allocation dialog, and the armed refs ride the post as meta.bills."""
+    allocation dialog, and the armed refs ride the post as meta.bills.
+    Order settlement rides alongside (ADR-024): Ctrl+O picks the open
+    orders this voucher bills, arming meta.orders.settle on the post."""
 
     posted = Signal(object)  # the new Voucher
 
@@ -270,6 +273,8 @@ class NewVoucherDialog(QDialog):
         self._party_names = set(party_names or [])
         self._bill_refs: list[dict] = []
         self._bill_party: str | None = None
+        self._order_settle: list[dict] = []
+        self._order_party: str | None = None
         self._lines: list[_LineEditor] = []
         self.setWindowTitle("New Voucher")
         self.setModal(True)
@@ -301,6 +306,8 @@ class NewVoucherDialog(QDialog):
             QShortcut(QKeySequence(key), self, lambda code=code: self._select_type(code))
         # bill-wise allocation (ADR-023): the same Alt+L the web entry screen binds
         QShortcut(QKeySequence("Ctrl+L"), self, self._open_bill_dialog)
+        # order settlement (ADR-024): pick the orders this voucher bills
+        QShortcut(QKeySequence("Ctrl+O"), self, self._open_order_dialog)
 
         layout.addWidget(QLabel("Narration"))
         self.narration = QLineEdit()
@@ -336,9 +343,16 @@ class NewVoucherDialog(QDialog):
             "settle open bills; the remainder goes on account"
         )
         self.bills_button.clicked.connect(self._open_bill_dialog)
+        self.order_button = QPushButton("Order… (Ctrl+O)")
+        self.order_button.setToolTip(
+            "Settle this voucher against the party's open orders — the "
+            "quantities it bills ride the post as meta.orders.settle (ADR-024)"
+        )
+        self.order_button.clicked.connect(self._open_order_dialog)
         line_buttons.addWidget(add_button)
         line_buttons.addWidget(remove_button)
         line_buttons.addWidget(self.bills_button)
+        line_buttons.addWidget(self.order_button)
         line_buttons.addStretch(1)
         self.balance_label = QLabel()
         font = QFont()
@@ -350,6 +364,10 @@ class NewVoucherDialog(QDialog):
         self.bills_status = QLabel("")
         self.bills_status.setStyleSheet("color: #52607a;")
         layout.addWidget(self.bills_status)
+
+        self.order_status = QLabel("")
+        self.order_status.setStyleSheet("color: #52607a;")
+        layout.addWidget(self.order_status)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -542,15 +560,51 @@ class NewVoucherDialog(QDialog):
             self._bill_refs = []
             self.bills_status.setText("")
 
+    # --------------------------------------------------- order settlement
+    def _open_order_dialog(self) -> None:
+        found = self._party_movement()
+        if found is None:
+            QMessageBox.information(
+                self,
+                "Orders",
+                "No party line yet — add a line on a Sundry Debtors / Sundry "
+                "Creditors ledger with its amount first.",
+            )
+            return
+        party, movement = found
+        if movement == 0:
+            QMessageBox.information(
+                self,
+                "Orders",
+                f"Enter {party}'s debit or credit first — the settlement follows the movement.",
+            )
+            return
+        side = "purchase" if movement > 0 else "sales"
+        dialog = OrderAllocationDialog(self._client, party, side, self)
+        if dialog.exec() and dialog.settle():
+            self._order_party = party
+            self._order_settle = dialog.settle()
+            self.order_status.setText(
+                f"Settles {party}'s orders: {len(self._order_settle)} order(s) — "
+                "rides the post as meta.orders.settle"
+            )
+        elif dialog.settle() == [] and dialog.result() == QDialog.DialogCode.Accepted:
+            self._order_party = None
+            self._order_settle = []
+            self.order_status.setText("")
+
     # ------------------------------------------------------------- posting
     def _submit(self) -> None:
         entries = [p for p in (line.payload() for line in self._lines) if p is not None]
         voucher_date: date = self.date_edit.date().toPython()
         voucher_type = self.type_box.currentData()
         client_token = str(uuid.uuid4())  # idempotency: a retry reposts nothing
-        meta = None
+        meta = {}
         if self._bill_party and self._bill_refs:
-            meta = {"bills": {"party": self._bill_party, "refs": self._bill_refs}}
+            meta["bills"] = {"party": self._bill_party, "refs": self._bill_refs}
+        if self._order_party and self._order_settle:
+            meta["orders"] = {"settle": self._order_settle}
+        meta = meta or None
 
         def post() -> Voucher:
             return self._client.create_voucher(

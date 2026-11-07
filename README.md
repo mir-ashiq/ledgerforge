@@ -399,6 +399,48 @@ ledger; books are strangers; idempotent replay allocates nothing twice.
 Design: [ADR-023](docs/adr/023-bill-wise-outstanding.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Order processing: quote to cash, procure to pay (v0.21, ADR-024)
+
+TallyPrime users live in the order chains: a quotation becomes a sales
+order, goods go out on a delivery note, the invoice bills the order — and
+the purchase side mirrors it (purchase order → GRN → purchase bill).
+LedForge now runs both chains as the fifth plugin pack, on `meta.orders`,
+with **zero schema change**:
+
+- **Five document kinds**, each on its own numbering series (QT-…, SO-…,
+  DN-…, PO-…, GRN-… — created lazily per book through plugin API 0.9's
+  `ensure_voucher_type`), each printing as its commercial document through
+  the ADR-013 bridge. Orders are not accounting: each posts a
+  **zero-net memorandum trace** (one Dr + one Cr on "Order Book (memo)"),
+  so the day book shows the order at its value while the trial balance
+  never moves — the tests assert the memo ledger's figure is exactly zero
+  after any number of documents.
+- **Order position tracking** as a deterministic fold: sales order lines
+  track delivered (delivery notes) and invoiced (billing vouchers);
+  purchase order lines track received (GRNs) and billed. Status runs
+  open → partial → closed; the guards are the caps (nothing fulfils or
+  bills beyond the ordered quantity, per item, per order, same party).
+- **Order → invoice linkage**: an invoice carries
+  `meta.orders = {"settle": [...]}` — the annotation layer ADR-023
+  proved, applied to quantities. The validator resolves the order among
+  the parties the voucher actually moves and writes the resolution back
+  into the stored document, so the fold replays it without guessing.
+  PO → GRN → purchase bill works the same way.
+- **Pending orders** reports on both sides (quantities, pending quantity
+  and value, status, per-party totals — PDF/CSV/JSON) and
+  **orders-open** per kind (the picker feed).
+- **The native window's document pickers**: an Orders page joins the
+  sidebar (Alt+3), *New Order…* posts any of the five kinds with an
+  against-picker fed by the live fold, and the voucher form's
+  *Order…* (Ctrl+O) picks the open orders an invoice settles.
+
+Reversals net in the fold (reversing an order cancels it; reversing a
+delivery note, GRN or settling invoice restores the position); books are
+strangers; a refused post consumes no number.
+
+Design: [ADR-024](docs/adr/024-order-processing.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## Print bridge: payslips & tax invoices as PDF (ADR-013)
 
 Every posted voucher prints. `GET /api/v1/vouchers/{id}/pdf` offers the
@@ -830,7 +872,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.20.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.21.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -887,14 +929,23 @@ plugin pack — zero schema change — with the conservation law that keeps
 receivable/payable with ageing buckets, the bill-linked party ledger
 statement, interest on overdue bills posted as reviewable vouchers, and
 the allocation decision at entry time (`Alt+L` in the web form, *Allocate
-bills…* in the native one) plus the web `Alt+I` outstandings screen.
-The planned roadmap is fully landed; the desktop edition followed it. What comes
-next is written down as a plan of record — **[ROADMAP.md](ROADMAP.md): eleven
-phases to v1.0, “everything an Indian SMB's daily accounting needs, on
-LedgerForge, without wishing for TallyPrime”** — Phase 1 landed in v0.19.0,
-Phase 2 (bill-wise & outstanding) in v0.20.0, and Phase 3 is order
-processing. Each phase tracks as a
-GitHub milestone with a tracking issue:
+bills…* in the native one) plus the web `Alt+I` outstandings screen — and
+**v0.21, order processing (Phase 3 of the roadmap, ADR-024)**: the
+quote-to-cash and procure-to-pay chains as the fifth plugin pack —
+quotation, sales order, delivery note, purchase order and GRN, each on its
+own numbering series (plugin API 0.9: `ensure_voucher_type`), each posting
+a zero-net memorandum trace (orders are not accounting; the memo ledger's
+trial-balance figure is exactly zero by construction), the position fold
+(delivered / received, invoiced / billed, open → partial → closed, the
+caps as the guards), the order → invoice settle annotation riding billing
+vouchers, pending-orders reports on both sides, and the native window's
+Orders page with its document pickers.
+What comes next is written down as a plan of record —
+**[ROADMAP.md](ROADMAP.md): eleven phases to v1.0, “everything an Indian
+SMB's daily accounting needs, on LedgerForge, without wishing for
+TallyPrime”** — Phase 1 landed in v0.19.0, Phase 2 (bill-wise &
+outstanding) in v0.20.0, and Phase 3 (order processing) in v0.21.0. Each
+phase tracks as a GitHub milestone with a tracking issue:
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -954,6 +1005,13 @@ GitHub milestone with a tracking issue:
       the web UI (Books screen, `X-Book-Id`), reversal from the daybook,
       the periods screen, `master.created`, FX line entry + F4–F9 in the
       native form, direct `cryptography` dependency, docs honest
+- [x] Order processing (v0.21, Phase 3, ADR-024): quotation, sales
+      order, delivery note, purchase order and GRN as the fifth plugin
+      pack (zero schema change) — their own numbering series (plugin API
+      0.9: `ensure_voucher_type`), the zero-net memorandum trace (orders
+      never move the trial balance), the position fold with cap guards,
+      the order→invoice settle annotation, pending-orders reports both
+      sides, and the native Orders page + document pickers
 - [x] Bill-wise & outstanding management (v0.20, Phase 2, ADR-023):
       bill references as the fourth plugin pack (zero schema change) with
       the conservation law (bills + on-account == the party's ledger
@@ -962,6 +1020,13 @@ GitHub milestone with a tracking issue:
       bills as reviewable vouchers, allocation dialogs in both UIs and the
       web outstandings screen (plugin API 0.8: `ledger_entries`, JSON pack
       reports)
+- [x] Order processing (v0.21, Phase 3, ADR-024): quotation, sales
+      order, delivery note, purchase order and GRN as the fifth plugin
+      pack (zero schema change) — their own numbering series (plugin API
+      0.9: `ensure_voucher_type`), the zero-net memorandum trace (orders
+      never move the trial balance), the position fold with cap guards,
+      the order→invoice settle annotation, pending-orders reports both
+      sides, and the native Orders page + document pickers
 
 ## Contributing
 

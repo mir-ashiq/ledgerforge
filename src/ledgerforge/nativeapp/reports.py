@@ -1,6 +1,7 @@
 """Reports — Trial Balance, P&L, Balance Sheet, FY-close, the GST pack,
-and the bills pack's outstanding book (ADR-023: receivable/payable with
-ageing, the party ledger statement, interest on overdue bills).
+the bills pack's outstanding book (ADR-023: receivable/payable with
+ageing, the party ledger statement, interest on overdue bills), and the
+orders pack's pending book (ADR-024: sales and purchase sides).
 
 Every report renders into a native tree/table and exports CSV through a real
 file dialog; pack reports additionally save their statutory PDF — bytes
@@ -46,6 +47,8 @@ REPORTS: dict[str, tuple[str, str]] = {
     "bills-payable": ("Bills Payable (ageing)", "as_of"),
     "ledger-statement": ("Party Ledger Statement", "party_range"),
     "bills-interest": ("Interest on Overdue Bills", "as_of"),
+    "pending-sales": ("Pending Orders (sales)", "as_of"),
+    "pending-purchase": ("Pending Orders (purchase)", "as_of"),
 }
 
 #: the pack keys whose PDF view "Save PDF…" offers (the statutory print).
@@ -55,6 +58,15 @@ PDF_PACKS = {
     "bills-payable",
     "ledger-statement",
     "bills-interest",
+    "pending-sales",
+    "pending-purchase",
+}
+
+#: report key -> the pack key + fixed params it runs (the pending-orders
+#: pair shares one pack report with a side parameter — ADR-024).
+_PACK_ALIASES = {
+    "pending-sales": ("pending-orders", {"side": "sales"}),
+    "pending-purchase": ("pending-orders", {"side": "purchase"}),
 }
 
 
@@ -140,6 +152,12 @@ class ReportsPage(QWidget):
         self._sync_params()
 
     # ------------------------------------------------------------- params UI
+    def select_report(self, key: str) -> None:
+        """Pick a report in the combo (the Orders page's pending button)."""
+        index = self.report_box.findData(key)
+        if index >= 0:
+            self.report_box.setCurrentIndex(index)
+
     def _sync_params(self) -> None:
         needs = REPORTS[self.report_box.currentData()][1]
         self.as_of_label.setVisible(needs == "as_of")
@@ -166,6 +184,8 @@ class ReportsPage(QWidget):
             "bills-payable": self._load_bills,
             "ledger-statement": self._load_statement,
             "bills-interest": self._load_interest,
+            "pending-sales": self._load_pending_sales,
+            "pending-purchase": self._load_pending_purchase,
         }
         try:
             loader = loaders[key]()
@@ -222,6 +242,18 @@ class ReportsPage(QWidget):
     def _load_interest(self):
         as_of = self.as_of.date().toPython()
         return lambda: self._client.pack("bills-interest", as_of=as_of.isoformat(), format_="csv")
+
+    def _load_pending_sales(self):
+        as_of = self.as_of.date().toPython()
+        return lambda: self._client.pack(
+            "pending-orders", side="sales", as_of=as_of.isoformat(), format_="csv"
+        )
+
+    def _load_pending_purchase(self):
+        as_of = self.as_of.date().toPython()
+        return lambda: self._client.pack(
+            "pending-orders", side="purchase", as_of=as_of.isoformat(), format_="csv"
+        )
 
     # -------------------------------------------------------------- rendering
     def _render(self, payload: object) -> None:
@@ -393,8 +425,17 @@ class ReportsPage(QWidget):
             params = {"party": party}
         elif key in ("bills-receivable", "bills-payable", "bills-interest"):
             params = {"as_of": self.as_of.date().toPython().isoformat()}
+        elif key in ("pending-sales", "pending-purchase"):
+            pack_key, fixed = _PACK_ALIASES[key]
+            params = {
+                **fixed,
+                "as_of": self.as_of.date().toPython().isoformat(),
+            }
 
         def fetch():
+            if key in _PACK_ALIASES:
+                pack_key, fixed = _PACK_ALIASES[key]
+                return self._client.pack(pack_key, **{**fixed, **params})
             return self._client.pack(key, **params)  # PDF, the printed report
 
         run(
