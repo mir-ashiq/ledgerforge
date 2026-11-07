@@ -1,52 +1,57 @@
-# LedgerForge 0.20.0 — bill-wise & outstanding management
+# LedgerForge 0.21.0 — order processing
 
-**Phase 2 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the accounting-core gap, closed.** TallyPrime's party ledgers carry bill-wise
-details — every invoice opens a named bill, every receipt settles specific
-bills, and the receivables/payables position is bill-level. LedgerForge now
-does the same, as the fourth plugin pack, with zero database schema change.
+**Phase 3 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
+the quote-to-cash and procure-to-pay chains, closed.** TallyPrime users
+live in order documents — a quotation becomes a sales order, goods go out
+on a delivery note, the invoice bills the order; the purchase side mirrors
+it (purchase order → GRN → purchase bill). LedgerForge now runs both
+chains as the fifth plugin pack, with zero database schema change.
 
 ## What's new in the window
 
-- **Allocate bills while you enter (`Ctrl+L`).** Add a line on a party ledger
-  (Sundry Debtors or Sundry Creditors) with its amount, then *Allocate
-  bills…*: the party's open bills appear with their outstanding and ageing,
-  you type an amount against each, and the remainder is offered **on
-  account** or as a **new ref** — the TallyPrime flow. The allocations ride
-  the voucher; the engine re-checks every one of them (a refusal keeps your
-  draft intact).
-- **New reports in the Reports page:** *Bills Receivable* and *Bills Payable*
-  with ageing buckets (not due / 0–30 / 31–60 / 61–90 / 90+ by due date) and
-  the on-account pools; the **Party Ledger Statement** — every entry with its
-  voucher's bill allocations alongside, opening balance to closing; and
-  **Interest on Overdue Bills** — the exact computation, per bill, before you
-  post a thing.
-- **Interest posts as a voucher, never a side effect.** The `interest_charge`
-  document mode derives Dr party / Cr Interest Income from the overdue fold,
-  opens a bill for its total (the charge must appear in what the party owes),
-  and lands in the day book like any other voucher — reviewable, reversible.
-
-## What's new in the web UI
-
-- **The allocation dialog (`Alt+L`)** on the voucher screen — the same
-  settle/remainder decision at entry time, keyboard-first.
-- **The Outstanding screen (`Alt+I`)** — receivable or payable side, ageing
-  columns, party filter, the bucket totals the engine computed.
+- **The Orders page (Alt+3).** Every order document of the book —
+  quotations, sales orders, delivery notes, purchase orders, goods receipt
+  notes — with kind, party, the document's own ref, its value and the live
+  position status (open / partial / closed) from the engine's fold. Filter
+  by kind, search by party or ref, double-click to view (Save as PDF
+  prints the commercial document), *Pending Orders…* jumps to the position
+  report. *New Order…* (Ctrl+Shift+N) posts any of the five kinds.
+- **Their own numbering.** Order documents number in their own gapless
+  series — QT-…, SO-…, DN-…, PO-…, GRN-… — created lazily per book by the
+  pack (plugin API 0.9). A refused document consumes no number.
+- **Order… (Ctrl+O) on the voucher form.** When a voucher moves a party
+  ledger, pick that party's open orders and type the quantity each line
+  bills — the settlement rides the post as `meta.orders.settle`, and the
+  order's position updates. An invoice can settle an order; a purchase
+  voucher bills a PO; bill-wise allocations and order settlements share
+  one voucher.
+- **New reports:** *Pending Orders (sales)* and *Pending Orders
+  (purchase)* — quantities ordered, delivered/received, invoiced/billed,
+  pending quantity and value, per-party subtotals, statuses; export CSV,
+  save the PDF, same as every report.
 
 ## What's new underneath
 
-- **The conservation law** (ADR-023): for every voucher carrying bill
-  allocations, Σ ref dr − Σ ref cr must equal the party's net movement —
-  exactly. From that, inductively: **Σ open bills + on-account equals every
-  party's ledger balance**, at every point in the book's history. The tests
-  assert it against the real trial balance.
-- **Plugin API 0.8** (additive — every existing pack keeps loading):
-  `Resolver.ledger_entries()` gives packs the engine-side rows of a ledger
-  statement, and pack reports can answer **JSON** (`?format=json`) alongside
-  PDF and CSV — one fold feeding every surface, including the dialogs above.
-- Rate resolution for interest: the bill's own declaration → the party's
-  `default_interest` → the request's explicit rate → none (a blank is
-  honest, an invented rate is not).
+- **Orders are not accounting — and the books prove it.** Every order
+  posts a **zero-net memorandum trace** (one Dr + one Cr on "Order Book
+  (memo)"): the day book shows the order at its value, the party ledger is
+  untouched, and the memo ledger's trial-balance figure is exactly zero by
+  construction. The tests assert it after a full order chain.
+- **The position fold** (ADR-024): sales order lines track delivered (from
+  delivery notes) and invoiced (from settle allocations); purchase order
+  lines track received (GRNs) and billed. Status runs open → partial →
+  closed; the guards are the caps — nothing fulfils or bills beyond the
+  ordered quantity, per item, per order, same party. Reversals net in the
+  fold: reversing an order cancels it, reversing a delivery note or a
+  settling invoice restores the position.
+- **Plugin API 0.9** (additive — every existing pack keeps loading):
+  `Resolver.ensure_voucher_type()` — the `ensure_ledger` pattern applied
+  to document numbering; the engine resolves a draft's voucher type after
+  transformers, so a pack can put its documents on their own series.
+- **The settle annotation** resolves the order among the parties the
+  voucher actually moves (the ADR-023 discipline) and writes the
+  resolution back into the stored document — the fold replays it without
+  guessing, and `GET /vouchers/{id}` shows exactly which order was billed.
 
 ## The plan, on the record
 
@@ -54,8 +59,8 @@ Eleven phases to v1.0 — **"everything an Indian SMB's daily accounting
 needs, on LedgerForge, without wishing for TallyPrime"** — tracked as
 [ROADMAP.md](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md)
 with one GitHub milestone per phase. Phase 1 (the completeness pass) landed
-in v0.19.0, Phase 2 (bill-wise & outstanding) in this release; Phase 3 is
-**order processing** — the quote-to-cash and procure-to-pay chains.
+in v0.19.0, Phase 2 (bill-wise & outstanding) in v0.20.0, Phase 3 (order
+processing) in this release; Phase 4 is **cost centres & cost categories**.
 
 ## What's underneath (unchanged, and that's the point)
 
@@ -64,7 +69,7 @@ in v0.19.0, Phase 2 (bill-wise & outstanding) in this release; Phase 3 is
   API client: zero business logic in the GUI, one engine for web, Docker
   and desktop.
 - Your data stays where it was: `%LOCALAPPDATA%\LedgerForge` (or your
-  `--data-dir`). v0.19 books open in v0.20 unchanged — zero schema change
+  `--data-dir`). v0.20 books open in v0.21 unchanged — zero schema change
   this release; the same migrate path the smoke test proves on every build.
 - The engine runs in its own process (ADR-022): the window cannot crash
   your books, and the books cannot crash the window.
