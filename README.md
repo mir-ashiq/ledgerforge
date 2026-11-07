@@ -770,7 +770,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.17.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.18.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -811,9 +811,13 @@ Windows application** — and its v0.18 correction, **the native application
 (ADR-022): a real Windows program** — `LedgerForge.exe` opens a native Qt
 window (no browser), the embedded engine runs in a child process, released
 per tag with a self-proving offscreen smoke gate.
-The planned roadmap is fully landed; the desktop edition followed it, and
-what remains is deliberately conditional (see
-[docs/analysis.md §9](docs/analysis.md)):
+The planned roadmap is fully landed; the desktop edition followed it. What comes
+next is written down as a plan of record — **[ROADMAP.md](ROADMAP.md): eleven
+phases to v1.0, “everything an Indian SMB's daily accounting needs, on
+LedgerForge, without wishing for TallyPrime”** — starting with Phase 1, the
+completeness pass (multi-book in the web UI, reversal from the daybook, the
+periods screen, the `master.created` event, native-window parity, docs
+hygiene). Each phase tracks as a GitHub milestone with a tracking issue:
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -864,6 +868,11 @@ what remains is deliberately conditional (see
       PostgreSQL (pgserver), the web UI same-origin on loopback, data in
       `%LOCALAPPDATA%\LedgerForge`, the trust gate intact, built and
       smoke-gated per release on `windows-latest`
+- [x] The native application (v0.18, ADR-022): `LedgerForge.exe` opens a
+      native Qt window — no browser — with the engine in a child process,
+      the embedded PostgreSQL underneath, day book / masters / reports /
+      periods / sandbox screens, offscreen-proven in CI and smoke-gated
+      per release
 
 ## Contributing
 
