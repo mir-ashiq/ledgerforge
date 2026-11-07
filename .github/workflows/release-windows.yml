@@ -45,9 +45,14 @@ jobs:
       - name: Build LedgerForge.exe
         run: pyinstaller desktop/ledgerforge.spec --noconfirm
 
-      - name: Smoke test the shipped exe
+      # The default data dir (%LOCALAPPDATA%\LedgerForge) is deliberate: it
+      # is precisely what an end user gets, and the runner's D:-drive
+      # RUNNER_TEMP carries ACLs that initdb cannot reset ("could not change
+      # permissions"). A clean machine, the real default path, the shipped
+      # bytes — nothing else.
+      - name: Smoke test the shipped exe (default data dir)
         timeout-minutes: 10
-        run: ./dist/LedgerForge/LedgerForge.exe --smoke --data-dir "$env:RUNNER_TEMP/lf-smoke"
+        run: ./dist/LedgerForge/LedgerForge.exe --smoke
 
       - name: Package the zip + checksums
         run: |
