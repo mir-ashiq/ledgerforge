@@ -1,0 +1,102 @@
+# Production posture for LedgerForge (v0.16 — docs/deployment.md).
+#
+# Differences from the dev docker-compose.yml, every one deliberate:
+#   - LF_REQUIRE_AUTH=true: the API refuses to boot without real OIDC
+#     (the guard added in v0.16; a lost IdP configuration is a boot
+#     failure, never a silent anonymous-admin instance)
+#   - the database is NOT published to the host — the api talks to it on
+#     the compose network only
+#   - restart policies + healthchecks on every service
+#   - a db-backup sidecar running ops/backup.sh on a loop, with retention
+#   - no hardcoded credentials: everything comes from the environment /
+#     .env next to this file (`:${?...}` makes a missing value loud)
+#
+# Run:   LF_* env or .env in place, then
+#   docker compose -f docker-compose.prod.yml up -d
+# Scale the API statelessly (its locks live in PostgreSQL):
+#   docker compose -f docker-compose.prod.yml up -d --scale api=3
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${LF_DB_USER:?set LF_DB_USER in .env}
+      POSTGRES_PASSWORD: ${LF_DB_PASSWORD:?set LF_DB_PASSWORD in .env}
+      POSTGRES_DB: ${LF_DB_NAME:-ledgerforge}
+    # no `ports:` — the database stays on the compose network
+    volumes:
+      - lf-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LF_DB_USER:-ledgerforge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    shm_size: 256mb
+
+  api:
+    build: .
+    environment:
+      LF_DATABASE_URL: postgresql+psycopg://${LF_DB_USER:?}:${LF_DB_PASSWORD:?}@db:5432/${LF_DB_NAME:-ledgerforge}
+      # --- the production auth guard (v0.16) -----------------------------
+      LF_REQUIRE_AUTH: "true"
+      LF_AUTH_MODE: oidc
+      LF_OIDC_ISSUER: ${LF_OIDC_ISSUER:?set LF_OIDC_ISSUER in .env (https://your-idp/realms/ledgerforge)}
+      LF_OIDC_AUDIENCE: ${LF_OIDC_AUDIENCE:?set LF_OIDC_AUDIENCE in .env}
+      LF_OIDC_JWKS_URI: ${LF_OIDC_JWKS_URI:-}
+      LF_CORS_ORIGINS: ${LF_CORS_ORIGINS:-}
+    # published only if the front proxy is not the `web` service below;
+    # with it, keep this commented and let nginx own the edge
+    # ports:
+    #   - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # python:3.12-slim has no curl/wget; use the stdlib
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: web/Dockerfile
+    ports:
+      - "${LF_WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  db-backup:
+    image: postgres:17-alpine
+    volumes:
+      - ./ops/backup.sh:/usr/local/bin/lf-backup:ro
+      - lf-backups:/backups
+    environment:
+      LF_DATABASE_URL: postgresql://${LF_DB_USER:?}:${LF_DB_PASSWORD:?}@db:5432/${LF_DB_NAME:-ledgerforge}
+      LF_BACKUP_DIR: /backups
+      LF_BACKUP_RETENTION_DAYS: ${LF_BACKUP_RETENTION_DAYS:-14}
+      LF_BACKUP_INTERVAL_SECONDS: ${LF_BACKUP_INTERVAL_SECONDS:-86400}
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["sh", "/usr/local/bin/lf-backup"]
+    restart: unless-stopped
+
+volumes:
+  lf-pgdata:
+  lf-backups:
