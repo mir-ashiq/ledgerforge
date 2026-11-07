@@ -72,11 +72,21 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
 from ..errors import ValidationError
-from ..plugins import DraftLine, PluginManifest, Resolver, VoucherDraft
+from ..plugins import (
+    DocumentColumn,
+    DocumentContext,
+    DocumentSection,
+    DocumentView,
+    DraftLine,
+    PluginManifest,
+    Resolver,
+    VoucherDraft,
+)
+from ..reporting.printing import format_amount
 
 logger = logging.getLogger("ledgerforge.plugins.payroll")
 
-PLUGIN = PluginManifest(name="payroll", version="0.1.0", api_compat="0.4")
+PLUGIN = PluginManifest(name="payroll", version="0.2.0", api_compat="0.5")
 
 META_KEY = "payroll"
 
@@ -101,6 +111,7 @@ def register(registry) -> None:  # noqa: ANN001 — registry is the stable API o
     registry.register_transformer(build_payroll_document)
     registry.register_validator(no_future_document_dates)
     registry.on("voucher.posted", record_run)
+    registry.register_document_view(META_KEY, payslip_view)
 
 
 # --------------------------------------------------------------- helpers
@@ -324,6 +335,194 @@ def payable(resolver: Resolver, employee: str) -> EmployeePayable:
     _fold_fy_start = resolver.fy_start_month
     state = _fold(resolver.prior_documents(META_KEY), employee)
     return EmployeePayable(accrued=state.net, paid=state.paid, payable=state.net - state.paid)
+
+
+# ------------------------------------------------------------- payslip print
+_MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _period_label(period: str) -> str:
+    """``2026-10`` → ``October 2026`` (already validated at post time)."""
+    raw = period.strip()
+    if len(raw) == 7 and raw[4] == "-":
+        try:
+            return f"{_MONTHS[int(raw[5:7]) - 1]} {raw[:4]}"
+        except (ValueError, IndexError):
+            pass
+    return raw
+
+
+def _view_amount(value: object) -> str:
+    """A stored money string (or missing) as display money."""
+    try:
+        return format_amount(Decimal(str(value)))
+    except ArithmeticError:
+        return str(value)
+
+
+def payslip_view(ctx: DocumentContext) -> DocumentView | None:
+    """The print layout for ``meta.payroll`` documents (plugin API 0.5,
+    ADR-013) — the payslip PDF generator the pack was built to feed.
+
+    Runs only: a run is one voucher for many employees, so the caller
+    picks the subject with ``?employee=<name>`` (the sole employee of a
+    single-employee run is the default). Every figure is the pack's own:
+    per-component amounts and YTD from the voucher's immutable
+    ``computed`` block, the payable position replayed through the same
+    ``payable()`` fold the payout guard runs — a payslip that disagrees
+    with the ledger is impossible by construction. Payouts decline
+    (``None``) and print as the voucher slip.
+    """
+    doc = ctx.meta.get(META_KEY)
+    if not isinstance(doc, dict) or doc.get("mode") != "run":
+        return None
+
+    raw_employees = [e for e in (doc.get("employees") or []) if isinstance(e, dict)]
+    computed = doc.get("computed") if isinstance(doc.get("computed"), dict) else {}
+    period = str(computed.get("period") or doc.get("period") or "")
+    computed_by_name = {
+        str(e.get("employee") or ""): e
+        for e in (computed.get("employees") or [])
+        if isinstance(e, dict)
+    }
+    names = [
+        str(e.get("employee") or "").strip()
+        for e in raw_employees
+        if str(e.get("employee") or "").strip()
+    ]
+
+    requested = str(ctx.params.get("employee") or "").strip()
+    if not requested and len(names) == 1:
+        requested = names[0]
+    if requested not in names:
+        covered = ", ".join(names) if names else "no employees"
+        if requested:
+            raise ValidationError(
+                f"payroll: {requested!r} has no run in this document — it covers: {covered}"
+            )
+        raise ValidationError(f"payroll: pass ?employee=<name> — this run covers: {covered}")
+
+    entry = computed_by_name.get(requested) or next(
+        e for e in raw_employees if str(e.get("employee") or "").strip() == requested
+    )
+    components = [c for c in (entry.get("components") or []) if isinstance(c, dict)]
+
+    def rows_of(kind: str) -> list[tuple[str, ...]]:
+        return [
+            (
+                str(c.get("name") or ""),
+                _view_amount(c.get("amount")),
+                _view_amount(c.get("ytd")) if c.get("ytd") is not None else "",
+            )
+            for c in components
+            if str(c.get("kind") or "") == kind
+        ]
+
+    def total_of(key: str, kind: str) -> str:
+        if entry.get(key) is not None:
+            return _view_amount(entry.get(key))
+        return _view_amount(
+            sum(
+                (
+                    Decimal(str(c.get("amount") or "0"))
+                    for c in components
+                    if str(c.get("kind")) == kind
+                ),
+                Decimal("0.00"),
+            )
+        )
+
+    ytd = entry.get("ytd") if isinstance(entry.get("ytd"), dict) else {}
+    position = payable(ctx.resolver, requested)
+
+    sections = [
+        DocumentSection(
+            title="Earnings",
+            columns=(
+                DocumentColumn("Component", width=2.6),
+                DocumentColumn("Amount", width=1.0, align="right"),
+                DocumentColumn("Year to date", width=1.0, align="right"),
+            ),
+            rows=tuple(rows_of("earning")),
+        )
+    ]
+    if rows_of("withheld"):
+        sections.append(
+            DocumentSection(
+                title="Deductions (withheld)",
+                columns=(
+                    DocumentColumn("Component", width=2.6),
+                    DocumentColumn("Amount", width=1.0, align="right"),
+                    DocumentColumn("Year to date", width=1.0, align="right"),
+                ),
+                rows=tuple(rows_of("withheld")),
+            )
+        )
+    if rows_of("employer"):
+        sections.append(
+            DocumentSection(
+                title="Employer contributions",
+                columns=(
+                    DocumentColumn("Component", width=2.6),
+                    DocumentColumn("Amount", width=1.0, align="right"),
+                    DocumentColumn("Year to date", width=1.0, align="right"),
+                ),
+                rows=tuple(rows_of("employer")),
+            )
+        )
+
+    fields: list[tuple[str, str]] = [
+        ("Employee", requested),
+        ("Period", _period_label(period)),
+        ("Pay date", ctx.voucher_date.isoformat()),
+        ("Voucher", f"{ctx.voucher_type} {ctx.voucher_no}"),
+    ]
+    if ytd:
+        ytd_line = (
+            f"gross {_view_amount(ytd.get('gross'))}"
+            f" · withheld {_view_amount(ytd.get('withheld'))}"
+            f" · net {_view_amount(ytd.get('net'))}"
+        )
+        fields.append(("Fiscal-year YTD", ytd_line))
+    fields.append(
+        (
+            "Salary payable",
+            f"accrued {_view_amount(position.accrued)} - paid {_view_amount(position.paid)}"
+            f" = due {_view_amount(position.payable)}",
+        )
+    )
+
+    return DocumentView(
+        title="Payslip",
+        subtitle=f"Salary for {_period_label(period)} · {ctx.book_name}",
+        reference=ctx.voucher_no,
+        fields=tuple(fields),
+        sections=tuple(sections),
+        totals=(
+            ("Gross earnings", total_of("gross", "earning")),
+            ("Total deductions", total_of("withheld", "withheld")),
+            ("Net pay", total_of("net", "earning")),
+        ),
+        footnotes=(
+            "Year-to-date figures window by the book's fiscal year (ADR-012).",
+            "Employer contributions book an expense and a liability; they never change net pay.",
+            "Computer-generated from immutable posted entries (Law 2) — reprints are identical.",
+        ),
+        filename=f"Payslip {requested} {period}".replace("  ", " "),
+    )
 
 
 # ------------------------------------------------------------ master helpers

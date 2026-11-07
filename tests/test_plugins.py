@@ -118,9 +118,9 @@ def test_api_compatibility_guard():
 
 def test_api_compat_is_a_floor():
     """api_compat declares the minor a plugin was BUILT against, not a pin
-    (ADR-011): 0.2- and 0.3-era plugins keep loading on this 0.4 build —
-    additions are backwards compatible — while anything from a newer minor
-    refuses."""
+    (ADR-011): 0.2-, 0.3- and 0.4-era plugins keep loading on this 0.5
+    build — additions are backwards compatible — while anything from a
+    newer minor refuses."""
     from ledgerforge.plugins import PluginManager, PluginManifest
 
     def _plugin(name: str, api_compat: str):
@@ -132,11 +132,12 @@ def test_api_compat_is_a_floor():
     mgr = PluginManager()
     mgr.load_module(_plugin("old-floor", "0.2"))  # the invoicing pack's era
     mgr.load_module(_plugin("fold-era", "0.3"))  # the inventory pack's era
-    mgr.load_module(_plugin("current", "0.4"))  # the payroll pack's era
-    assert [m.name for m in mgr.loaded] == ["old-floor", "fold-era", "current"]
+    mgr.load_module(_plugin("ytd-era", "0.4"))  # the payroll pack's era
+    mgr.load_module(_plugin("current", "0.5"))  # the print-bridge era
+    assert [m.name for m in mgr.loaded] == ["old-floor", "fold-era", "ytd-era", "current"]
 
     try:
-        mgr.load_module(_plugin("from-the-future", "0.5"))
+        mgr.load_module(_plugin("from-the-future", "0.6"))
         raise AssertionError("should have refused to load")
     except RuntimeError as exc:
         assert "plugin API" in str(exc)

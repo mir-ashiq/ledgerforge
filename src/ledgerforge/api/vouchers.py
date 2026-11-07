@@ -99,6 +99,39 @@ def get_voucher(voucher_id: int, session: SessionDep, book: BookDep, _: ReaderDe
     return _voucher_out(session, voucher)
 
 
+@router.get("/vouchers/{voucher_id}/pdf")
+def voucher_pdf(
+    voucher_id: int,
+    request: Request,
+    session: SessionDep,
+    book: BookDep,
+    _: ReaderDep,
+    employee: Annotated[str, Query()] = "",
+):
+    """Any posted voucher as a PDF (ADR-013, the print bridge).
+
+    The voucher's meta keys are offered to the plugin registry's
+    document-view factories — a payroll run prints as the payslip of
+    ``?employee=``, a sales invoice as the tax invoice — and anything
+    unclaimed (plain vouchers, reversals, payouts) prints as the voucher
+    slip. Reader role: printing reads, never writes.
+    """
+    from ..errors import NotFoundError
+    from ..reporting.printing import render_voucher_pdf
+
+    voucher, entries = get_voucher_with_entries(session, voucher_id)
+    if voucher.book_id != book.id:
+        raise NotFoundError(f"Voucher {voucher_id} does not exist in book {book.name!r}")
+    pdf, filename = render_voucher_pdf(
+        _plugin_manager(request), session, book, voucher, entries, {"employee": employee}
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @router.get("/vouchers", response_model=list[VoucherOut])
 def list_vouchers(
     session: SessionDep,

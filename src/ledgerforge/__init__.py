@@ -18,4 +18,8 @@ __version__ = "0.8.0"
 #: 0.4 — Resolver gained the read-only ``fy_start_month`` (the book's
 #:       fiscal-year start month), the one fact a year-to-date fold needs
 #:       (ADR-012).
-PLUGIN_API_VERSION = "0.4"
+#: 0.5 — The print bridge: ``DocumentView``/``DocumentContext`` and
+#:       ``PluginRegistry.register_document_view(key, factory)`` — packs own
+#:       their documents' print layouts, the kernel stays meta-blind and
+#:       renders every unclaimed voucher as the voucher slip (ADR-013).
+PLUGIN_API_VERSION = "0.5"

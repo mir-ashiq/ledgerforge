@@ -1,6 +1,6 @@
 # Plugin Guide
 
-**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store) and `ledgerforge/contrib/payroll.py` (fiscal-year folds) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, `docs/analysis.md` §5.
+**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store) and `ledgerforge/contrib/payroll.py` (fiscal-year folds) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, `docs/analysis.md` §5.
 
 ## The two tiers
 
@@ -50,6 +50,7 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 - **Transformer** `(draft: VoucherDraft, resolve: Resolver) -> VoucherDraft` — may add/adjust lines before engine validation. Runs inside the transaction; raising aborts the whole posting.
 - **Validator** `(draft, resolve) -> None` — raise `ValidationError` to veto (HTTP 422). Runs inside the transaction.
 - **Event handler** `(event: DomainEvent) -> None` — receives `voucher.posted`, `master.created`, … after commit. Failures are isolated.
+- **Document-view factory** `(ctx: DocumentContext) -> DocumentView | None` — **plugin API 0.5 (ADR-013):** owns the print layout for `meta[key]` documents. Return a view to claim, `None` to decline (the voucher slip takes over). See [Printing a document](#printing-a-document-api-05-adr-013).
 
 `Resolver` (inside-transaction helper):
 
@@ -60,6 +61,59 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 - `resolve.fy_start_month` — **plugin API 0.4 (ADR-012):** the book's fiscal-year start month, 1–12, read-only — the one fact a year-to-date fold needs to window its accumulators. Immutable once the book has vouchers.
 
 `api_compat` is a **floor, not a pin** (ADR-011): a plugin declaring an older minor keeps loading on a newer build; a plugin declaring a newer minor is refused loudly.
+
+## Printing a document (API 0.5, ADR-013)
+
+Every posted voucher is printable: `GET /api/v1/vouchers/{id}/pdf` offers the voucher's meta keys, in order, to registered document-view factories; the first non-`None` view wins, and anything unclaimed — plain vouchers, reversals, payouts — prints as the **voucher slip** (the Dr/Cr table). A pack claims its document's layout with one function:
+
+```python
+from ledgerforge.plugins import (
+    DocumentColumn,
+    DocumentContext,
+    DocumentSection,
+    DocumentView,
+    PluginManifest,
+)
+from ledgerforge.reporting.printing import format_amount
+
+PLUGIN = PluginManifest(name="delivery-notes", version="0.1.0", api_compat="0.5")
+
+
+def register(registry):
+    registry.register_document_view("delivery", delivery_note_view)
+
+
+def delivery_note_view(ctx: DocumentContext) -> DocumentView | None:
+    doc = ctx.meta.get("delivery")
+    if not isinstance(doc, dict):
+        return None  # not ours — the voucher slip takes over
+    return DocumentView(
+        title="Delivery Note",
+        subtitle=ctx.book_name,  # the layout engine places everything
+        reference=ctx.voucher_no,  # top-right
+        fields=(("Consignee", str(doc.get("consignee", ""))),),
+        sections=(
+            DocumentSection(
+                title="Items",
+                columns=(
+                    DocumentColumn("Item", width=2.4),  # relative widths
+                    DocumentColumn("Quantity", width=0.8, align="right"),
+                ),
+                rows=tuple((i["item"], str(i["qty"])) for i in doc.get("items", [])),
+            ),
+        ),
+        totals=(("Total packages", str(len(doc.get("items", [])))),),
+        footnotes=("Printed from immutable posted entries (Law 2).",),
+        filename=f"Delivery {ctx.voucher_no}",
+    )
+```
+
+The contract:
+
+- **`DocumentContext`** — the read side: the voucher's immutable fields, its entries as flat `EntryLine`s, the book's name, the caller's query params (`ctx.params["employee"]` picks a payroll run's payslip subject), and a book-scoped `Resolver` for derived reads. Raise `ValidationError` for caller errors (a payroll run covering several employees without `?employee=` is a 422 naming them).
+- **`DocumentView`** — data, not geometry: you describe *what* the document says; `reporting.printing` owns pagination, column geometry, alignment and page furniture. One visual language for every pack's documents. Format money with `format_amount` (exact `Decimal`, thousands-separated, never `-0.00`) — never float (Law 3).
+- **Decline with `None`** — the payroll factory declines payouts; unregistered keys fall through the same way.
+- The web app's payslip screen is the reference consumer: `Alt+P` → pick employee and period → `Ctrl+P` prints (`tests/test_printing.py` + `frontend/web/tests/payslipScreen.spec.tsx` pin the whole path).
 
 ## Installation
 

@@ -38,6 +38,7 @@ logger = logging.getLogger("ledgerforge.plugins")
 Transformer = Callable[["VoucherDraft", "Resolver"], "VoucherDraft"]
 Validator = Callable[["VoucherDraft", "Resolver"], None]
 EventHandler = Callable[["DomainEvent"], None]
+DocumentViewFactory = Callable[["DocumentContext"], "DocumentView | None"]
 
 
 def _api_compatible(declared: str) -> bool:
@@ -109,6 +110,78 @@ class DomainEvent:
     name: str
     occurred_at: datetime
     data: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class EntryLine:
+    """One posted voucher entry as seen by a document-view factory (API
+    0.5, ADR-013): the flat print-side projection of a ``VoucherEntry``."""
+
+    line_no: int
+    ledger_name: str
+    dc: Literal["D", "C"]
+    amount: Decimal
+    narration: str | None = None
+
+
+@dataclass(frozen=True)
+class DocumentColumn:
+    """One column of a document section: relative ``width`` (the row's
+    columns share the content width proportionally) and alignment."""
+
+    header: str
+    width: float = 1.0
+    align: Literal["left", "right"] = "left"
+
+
+@dataclass(frozen=True)
+class DocumentSection:
+    """A titled table inside a document — components, items, entries…"""
+
+    title: str
+    columns: tuple[DocumentColumn, ...]
+    rows: tuple[tuple[str, ...], ...] = ()  # pre-formatted cell strings
+
+
+@dataclass(frozen=True)
+class DocumentView:
+    """A printable business document, described neutrally (API 0.5,
+    ADR-013): *what* it says, never *where it lands on the page* — the
+    layout engine in ``reporting.printing`` owns pagination and geometry,
+    so every pack's documents share one visual language.
+
+    Factories return ``None`` to decline a document (``payroll`` declines
+    payouts, for instance) and the voucher-slip fallback takes over."""
+
+    title: str
+    subtitle: str = ""
+    reference: str = ""  # the voucher number, top-right
+    fields: tuple[tuple[str, str], ...] = ()  # header label/value pairs
+    sections: tuple[DocumentSection, ...] = ()
+    totals: tuple[tuple[str, str], ...] = ()  # the summary block; last row bold
+    footnotes: tuple[str, ...] = ()
+    filename: str = ""  # download name hint, sans extension
+
+
+@dataclass(frozen=True)
+class DocumentContext:
+    """Everything a document-view factory may read (API 0.5, ADR-013): the
+    posted voucher (immutable — Law 2), its entries, the book it belongs
+    to, a book-scoped ``Resolver`` for derived reads, and the caller's
+    query parameters (a payroll run needs ``employee`` to pick its
+    payslip's subject)."""
+
+    book_name: str
+    voucher_no: str
+    voucher_type: str
+    voucher_date: date
+    posted_at: datetime | None
+    narration: str | None
+    reversal_of: int | None
+    meta: dict[str, Any]
+    entries: tuple[EntryLine, ...]
+    params: dict[str, str]
+    resolver: Resolver
 
 
 @dataclass(frozen=True)
@@ -233,6 +306,7 @@ class PluginRegistry:
         self.transformers: list[Transformer] = []
         self.validators: list[Validator] = []
         self.handlers: dict[str, list[EventHandler]] = {}
+        self.document_views: dict[str, DocumentViewFactory] = {}
 
     def register_transformer(self, fn: Transformer) -> None:
         self.transformers.append(fn)
@@ -242,6 +316,12 @@ class PluginRegistry:
 
     def on(self, event: str, handler: EventHandler) -> None:
         self.handlers.setdefault(event, []).append(handler)
+
+    def register_document_view(self, key: str, factory: DocumentViewFactory) -> None:
+        """Claim the print layout for ``meta[key]`` documents (API 0.5,
+        ADR-013). One factory per key — a later registration replaces an
+        earlier one (last loaded wins), mirroring transformer behavior."""
+        self.document_views[key] = factory
 
 
 class PluginManager:

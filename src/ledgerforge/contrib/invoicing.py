@@ -37,11 +37,21 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from ..errors import ValidationError
-from ..plugins import DraftLine, PluginManifest, Resolver, VoucherDraft
+from ..plugins import (
+    DocumentColumn,
+    DocumentContext,
+    DocumentSection,
+    DocumentView,
+    DraftLine,
+    PluginManifest,
+    Resolver,
+    VoucherDraft,
+)
+from ..reporting.printing import format_amount
 
 logger = logging.getLogger("ledgerforge.plugins.invoicing")
 
-PLUGIN = PluginManifest(name="invoicing", version="0.1.0", api_compat="0.2")
+PLUGIN = PluginManifest(name="invoicing", version="0.2.0", api_compat="0.5")
 
 #: GST slabs — the whitelist keeps a fat-fingered rate (15, 20, …) from
 #: silently posting the wrong tax. Zero is a valid (exempt) rate.
@@ -70,6 +80,9 @@ def register(registry) -> None:  # noqa: ANN001 — registry is the stable API o
     registry.register_transformer(build_receipt_document)
     registry.register_validator(no_future_document_dates)
     registry.on("voucher.posted", record_issued)
+    # the tax-invoice print layout (ADR-013); receipts decline by not
+    # registering and print as the voucher slip
+    registry.register_document_view("invoice", invoice_view)
 
 
 # --------------------------------------------------------------- helpers
@@ -278,6 +291,98 @@ def no_future_document_dates(draft: VoucherDraft, resolver: Resolver) -> None:
             f"Policy: {draft.voucher_date.isoformat()} is in the future — {mode} documents "
             "post on or before today (override with policy:allow_future_document_dates=true)"
         )
+
+
+# --------------------------------------------------------- invoice print
+def invoice_view(ctx: DocumentContext) -> DocumentView | None:
+    """The print layout for ``meta.invoice`` documents (plugin API 0.5,
+    ADR-013) — the voucher *is* the invoice, so the print is the invoice:
+    items and totals from the immutable ``computed`` block, quantities
+    re-multiplied for display through the same exact-Decimal discipline
+    the transformer used to post them. Receipts decline (no factory) and
+    print as the voucher slip."""
+    inv = ctx.meta.get("invoice")
+    if not isinstance(inv, dict):
+        return None
+    computed = inv.get("computed") if isinstance(inv.get("computed"), dict) else {}
+    items = [i for i in (inv.get("items") or []) if isinstance(i, dict)]
+
+    rows: list[tuple[str, ...]] = []
+    subtotal = Decimal("0.00")
+    tax_total = Decimal("0.00")
+    for index, item in enumerate(items, start=1):
+        description = str(item.get("description") or f"item {index}")
+        try:
+            qty = Decimal(str(item.get("qty", 1)))
+            rate = Decimal(str(item.get("rate", 0)))
+        except ArithmeticError:
+            qty, rate = Decimal(1), Decimal(0)
+        tax_rate = str(item.get("tax_rate", "0"))
+        amount = _money(qty * rate)
+        tax = (
+            _money(amount * Decimal(tax_rate) / _HUNDRED)
+            if tax_rate in TAX_SLABS
+            else Decimal("0.00")
+        )
+        subtotal += amount
+        tax_total += tax
+        rows.append(
+            (
+                description,
+                f"{qty.normalize():f}",
+                format_amount(rate),
+                f"{tax_rate}%" if tax_rate != "0" else "-",
+                format_amount(amount),
+            )
+        )
+
+    def computed_or(key: str, fallback: Decimal) -> str:
+        if computed.get(key) is not None:
+            try:
+                return format_amount(Decimal(str(computed.get(key))))
+            except ArithmeticError:
+                pass
+        return format_amount(fallback)
+
+    fields: list[tuple[str, str]] = [
+        ("Customer", str(inv.get("customer") or "")),
+        ("Invoice date", ctx.voucher_date.isoformat()),
+        ("Voucher", f"{ctx.voucher_type} {ctx.voucher_no}"),
+        ("Tax scheme", "GST (CGST + SGST)"),
+    ]
+    if computed.get("due_date"):
+        fields.append(("Payment due", str(computed["due_date"])))
+
+    return DocumentView(
+        title="Tax Invoice",
+        subtitle=ctx.book_name,
+        reference=ctx.voucher_no,
+        fields=tuple(fields),
+        sections=(
+            DocumentSection(
+                title="Items",
+                columns=(
+                    DocumentColumn("Description", width=2.4),
+                    DocumentColumn("Qty", width=0.6, align="right"),
+                    DocumentColumn("Rate", width=0.9, align="right"),
+                    DocumentColumn("Tax", width=0.6, align="right"),
+                    DocumentColumn("Amount", width=1.0, align="right"),
+                ),
+                rows=tuple(rows),
+            ),
+        ),
+        totals=(
+            ("Subtotal", computed_or("subtotal", subtotal)),
+            ("Tax", computed_or("tax_total", tax_total)),
+            ("Grand total", computed_or("grand_total", subtotal + tax_total)),
+        ),
+        footnotes=(
+            "Tax is levied per item at the declared GST slab; CGST + SGST split exactly.",
+            "Amounts are in the book's base currency, exact decimals (Law 3).",
+            "Computer-generated from immutable posted entries (Law 2) — reprints are identical.",
+        ),
+        filename=f"Invoice {ctx.voucher_no}",
+    )
 
 
 # --------------------------------------------------------- event handler
