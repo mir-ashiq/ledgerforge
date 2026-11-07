@@ -358,10 +358,47 @@ curl -s localhost:8000/api/v1/vouchers/7/pdf -o voucher.pdf
 
 In the web UI: `Alt+P` opens the payslip screen — posted runs indexed by
 employee and period, figures previewed as strings (Law 3), `Ctrl+P`
-prints the PDF, `Esc` is back.
+prints the PDF, `Esc` is back. The voucher screen got the same power:
+post anything, then `Ctrl+P` (or the Print chip) prints that voucher
+through the same endpoint — a sale prints as its voucher slip, a payroll
+run as a payslip, an invoice as its tax invoice.
 
 Design: [ADR-013](docs/adr/013-print-bridge.md),
 [plugin guide](docs/plugin-guide.md#printing-a-document-api-05-adr-013).
+
+## Statutory bridge: PF & ESI statements (ADR-014)
+
+The payroll pack's wage folds are the input to the two statements an
+Indian employer files — the **statutory pack** (the fourth business pack,
+zero schema change) publishes them as the first consumer of plugin API
+0.6 **pack reports**: `register_report(key, factory)`, served at
+`GET /api/v1/reports/pack/{key}` — PDF through the ADR-013 layout engine
+by default, `?format=csv` for the machine format. The kernel stays
+report-blind; the pack owns the domain.
+
+Statements fold the *same* documents the payslips print
+(`payroll.period_wages(resolver, period)`) — reversals net out, off-cycle
+corrections sum, other months never leak — so a PF figure that disagrees
+with a payslip is impossible by construction. Rates, ceilings and the
+wage-component set are parameters with long-standing defaults; UAN / ESI
+IP numbers ride the run documents' employee entries (`uan`, `esi_ip`) —
+blank when absent, never invented. This is a reporting bridge, not a
+portal-certified file: every statement footer carries the applied rules.
+
+```bash
+# EPF statement for October 2026 — PDF for checking, CSV for upload prep
+curl -s "localhost:8000/api/v1/reports/pack/pf?period=2026-10" -o pf.pdf
+curl -s "localhost:8000/api/v1/reports/pack/pf?period=2026-10&format=csv" -o pf.csv
+
+# ESI, with every rule as a parameter
+curl -s "localhost:8000/api/v1/reports/pack/esi?period=2026-10&threshold=21000&round=rupee" -o esi.pdf
+
+# PF wage base is Basic + DA by default; widen or cap it explicitly
+curl -s "localhost:8000/api/v1/reports/pack/pf?period=2026-10&wage=Basic Salary,DA&ceiling=15000" -o pf.pdf
+```
+
+Design: [ADR-014](docs/adr/014-statutory-bridge.md),
+[plugin guide](docs/plugin-guide.md#publishing-a-report-api-06-adr-014).
 
 ## What's inside
 
@@ -375,14 +412,15 @@ db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
                     + roles + per-book claims) · reporting (reports, printing:
                     the PDF writer + layout engine) · seeding · plugins ·
-                    contrib (example_gst + the invoicing, inventory and payroll packs)
+                    contrib (example_gst + the invoicing, inventory, payroll
+                    and statutory packs)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
-                    web — the voucher-entry screen, command palette and payslip
-                    screen (React + Vite)
+                    web — the voucher-entry screen (with the print chip), command
+                    palette and payslip screen (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
-                    inventory, payroll, printing, deep audit (adversarial: races,
-                    rounding boundaries, gate bypasses)
+                    inventory, payroll, printing, statutory (PF/ESI), deep audit
+                    (adversarial: races, rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
 ```
@@ -454,16 +492,18 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.9.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.10.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
 change (plugin API 0.3) — payroll as the third: runs and payouts as
 documents, fiscal-year YTD folds, zero schema change (plugin API 0.4:
-Resolver.fy_start_month) — **and the print bridge (v0.9): every voucher
-as PDF via plugin document views (plugin API 0.5) — payslips, tax
-invoices, and the voucher-slip fallback — plus the payslip screen
-(`Alt+P`, `Ctrl+P`)**. The planned roadmap is fully landed; what
+Resolver.fy_start_month) — the print bridge (v0.9): every voucher as PDF
+via plugin document views (plugin API 0.5), payslips, tax invoices and the
+voucher-slip fallback, plus the payslip screen — **and the statutory
+bridge (v0.10): PF & ESI statements folded from the payroll runs as the
+first pack report (plugin API 0.6), with `Ctrl+P` on the voucher screen
+printing any posting voucher**. The planned roadmap is fully landed; what
 remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
 
@@ -482,6 +522,10 @@ remains is deliberately conditional (see
 - [x] Print bridge: every voucher as PDF — payslips & tax invoices as
       plugin document views, voucher-slip fallback, payslip screen
       (ADR-013, plugin API 0.5)
+- [x] Statutory bridge: PF & ESI statements from the payroll folds as a
+      pack report (PDF + CSV, parameterized rules), plus `Ctrl+P` on the
+      voucher screen printing the last posted voucher (ADR-014,
+      plugin API 0.6)
 - [ ] Community plugin index, signed plugin trust model
 - [ ] Report scale-out (partitioning + BRIN) — only when books pass
       millions of entries
