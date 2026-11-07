@@ -364,26 +364,56 @@ through the same endpoint — a sale prints as its voucher slip, a payroll
 run as a payslip, an invoice as its tax invoice.
 
 Design: [ADR-013](docs/adr/013-print-bridge.md),
+[ADR-015](docs/adr/015-daybook-browser.md) (the daybook browser),
 [plugin guide](docs/plugin-guide.md#printing-a-document-api-05-adr-013).
 
-## Statutory bridge: PF & ESI statements (ADR-014)
+## The daybook browser (ADR-015)
 
-The payroll pack's wage folds are the input to the two statements an
+The accountant's oldest screen: the chronological register of everything
+posted, any line of which reprints as its document. `Alt+B` opens it in
+the web UI — `↑/↓` (or `j/k`) walk the list, the selection's entries
+preview on the right, `Enter` / `Ctrl+P` print the selected voucher
+through the same endpoint as above, `Esc` is back to entry. Filters: type,
+date range (engine-side) and a client-side find over voucher numbers,
+narrations and ledger names. Chips mark what each voucher carried
+(payroll, payout, invoice, stock, reversal); a multi-employee payroll run
+points at the payslip screen (it needs an employee to print), everything
+else — payouts, reversals, plain vouchers — prints as its voucher slip.
+
+```bash
+# The engine surface it browses — the amount column is server-computed
+# (the debit-side total, exact Decimal, quantized to cents: Law 3)
+curl -s "localhost:8000/api/v1/vouchers?type=SAL&date_from=2026-10-01&date_to=2026-10-31" |
+  python3 -m json.tool | head
+```
+
+Reprints are identical: posted entries are immutable (Law 2), so the
+hundredth reprint is byte-for-byte the document that printed the day it
+was posted.
+
+## Statutory bridge: PF, ESI & TDS statements (ADR-014)
+
+The payroll pack's wage folds are the input to the statements an
 Indian employer files — the **statutory pack** (the fourth business pack,
 zero schema change) publishes them as the first consumer of plugin API
 0.6 **pack reports**: `register_report(key, factory)`, served at
 `GET /api/v1/reports/pack/{key}` — PDF through the ADR-013 layout engine
 by default, `?format=csv` for the machine format. The kernel stays
-report-blind; the pack owns the domain.
+report-blind; the pack owns the domain. Three statements ship: **EPF**
+(`pf`), **ESI** (`esi`) and **TDS** (`tds`) — the tax actually withheld
+at source, per deductee: a deduction record of what the runs withheld
+(`TDS` / `Income Tax` components by default), never a slab computation,
+with PANs riding the run entries exactly as posted.
 
 Statements fold the *same* documents the payslips print
 (`payroll.period_wages(resolver, period)`) — reversals net out, off-cycle
 corrections sum, other months never leak — so a PF figure that disagrees
 with a payslip is impossible by construction. Rates, ceilings and the
 wage-component set are parameters with long-standing defaults; UAN / ESI
-IP numbers ride the run documents' employee entries (`uan`, `esi_ip`) —
-blank when absent, never invented. This is a reporting bridge, not a
-portal-certified file: every statement footer carries the applied rules.
+IP numbers / PANs ride the run documents' employee entries (`uan`,
+`esi_ip`, `pan`) — blank when absent, never invented. This is a reporting
+bridge, not a portal-certified file: every statement footer carries the
+applied rules.
 
 ```bash
 # EPF statement for October 2026 — PDF for checking, CSV for upload prep
@@ -395,6 +425,11 @@ curl -s "localhost:8000/api/v1/reports/pack/esi?period=2026-10&threshold=21000&r
 
 # PF wage base is Basic + DA by default; widen or cap it explicitly
 curl -s "localhost:8000/api/v1/reports/pack/pf?period=2026-10&wage=Basic Salary,DA&ceiling=15000" -o pf.pdf
+
+# TDS — the second pack report: what the runs actually withheld,
+# per deductee (a deduction record, never a slab computation)
+curl -s "localhost:8000/api/v1/reports/pack/tds?period=2026-10" -o tds.pdf
+curl -s "localhost:8000/api/v1/reports/pack/tds?period=2026-10&component=TDS,Income Tax&format=csv" -o tds.csv
 ```
 
 Design: [ADR-014](docs/adr/014-statutory-bridge.md),
@@ -416,10 +451,10 @@ src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (O
                     and statutory packs)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen (with the print chip), command
-                    palette and payslip screen (React + Vite)
+                    palette, payslip screen and daybook browser (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
-                    inventory, payroll, printing, statutory (PF/ESI), deep audit
+                    inventory, payroll, printing, statutory (PF/ESI/TDS), deep audit
                     (adversarial: races, rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
@@ -492,7 +527,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.10.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.11.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -500,12 +535,15 @@ change (plugin API 0.3) — payroll as the third: runs and payouts as
 documents, fiscal-year YTD folds, zero schema change (plugin API 0.4:
 Resolver.fy_start_month) — the print bridge (v0.9): every voucher as PDF
 via plugin document views (plugin API 0.5), payslips, tax invoices and the
-voucher-slip fallback, plus the payslip screen — **and the statutory
+voucher-slip fallback, plus the payslip screen — the statutory
 bridge (v0.10): PF & ESI statements folded from the payroll runs as the
 first pack report (plugin API 0.6), with `Ctrl+P` on the voucher screen
-printing any posting voucher**. The planned roadmap is fully landed; what
-remains is deliberately conditional (see
-[docs/analysis.md §9](docs/analysis.md)):
+printing any posting voucher — **and the daybook browser (v0.11):
+`Alt+B` browses every posted voucher with engine-computed amounts and
+reprints any of them, while the statutory pack gains TDS as the second
+pack report — what the runs actually withheld, per deductee**. The
+planned roadmap is fully landed; what remains is deliberately conditional
+(see [docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -526,6 +564,9 @@ remains is deliberately conditional (see
       pack report (PDF + CSV, parameterized rules), plus `Ctrl+P` on the
       voucher screen printing the last posted voucher (ADR-014,
       plugin API 0.6)
+- [x] Daybook browser: every posted voucher browsable (`Alt+B`) and
+      reprintable through the print bridge, with the engine-computed
+      amount column; TDS as the second pack report (ADR-015 + ADR-014)
 - [ ] Community plugin index, signed plugin trust model
 - [ ] Report scale-out (partitioning + BRIN) — only when books pass
       millions of entries
