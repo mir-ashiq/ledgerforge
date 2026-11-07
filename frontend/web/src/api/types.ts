@@ -119,3 +119,19 @@ export interface PluginsOut {
   plugins: PluginOut[];
   refused: PluginRefusalOut[];
 }
+
+/** One sandboxed UI slot a pack declares (ADR-019, plugin API 0.7). */
+export interface SlotOut {
+  key: string;
+  title: string;
+  plugin: string;
+  source: 'entry-point' | 'drop-in';
+  trust: 'trusted' | 'signed' | 'acknowledged';
+  /** null = the host serves the document (inline HTML) at /api/v1/slots/{key};
+   *  an http(s) URL the host embeds directly otherwise. */
+  url: string | null;
+}
+
+export interface SlotsOut {
+  slots: SlotOut[];
+}

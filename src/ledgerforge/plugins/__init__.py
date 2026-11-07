@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -72,10 +73,50 @@ def _api_compatible(declared: str) -> bool:
 
 
 @dataclass(frozen=True)
+class SlotSpec:
+    """One sandboxed UI slot a pack declares (plugin API 0.7, ADR-019).
+
+    Exactly one of ``html`` / ``url``: inline HTML is served by the host at
+    ``GET /api/v1/slots/{key}`` (the web UI embeds it in a hardened iframe
+    — ``sandbox="allow-scripts"``, plus a CSP ``sandbox`` header on the
+    response); a URL is embedded directly. Either way the slot is UNTRUSTED
+    surface: it speaks the versioned REST API through the host's
+    postMessage relay, never receives credentials, and never receives
+    keyboard scope — it registers commands with the host and the host binds
+    keys to them.
+    """
+
+    key: str
+    title: str
+    html: str | None = None
+    url: str | None = None
+
+    def validate(self) -> None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", self.key):
+            raise ValueError(
+                f"slot key {self.key!r} must be a short lowercase slug (a-z, 0-9, -)"
+            )
+        if not self.title or len(self.title) > 120:
+            raise ValueError(f"slot {self.key!r} needs a title (1-120 chars)")
+        if (self.html is None) == (self.url is None):
+            raise ValueError(f"slot {self.key!r} must declare exactly one of html / url")
+        if self.html is not None:
+            if len(self.html.encode()) > 131_072:
+                raise ValueError(
+                    f"slot {self.key!r} inline HTML exceeds 128 KiB — host it and use url="
+                )
+        elif not str(self.url).startswith(("http://", "https://")):
+            raise ValueError(f"slot {self.key!r} url must be http(s)")
+
+
+@dataclass(frozen=True)
 class PluginManifest:
     name: str
     version: str
     api_compat: str
+    #: Sandboxed UI slots (plugin API 0.7, ADR-019) — manifest-declared,
+    #: host-rendered, keyboard-scope-free.
+    slots: tuple[SlotSpec, ...] = ()
 
 
 #: Why a loaded plugin was allowed to register (ADR-016):
@@ -436,9 +477,28 @@ class PluginManager:
         register = getattr(module, "register", None)
         if not callable(register):
             raise RuntimeError(f"Plugin {manifest.name} exposes no register()")
+        for spec in manifest.slots:
+            try:
+                spec.validate()
+            except ValueError as exc:
+                raise RuntimeError(f"Plugin {manifest.name} declares an invalid slot: {exc}") from exc
+            if any(
+                other.manifest.name != manifest.name
+                and any(s.key == spec.key for s in other.manifest.slots)
+                for other in self.plugins
+            ):
+                raise RuntimeError(
+                    f"Plugin {manifest.name} declares slot {spec.key!r} which another "
+                    "loaded pack already owns — refusing the duplicate"
+                )
         register(self.registry)
         self.plugins.append(LoadedPlugin(manifest=manifest, source=source, trust=trust))
         logger.info("loaded plugin %s %s (%s, %s)", manifest.name, manifest.version, source, trust)
+
+    def slot_specs(self) -> list[tuple[LoadedPlugin, SlotSpec]]:
+        """Every declared UI slot with its owning pack (ADR-019) — the
+        host's slot registry, in load order."""
+        return [(record, spec) for record in self.plugins for spec in record.manifest.slots]
 
     # ------------------------------------------------------- the trust gate
     @staticmethod

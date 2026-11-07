@@ -713,3 +713,13 @@ body {
   border-radius: 3px;
   padding: 0 4px;
 }
+
+/* ------------------------------------------------------------------ slots */
+.slots-card { max-width: 880px; }
+.slot-frame {
+  width: 100%;
+  height: clamp(320px, 56vh, 560px);
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #fff;
+}

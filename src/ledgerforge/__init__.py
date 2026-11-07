@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -27,4 +27,10 @@ __version__ = "0.14.0"
 #:       book-scoped reports (PDF through the shared layout engine, or CSV
 #:       for machine consumption) served by ``GET /api/v1/reports/pack/{key}``;
 #:       the first live consumer is the statutory bridge (ADR-014).
-PLUGIN_API_VERSION = "0.6"
+#: 0.7 — UI slots: ``PluginManifest.slots`` — packs declare sandboxed
+#:       dashboard slots (inline HTML served by the host at
+#:       ``GET /api/v1/slots/{key}``, or an external URL) that the web UI
+#:       renders in a hardened iframe. Slots never receive keyboard scope:
+#:       they register commands with the host over postMessage and the host
+#:       binds keys to them (M4 + D4, ADR-019).
+PLUGIN_API_VERSION = "0.7"

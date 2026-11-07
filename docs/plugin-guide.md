@@ -1,6 +1,6 @@
 # Plugin Guide
 
-**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (the teaching module — tax transform), `ledgerforge/contrib/gst.py` (a real localization pack: place of supply, HSN rate tables, GSTR statements, the IRN outbox), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report); **publishing:** `community/plugins/webhook_forwarder.py` (a signed community release) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, ADR-016, ADR-017, `docs/analysis.md` §5.
+**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (the teaching module — tax transform), `ledgerforge/contrib/example_slot.py` (the UI-slot teaching module — a sandboxed dashboard), `ledgerforge/contrib/gst.py` (a real localization pack: place of supply, HSN rate tables, GSTR statements, the IRN outbox), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report); **publishing:** `community/plugins/webhook_forwarder.py` (a signed community release) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, ADR-016, ADR-017, ADR-019, `docs/analysis.md` §5.
 
 ## The two tiers
 
@@ -126,6 +126,35 @@ the kernel serves them at `GET /api/v1/reports/pack/{key}`:
 from ledgerforge.plugins import PackReport, PluginManifest
 
 PLUGIN = PluginManifest(name="tds-pack", version="0.1.0", api_compat="0.6")
+
+### Declaring a UI slot (API 0.7, ADR-019)
+
+A pack may declare sandboxed dashboards the host renders for you — no
+registry call, one manifest attribute:
+
+```python
+from ledgerforge.plugins import PluginManifest, SlotSpec
+
+PLUGIN = PluginManifest(
+    name="my-dash-pack", version="0.1.0", api_compat="0.7",
+    slots=(
+        SlotSpec(
+            key="my-dashboard",           # lowercase slug, unique across packs
+            title="My dashboard",           # shown in the Alt+U picker
+            html=HTML,                      # inline (<=128 KiB), or url="https://…"
+        ),
+    ),
+)
+```
+
+The document runs in an **opaque-origin sandbox** (`sandbox="allow-scripts"`
+— no cookies, no host DOM). It talks to the engine through the host's
+GET-only postMessage relay (`lf-slot:request` → `lf-slot:response`) and
+registers commands (`lf-slot:register-commands`) that the host binds and
+surfaces in the command palette — a slot never receives keyboard scope.
+Escape inside the sandbox posts `lf-slot:close`. The full protocol and a
+complete dashboard live in `ledgerforge/contrib/example_slot.py`;
+the design contract is [ADR-019](adr/019-sandbox-ui-slots.md).
 
 
 def register(registry):

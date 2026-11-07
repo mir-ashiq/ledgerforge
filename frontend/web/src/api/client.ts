@@ -8,6 +8,7 @@ import type {
   GroupOut,
   LedgerOut,
   PluginsOut,
+  SlotsOut,
   VoucherOut,
   VoucherPostPayload,
 } from './types';
@@ -116,4 +117,7 @@ export const api = {
   /** The plugin inventory (ADR-016): loaded packs with their channel and
    *  trust basis, plus everything refused at boot and why. */
   plugins: () => request<PluginsOut>('/plugins'),
+  /** Every UI slot a loaded pack declares (ADR-019) — the host's slot
+   *  registry, one palette-reachable dashboard per entry. */
+  slots: () => request<SlotsOut>('/slots'),
 };

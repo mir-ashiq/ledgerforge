@@ -568,6 +568,41 @@ Reproduce the numbers: `python scripts/bench_scale_out.py`.
 
 Design: [ADR-018](docs/adr/018-report-scale-out.md).
 
+## Sandbox UI slots: plugin dashboards (ADR-019)
+
+The Phase-3 extensibility surface (§5.5): packs can ship dashboards, and
+the host renders them without giving them anything but a rectangle and a
+relay.
+
+```python
+PLUGIN = PluginManifest(
+    name="my-pack",
+    version="1.0.0",
+    api_compat="0.7",
+    slots=(SlotSpec(key="my-dash", title="My dashboard", html=HTML),),
+)
+```
+
+- **Hardened sandbox**: the web UI embeds every slot as
+  `<iframe sandbox="allow-scripts">` — opaque origin: no cookies, no
+  localStorage, no host DOM. Inline HTML is served by the host at
+  `GET /api/v1/slots/{key}` under `Content-Security-Policy: sandbox`.
+- **Relay-fed**: the slot speaks the versioned REST API through the host's
+  GET-only postMessage relay (`lf-slot:request` → `lf-slot:response`) —
+  it holds no credentials and reaches nothing the host declines to fetch.
+- **Keyboard scope stays with the host** (M4 + D4): the slot registers
+  *commands* (`lf-slot:register-commands`); the host binds their keys only
+  while the slot is open and lists them in the command palette — mouse-free
+  discoverability for third-party functionality, and Esc inside the sandbox
+  still means back.
+- `Alt+U` opens the picker: one row per slot, with its owning pack and
+  trust basis. The in-repo teaching pack
+  (`ledgerforge.contrib.example_slot`, "Balance glance") exercises the
+  whole contract — try it in `make dev`.
+
+Design: [ADR-019](docs/adr/019-sandbox-ui-slots.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## What's inside
 
 ```
@@ -580,13 +615,14 @@ db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
                     + roles + per-book claims) · reporting (reports, printing:
                     the PDF writer + layout engine) · seeding · plugins ·
-                    contrib (example_gst — the teaching module — plus the gst,
-                    invoicing, inventory, payroll and statutory packs; the gst
-                    pack ships with irn_bridge, the out-of-process e-invoicing
-                    bridge)
+                    contrib (example_gst and example_slot — the teaching
+                    modules — plus the gst, invoicing, inventory, payroll and
+                    statutory packs; the gst pack ships with irn_bridge, the
+                    out-of-process e-invoicing bridge)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen (with the print chip), command
-                    palette, payslip screen and daybook browser (React + Vite)
+                    palette, payslip screen, daybook browser and sandboxed slot
+                    host (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
                     inventory, payroll, printing, statutory (PF/ESI/TDS), scale-out (the
@@ -729,6 +765,10 @@ remains is deliberately conditional (see
       change) with `?fast=true` report reads, and the transactional
       yearly-partition conversion (`ledgerforge scale-out`) with a tested
       revert
+- [x] Sandbox UI slots (v0.15, ADR-019, plugin API 0.7): manifest-declared
+      plugin dashboards rendered in opaque-origin iframes, fed through the
+      host's GET-only relay, with slot commands in the host's command
+      palette — never keyboard scope
       millions of entries
 
 ## Contributing

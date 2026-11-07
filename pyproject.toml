@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ledgerforge"
-version = "0.14.0"
+version = "0.15.0"
 description = "Community-driven, keyboard-first, double-entry business management engine — inspired by TallyPrime"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -57,6 +57,7 @@ invoicing = "ledgerforge.contrib.invoicing"
 inventory = "ledgerforge.contrib.inventory"
 payroll = "ledgerforge.contrib.payroll"
 statutory = "ledgerforge.contrib.statutory"
+example_slot = "ledgerforge.contrib.example_slot"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ledgerforge"]

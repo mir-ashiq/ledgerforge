@@ -13,10 +13,11 @@ import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
 import { PayslipScreen } from './components/PayslipScreen';
 import { PluginsScreen } from './components/PluginsScreen';
+import { SlotsScreen } from './components/SlotsScreen';
 import { VoucherScreen } from './components/VoucherScreen';
 import { localStorageKeymapStore } from './keymapStore';
 
-type Screen = 'voucher' | 'payslip' | 'daybook' | 'plugins';
+type Screen = 'voucher' | 'payslip' | 'daybook' | 'plugins' | 'slots';
 
 export default function App() {
   const [ledgers, setLedgers] = useState<LedgerOut[]>([]);
@@ -76,6 +77,11 @@ export default function App() {
     { id: 'plugins.open', title: 'Plugins — loaded packs & trust status', run: () => setScreen('plugins') },
     'Alt+X',
   );
+  // the slots screen (ADR-019): Alt+U opens, Esc is back
+  useCommand(
+    { id: 'slots.open', title: 'Slots — sandboxed plugin dashboards', run: () => setScreen('slots') },
+    'Alt+U',
+  );
 
   return (
     <>
@@ -92,8 +98,10 @@ export default function App() {
         <PayslipScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : screen === 'daybook' ? (
         <DaybookScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
-      ) : (
+      ) : screen === 'plugins' ? (
         <PluginsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : (
+        <SlotsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} ctxRef={paletteCtxRef} />}
     </>

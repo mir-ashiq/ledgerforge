@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from . import __version__
-from .api import auth, books, masters, ops, periods, plugins, reports, vouchers
+from .api import auth, books, masters, ops, periods, plugins, reports, slots, vouchers
 from .auth import build_verifier, warn_if_disabled
 from .db import get_engine
 from .errors import EngineError
@@ -75,6 +75,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(books.router, prefix="/api/v1")
     app.include_router(plugins.router, prefix="/api/v1")
+    app.include_router(slots.router, prefix="/api/v1")
     app.include_router(masters.router, prefix="/api/v1")
     app.include_router(vouchers.router, prefix="/api/v1")
     app.include_router(reports.router, prefix="/api/v1")
