@@ -305,3 +305,58 @@ def test_oidc_mode_without_issuer_fails_fast(monkeypatch, sqlalchemy_url):
         create_app()
     get_settings.cache_clear()
     db.reset_engine()
+
+
+# ------------------------------------------------- LF_REQUIRE_AUTH guard (v0.16)
+# A production deployment sets LF_REQUIRE_AUTH=true (docker-compose.prod.yml
+# does); the guard turns "forgot the OIDC configuration" from a silent
+# anonymous-admin instance into a boot failure.
+
+
+def test_require_auth_refuses_disabled_mode(monkeypatch, sqlalchemy_url):
+    from ledgerforge import db
+    from ledgerforge.main import create_app
+    from ledgerforge.settings import get_settings
+
+    monkeypatch.delenv("LF_AUTH_MODE", raising=False)
+    monkeypatch.setenv("LF_REQUIRE_AUTH", "true")
+    get_settings.cache_clear()
+    db.reset_engine()
+    with pytest.raises(RuntimeError, match="LF_REQUIRE_AUTH"):
+        create_app()
+    get_settings.cache_clear()
+    db.reset_engine()
+
+
+def test_require_auth_accepts_oidc_mode(monkeypatch, sqlalchemy_url):
+    from ledgerforge import db
+    from ledgerforge.main import create_app
+    from ledgerforge.settings import get_settings
+
+    for key in ("LF_AUTH_MODE", "LF_OIDC_ISSUER", "LF_OIDC_AUDIENCE", "LF_OIDC_JWKS_URI"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LF_AUTH_MODE", "oidc")
+    monkeypatch.setenv("LF_OIDC_ISSUER", ISSUER)
+    monkeypatch.setenv("LF_OIDC_AUDIENCE", AUDIENCE)
+    monkeypatch.setenv("LF_OIDC_JWKS_URI", JWKS_URL)
+    monkeypatch.setenv("LF_REQUIRE_AUTH", "true")
+    get_settings.cache_clear()
+    db.reset_engine()
+    try:
+        app = create_app()  # construction only — no token verification runs
+        assert app.state.token_verifier is not None
+    finally:
+        get_settings.cache_clear()
+        db.reset_engine()
+
+
+def test_health_reports_auth_mode(client):
+    """Monitoring alerts on /health auth_mode != oidc in production
+    (docs/deployment.md)."""
+    body = client.get("/health").json()
+    assert body["status"] == "ok"
+    assert body["auth_mode"] == "disabled"  # the dev-default client fixture
+
+
+def test_health_reports_oidc_when_configured(oidc_client):
+    assert oidc_client.get("/health").json()["auth_mode"] == "oidc"

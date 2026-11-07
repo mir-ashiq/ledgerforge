@@ -35,6 +35,17 @@ def create_app() -> FastAPI:
     )
 
     # --- authentication (issue #1) --------------------------------------
+    # The production guard runs first (v0.16): a deployment that asks for
+    # authentication (LF_REQUIRE_AUTH=true, set by docker-compose.prod.yml)
+    # must never fall back to the anonymous-admin dev default — a missing
+    # OIDC configuration is a boot failure, not a warning.
+    if settings.require_auth and settings.auth_mode != "oidc":
+        raise RuntimeError(
+            "LF_REQUIRE_AUTH=true but LF_AUTH_MODE="
+            f"{settings.auth_mode!r} — refusing to start as anonymous admin. "
+            "Set LF_AUTH_MODE=oidc with LF_OIDC_ISSUER and LF_OIDC_AUDIENCE, "
+            "or unset LF_REQUIRE_AUTH on a development machine."
+        )
     warn_if_disabled()
     if settings.auth_mode == "oidc":
         if not settings.oidc_issuer or not settings.oidc_audience:
@@ -86,7 +97,9 @@ def create_app() -> FastAPI:
     def health():
         with get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
-        return {"status": "ok", "version": __version__}
+        # auth_mode rides along so a production monitor can alert on anything
+        # other than "oidc" (docs/deployment.md — monitoring).
+        return {"status": "ok", "version": __version__, "auth_mode": settings.auth_mode}
 
     return app
 

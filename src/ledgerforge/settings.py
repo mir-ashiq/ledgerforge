@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     #: ``disabled`` = dev only: anonymous admin, every endpoint open.
     #: ``oidc`` = production: Bearer JWTs verified against the issuer.
     auth_mode: Literal["disabled", "oidc"] = "disabled"
+    #: Production guard (v0.16): when true, the app refuses to start unless
+    #: auth_mode is ``oidc`` — a deployment that loses its OIDC configuration
+    #: fails loudly at boot instead of silently running anonymous-admin.
+    require_auth: bool = False
     oidc_issuer: str = ""
     oidc_audience: str = ""
     #: Optional explicit JWKS URL; otherwise discovered from the issuer.
