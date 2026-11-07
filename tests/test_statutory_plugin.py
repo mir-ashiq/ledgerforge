@@ -32,7 +32,7 @@ from datetime import date
 
 import pytest
 
-from ledgerforge.contrib.statutory import ESI_CSV_HEADER, PF_CSV_HEADER
+from ledgerforge.contrib.statutory import ESI_CSV_HEADER, PF_CSV_HEADER, TDS_CSV_HEADER
 
 
 # ------------------------------------------------------------------ helpers
@@ -59,6 +59,7 @@ def _month(offset: int = 0) -> str:
 
 PERIOD = _month(0)  # the current work month
 PERIOD_EMPTY = _month(-1)  # a month with no runs (nil statement)
+PERIOD_TDS = _month(-2)  # the TDS suite's own month (demo month stays exact)
 
 PLACEHOLDER = [{"ledger_name": "Cash", "dc": "C", "amount": "0.01"}]
 
@@ -107,6 +108,20 @@ def esi_csv_rows(client, query: str) -> list[list[str]]:
     )
     assert r.status_code == 200, r.text
     return list(csv.reader(io.StringIO(r.text)))
+
+
+def tds_csv_rows(client, query: str) -> list[list[str]]:
+    r = client.get(
+        f"/api/v1/reports/pack/tds?period={query}&format=csv", headers=default_headers(client)
+    )
+    assert r.status_code == 200, r.text
+    return list(csv.reader(io.StringIO(r.text)))
+
+
+def tds_csv_row_for(rows: list[list[str]], name: str) -> list[str]:
+    matches = [row for row in rows[1:] if row[1] == name]
+    assert len(matches) == 1, f"expected exactly one {name!r} row, got {matches}"
+    return matches[0]
 
 
 @pytest.fixture(scope="module")
@@ -343,7 +358,7 @@ def test_unknown_report_key_names_the_known_ones(demo):
     r = demo.get("/api/v1/reports/pack/gst")
     assert r.status_code == 404, r.text
     detail = r.json()["detail"]
-    assert "gst" in detail and "pf" in detail and "esi" in detail
+    assert "gst" in detail and "pf" in detail and "esi" in detail and "tds" in detail
 
 
 def test_books_are_strangers(demo):
@@ -363,3 +378,123 @@ def test_books_are_strangers(demo):
     # the default book, pinned via header — Zeta's 9,999 never leaks
     asha = pf_csv_row_for(pf_csv_rows(demo, PERIOD), "Asha Verma")
     assert asha[3] == "10000.00"
+
+
+# -------------------------------------------------------------------- TDS
+def test_tds_statement_pdf_and_csv(demo):
+    """The second pack report (ADR-014): what the runs actually withheld,
+    per deductee — a deduction record, never a slab computation."""
+    r = post_run(
+        demo,
+        PERIOD_TDS,
+        [
+            employee_entry(
+                "Devika Rao",
+                [
+                    comp("Basic Salary", "60000.00", "earning"),
+                    comp("TDS", "3000.00", "withheld"),
+                    comp("Professional Tax", "200.00", "withheld"),
+                ],
+                pan="ABCDE1234F",
+            ),
+            employee_entry(
+                "Nikhil Bose",
+                [
+                    comp("Basic Salary", "25000.00", "earning"),
+                    comp("Income Tax", "1250.00", "withheld"),
+                ],
+            ),
+        ],
+    )
+    assert r.status_code == 201, r.text
+
+    # CSV: the withheld components as posted, PANs exactly as carried
+    rows = tds_csv_rows(demo, PERIOD_TDS)
+    assert rows[0] == list(TDS_CSV_HEADER)
+    assert len(rows) == 3  # header + two deductees, sorted by name
+    devika = tds_csv_row_for(rows, "Devika Rao")
+    assert devika == ["ABCDE1234F", "Devika Rao", "60000.00", "3000.00", "200.00", "3200.00"]
+    nikhil = tds_csv_row_for(rows, "Nikhil Bose")
+    # blank PAN: never invented
+    assert nikhil == ["", "Nikhil Bose", "25000.00", "1250.00", "0.00", "1250.00"]
+
+    # the response is the machine format: attachment, text/csv
+    r = demo.get(
+        f"/api/v1/reports/pack/tds?period={PERIOD_TDS}&format=csv", headers=default_headers(demo)
+    )
+    assert r.headers["content-type"].startswith("text/csv")
+    assert (
+        r.headers["content-disposition"] == f'attachment; filename="TDS_statement_{PERIOD_TDS}.csv"'
+    )
+
+    # PDF: the same figures through the shared layout engine (ADR-013)
+    r = demo.get(f"/api/v1/reports/pack/tds?period={PERIOD_TDS}", headers=default_headers(demo))
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/pdf")
+    assert r.headers["content-disposition"] == f'inline; filename="TDS_statement_{PERIOD_TDS}.pdf"'
+    data = r.content
+    assert data.startswith(b"%PDF-1.4")
+    assert b"Tax Deducted at Source" in data
+    assert b"3,000.00" in data  # Devika's TDS
+    assert b"4,250.00" in data  # total TDS: 3,000 + 1,250
+    assert b"4,450.00" in data  # total withheld: 3,200 + 1,250
+    assert b"not a slab computation" in data  # the honesty footer
+    assert b"ABCDE1234F" in data
+
+
+def test_tds_component_override_and_rounding(demo):
+    # component= counts only the named components: Income Tax becomes "other"
+    rows = tds_csv_rows(demo, f"{PERIOD_TDS}&component=TDS")
+    nikhil = tds_csv_row_for(rows, "Nikhil Bose")
+    assert nikhil[3:6] == ["0.00", "1250.00", "1250.00"]
+    devika = tds_csv_row_for(rows, "Devika Rao")
+    assert devika[3:6] == ["3000.00", "200.00", "3200.00"]  # TDS named: unchanged
+
+    # round=rupee at the half edge: 100.50 rounds up to 101
+    r = post_run(
+        demo,
+        PERIOD_TDS,
+        [
+            employee_entry(
+                "Farah Khan",
+                [
+                    comp("Basic Salary", "10000.00", "earning"),
+                    comp("TDS", "100.50", "withheld"),
+                ],
+            )
+        ],
+    )
+    assert r.status_code == 201, r.text
+    rows = tds_csv_rows(demo, f"{PERIOD_TDS}&round=rupee")
+    assert tds_csv_row_for(rows, "Farah Khan")[3:6] == ["101", "0", "101"]
+    rows = tds_csv_rows(demo, PERIOD_TDS)  # cent (the default) keeps the exact figure
+    assert tds_csv_row_for(rows, "Farah Khan")[3:6] == ["100.50", "0.00", "100.50"]
+
+
+def test_tds_guards_and_nil_statements(demo):
+    for query, fragment in [
+        ("", "period"),
+        ("period=2026-10&component=,,", "component"),
+        ("period=2026-10&round=centimes", "round"),
+        ("period=2026-10&format=xlsx", "format"),
+    ]:
+        # default_headers: this test runs after the books-are-strangers test,
+        # so a second book exists and the caller must name one
+        r = demo.get(f"/api/v1/reports/pack/tds?{query}", headers=default_headers(demo))
+        assert r.status_code == 422, (query, r.text)
+        assert fragment in r.json()["detail"], (query, r.text)
+
+    # an empty month is a valid nil statement
+    r = demo.get(f"/api/v1/reports/pack/tds?period={PERIOD_EMPTY}", headers=default_headers(demo))
+    assert r.status_code == 200
+    assert b"No payroll runs posted" in r.content
+    assert tds_csv_rows(demo, PERIOD_EMPTY) == [list(TDS_CSV_HEADER)]
+
+    # a month with runs but no TDS components is a nil TDS statement: the
+    # demo month withholds PF/ESI only — they show as "other withheld"
+    rows = tds_csv_rows(demo, PERIOD)
+    asha = tds_csv_row_for(rows, "Asha Verma")
+    assert asha[3:6] == ["0.00", "1312.50", "1312.50"]  # PF 1,200 + ESI 112.50
+    r = demo.get(f"/api/v1/reports/pack/tds?period={PERIOD}", headers=default_headers(demo))
+    assert r.status_code == 200
+    assert b"No TDS component withheld" in r.content

@@ -157,10 +157,10 @@ The contract:
   Unknown keys are 404s naming the registered ones.
 
 The reference consumer is the statutory pack
-(`ledgerforge/contrib/statutory.py`): PF and ESI statements folded from
-`payroll.period_wages(resolver, period)` — the same fold the payslips
-replay — with rates, ceilings and wage-component sets as parameters
-(`tests/test_statutory_plugin.py` pins the whole path).
+(`ledgerforge/contrib/statutory.py`): PF, ESI and TDS statements folded
+from `payroll.period_wages(resolver, period)` — the same fold the payslips
+replay — with rates, ceilings, wage-component sets and TDS component names
+as parameters (`tests/test_statutory_plugin.py` pins the whole path).
 
 ## Installation
 

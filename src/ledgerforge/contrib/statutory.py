@@ -20,6 +20,13 @@ employer files:
   — per insured person: IP number, gross wages, the insurability test
   (monthly gross at/below the threshold, 21,000 default), the employee
   (0.75%) and employer (3.25%) contributions.
+- **TDS (Tax Deducted at Source)**, ``GET /api/v1/reports/pack/tds?period=YYYY-MM``
+  — per deductee: PAN, gross wages, the TDS the runs actually withheld
+  (the ``TDS`` / ``Income Tax`` components by default — a parameter), the
+  other withheld components alongside it, and the total withheld. A
+  deduction *record*, not a slab computation: the regime, declarations and
+  rebates that drive the slabs are the payroll sender's facts, never this
+  pack's to invent — the statement reports exactly what was withheld.
 
 What it deliberately is NOT: a portal-certified file generator. Rates,
 ceilings, thresholds and the wage-component set are **parameters with
@@ -59,10 +66,11 @@ from ..plugins import (
 from ..reporting.printing import format_amount
 from .payroll import EmployeeWages, period_wages
 
-PLUGIN = PluginManifest(name="statutory", version="0.1.0", api_compat="0.6")
+PLUGIN = PluginManifest(name="statutory", version="0.2.0", api_compat="0.6")
 
 PF_KEY = "pf"
 ESI_KEY = "esi"
+TDS_KEY = "tds"
 
 CENT = Decimal("0.01")
 RUPEE = Decimal("1")
@@ -124,6 +132,17 @@ class EsiRules:
     er_rate: Decimal = Decimal("0.0325")  # employer share, of gross
 
 
+@dataclass(frozen=True)
+class TdsRules:
+    """TDS deduction sources — the withheld components that constitute the
+    tax deducted at source. What the runs actually withheld, never a slab
+    computation: the regime, declarations and rebates that drive the slabs
+    are the payroll sender's facts, not this pack's to invent."""
+
+    #: Withheld components counted as TDS; matched by exact component name.
+    components: tuple[str, ...] = ("TDS", "Income Tax", "IT")
+
+
 # ------------------------------------------------------------ param parsing
 def _required_period(params: dict[str, str]) -> str:
     period = str(params.get("period") or "").strip()
@@ -173,6 +192,19 @@ def _wage_components(params: dict[str, str]) -> tuple[str, ...]:
         raise ValidationError(
             "statutory: wage= lists the earning components that constitute the "
             "PF wage base, comma-separated (e.g. wage=Basic Salary,DA)"
+        )
+    return names
+
+
+def _tds_components(params: dict[str, str]) -> tuple[str, ...]:
+    raw = str(params.get("component") or "").strip()
+    if not raw:
+        return TdsRules.components
+    names = tuple(name.strip() for name in raw.split(",") if name.strip())
+    if not names:
+        raise ValidationError(
+            "statutory: component= lists the withheld components that constitute "
+            "TDS, comma-separated (e.g. component=TDS,Income Tax)"
         )
     return names
 
@@ -269,6 +301,53 @@ def esi_members(
     return members
 
 
+# -------------------------------------------------------------- the TDS fold
+@dataclass(frozen=True)
+class TdsDeductee:
+    """One deductee's TDS row — what the period's runs actually withheld."""
+
+    pan: str
+    name: str
+    gross_wages: Decimal
+    tds: Decimal
+    other_withheld: Decimal
+    total_withheld: Decimal
+
+
+def tds_deductees(
+    wages: list[EmployeeWages], rules: TdsRules, quantize: Callable[[Decimal], Decimal]
+) -> list[TdsDeductee]:
+    deductees: list[TdsDeductee] = []
+    for w in wages:
+        tds = sum(
+            (
+                amount
+                for (name, kind), amount in w.components.items()
+                if kind == "withheld" and name in rules.components
+            ),
+            Decimal("0.00"),
+        )
+        other = sum(
+            (
+                amount
+                for (name, kind), amount in w.components.items()
+                if kind == "withheld" and name not in rules.components
+            ),
+            Decimal("0.00"),
+        )
+        deductees.append(
+            TdsDeductee(
+                pan=_identifier(w.extras, "pan", "pan_no"),
+                name=w.employee,
+                gross_wages=w.gross,
+                tds=quantize(tds),
+                other_withheld=quantize(other),
+                total_withheld=quantize(tds + other),
+            )
+        )
+    return deductees
+
+
 # ------------------------------------------------------------------- CSV
 PF_CSV_HEADER = (
     "UAN",
@@ -290,6 +369,15 @@ ESI_CSV_HEADER = (
     "Insurable",
     "EE Contribution",
     "ER Contribution",
+)
+
+TDS_CSV_HEADER = (
+    "PAN",
+    "Deductee Name",
+    "Gross Wages",
+    "TDS Deducted",
+    "Other Withheld",
+    "Total Withheld",
 )
 
 
@@ -333,6 +421,21 @@ def esi_csv(members: list[EsiMember]) -> str:
         for m in members
     ]
     return _csv(ESI_CSV_HEADER, rows)
+
+
+def tds_csv(deductees: list[TdsDeductee]) -> str:
+    rows = [
+        [
+            m.pan,
+            m.name,
+            str(m.gross_wages),
+            str(m.tds),
+            str(m.other_withheld),
+            str(m.total_withheld),
+        ]
+        for m in deductees
+    ]
+    return _csv(TDS_CSV_HEADER, rows)
 
 
 # ------------------------------------------------------------------- PDF
@@ -484,6 +587,72 @@ def esi_view(period: str, members: list[EsiMember], rules: EsiRules, rounding: s
     )
 
 
+def tds_view(
+    period: str, deductees: list[TdsDeductee], rules: TdsRules, rounding: str
+) -> DocumentView:
+    rows = [
+        (
+            m.pan or "—",
+            m.name,
+            format_amount(m.gross_wages),
+            format_amount(m.tds),
+            format_amount(m.other_withheld),
+            format_amount(m.total_withheld),
+        )
+        for m in deductees
+    ]
+    total = lambda pick: sum((pick(m) for m in deductees), Decimal("0.00"))  # noqa: E731
+
+    footnotes = [
+        f"TDS components: {', '.join(rules.components)} (override with component=).",
+        f"Rounding: {rounding} (override with round=).",
+        "PANs ride the run documents' employee entries (pan); a dash means the "
+        "run did not carry one — fill it at the portal, never here.",
+        "A deduction record, not a slab computation: the statement reports what "
+        "the runs withheld — the regime, declarations and rebates stay the "
+        "payroll sender's facts.",
+        "Folded from posted payroll runs — reversals net to zero (Law 2). Verify "
+        "against the portal's current template before uploading.",
+    ]
+    if deductees and not any(m.tds for m in deductees):
+        footnotes.append("No TDS component withheld this period — a nil statement.")
+    if not deductees:
+        footnotes.append("No payroll runs posted for this period — a nil statement.")
+
+    return DocumentView(
+        title="TDS statement",
+        subtitle=f"Tax Deducted at Source — {_period_label(period)}",
+        fields=(
+            ("Period", _period_label(period)),
+            ("Deductees", str(len(deductees))),
+            ("TDS components", ", ".join(rules.components)),
+            ("Rounding", rounding),
+        ),
+        sections=(
+            DocumentSection(
+                title="Deductees",
+                columns=(
+                    DocumentColumn("PAN", width=1.1),
+                    DocumentColumn("Deductee", width=1.6),
+                    DocumentColumn("Gross", width=0.95, align="right"),
+                    DocumentColumn("TDS", width=0.85, align="right"),
+                    DocumentColumn("Other", width=0.85, align="right"),
+                    DocumentColumn("Total withheld", width=1.0, align="right"),
+                ),
+                rows=tuple(rows),
+            ),
+        ),
+        totals=(
+            ("Total gross wages", format_amount(total(lambda m: m.gross_wages))),
+            ("Total TDS deducted", format_amount(total(lambda m: m.tds))),
+            ("Total other withheld", format_amount(total(lambda m: m.other_withheld))),
+            ("Total withheld", format_amount(total(lambda m: m.total_withheld))),
+        ),
+        footnotes=tuple(footnotes),
+        filename=f"TDS statement {period}",
+    )
+
+
 # ------------------------------------------------------------- the factories
 def pf_report(resolver: Resolver, params: dict[str, str]) -> PackReport:
     """The EPF statement of one wage month, as PDF (default) or CSV."""
@@ -526,9 +695,31 @@ def esi_report(resolver: Resolver, params: dict[str, str]) -> PackReport:
     )
 
 
+def tds_report(resolver: Resolver, params: dict[str, str]) -> PackReport:
+    """The TDS statement of one wage month, as PDF (default) or CSV — the
+    second pack report: what the runs actually withheld, per deductee."""
+    period = _required_period(params)
+    wages = period_wages(resolver, period)  # validates the period format (422)
+    rules = TdsRules(components=_tds_components(params))
+    quantize = _quantizer(params)
+    deductees = tds_deductees(wages, rules, quantize)
+    if _format(params) == "csv":
+        return PackReport(
+            title=f"TDS statement {period}",
+            filename=f"TDS statement {period}",
+            csv=tds_csv(deductees),
+        )
+    return PackReport(
+        title=f"TDS statement {period}",
+        filename=f"TDS statement {period}",
+        view=tds_view(period, deductees, rules, str(params.get("round") or "cent").strip().lower()),
+    )
+
+
 def register(registry) -> None:  # noqa: ANN001 — registry is the stable API object
     registry.register_report(PF_KEY, pf_report)
     registry.register_report(ESI_KEY, esi_report)
+    registry.register_report(TDS_KEY, tds_report)
 
 
 __all__ = [
@@ -537,6 +728,8 @@ __all__ = [
     "PF_CSV_HEADER",
     "PF_KEY",
     "PLUGIN",
+    "TDS_KEY",
+    "TDS_CSV_HEADER",
     "esi_csv",
     "esi_members",
     "esi_report",
@@ -546,4 +739,8 @@ __all__ = [
     "pf_report",
     "pf_view",
     "register",
+    "tds_csv",
+    "tds_deductees",
+    "tds_report",
+    "tds_view",
 ]
