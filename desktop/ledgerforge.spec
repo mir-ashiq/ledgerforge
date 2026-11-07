@@ -59,9 +59,19 @@ hiddenimports = [
     "ledgerforge.contrib.payroll",
     "ledgerforge.contrib.statutory",
     "ledgerforge.contrib.example_slot",
-    # uvicorn selects protocol implementations dynamically (engine child)
+    # uvicorn selects protocol implementations dynamically
+    # (import_from_string — invisible to PyInstaller's trace). The engine
+    # child pins loop=asyncio, http auto-resolves httptools->h11, ws auto —
+    # "auto" shims resolve these by name, so all of them ride along.
+    "uvicorn.logging",
+    "uvicorn.loops.auto",
+    "uvicorn.loops.asyncio",
+    "uvicorn.protocols.http.auto",
     "uvicorn.protocols.http.h11_impl",
     "uvicorn.protocols.http.httptools.impl",
+    "uvicorn.protocols.websockets.auto",
+    "uvicorn.protocols.websockets.websockets_impl",
+    "uvicorn.protocols.websockets.wsproto_impl",
     "uvicorn.lifespan.on",
     # the engine child process (spawn) — the target PyInstaller cannot trace
     "ledgerforge.nativeapp.app",

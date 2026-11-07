@@ -217,6 +217,8 @@ def build_server(
 
     app = create_app()
 
+    import sys
+
     import uvicorn
 
     # loop="asyncio": the desktop is a GUI process (ADR-022's Qt shell runs
@@ -224,7 +226,14 @@ def build_server(
     # descriptors that Qt's event loop also manages, and the two collide
     # (hard segfaults under concurrent load). The standard asyncio loop
     # keeps them apart; throughput is irrelevant on a loopback single-user.
-    config = uvicorn.Config(app, host=host, port=port, log_level=log_level, loop="asyncio")
+    kwargs: dict = {"loop": "asyncio"}
+    if getattr(sys, "frozen", False):
+        # log_config=None when frozen: uvicorn's default LOGGING_CONFIG
+        # resolves "uvicorn.logging.DefaultFormatter" BY STRING — invisible
+        # to PyInstaller, a frozen boot dies with ValueError("Unable to
+        # configure formatter 'default'"). Source runs keep the formatter.
+        kwargs["log_config"] = None
+    config = uvicorn.Config(app, host=host, port=port, log_level=log_level, **kwargs)
     return uvicorn.Server(config)
 
 
