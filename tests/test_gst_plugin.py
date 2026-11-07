@@ -142,9 +142,7 @@ def hsn_rows(client, query: str) -> list[list[str]]:
 
 
 def _lines_of(response) -> dict[tuple[str, str], Decimal]:
-    return {
-        (e["ledger_name"], e["dc"]): Decimal(e["amount"]) for e in response.json()["entries"]
-    }
+    return {(e["ledger_name"], e["dc"]): Decimal(e["amount"]) for e in response.json()["entries"]}
 
 
 @pytest.fixture(scope="module")
@@ -163,8 +161,13 @@ def demo(client_module, fresh_db):
             KA_GSTIN,
             "29",
             [
-                {"description": "Steel pins", "hsn": "7317", "qty": 100, "rate": "10.00",
-                 "tax_rate": "18"},
+                {
+                    "description": "Steel pins",
+                    "hsn": "7317",
+                    "qty": 100,
+                    "rate": "10.00",
+                    "tax_rate": "18",
+                },
                 {"description": "Palm oil tins", "hsn": "1511", "qty": 2, "rate": "250.00"},
                 {"description": "Textbook lot", "hsn": "4901", "qty": 3, "rate": "199.00"},
             ],
@@ -206,9 +209,7 @@ def demo(client_module, fresh_db):
             "party_gstin": KA_GSTIN,
             "supplier_state": SUPPLIER,
             "place_of_supply": SUPPLIER,
-            "items": [
-                {"description": "Palm oil tins", "hsn": "1511", "qty": 10, "rate": "240.00"}
-            ],
+            "items": [{"description": "Palm oil tins", "hsn": "1511", "qty": 10, "rate": "240.00"}],
         },
     )
     assert r.status_code == 201, r.text
@@ -231,8 +232,15 @@ def test_intra_state_sale_splits_cgst_sgst(demo):
             "Mysuru Retail",
             KA_GSTIN,
             "29-Karnataka",
-            [{"description": "Steel pins", "hsn": "7317", "qty": 10, "rate": "100.00",
-              "tax_rate": "18"}],
+            [
+                {
+                    "description": "Steel pins",
+                    "hsn": "7317",
+                    "qty": 10,
+                    "rate": "100.00",
+                    "tax_rate": "18",
+                }
+            ],
         ),
         voucher_date=f"{PERIOD_ALT}-10",
     )
@@ -256,8 +264,15 @@ def test_inter_state_sale_levies_igst(demo):
             "Coimbatore Co",
             TN_GSTIN,
             "Tamil Nadu",  # by name, not code
-            [{"description": "Steel pins", "hsn": "7317", "qty": 10, "rate": "100.00",
-              "tax_rate": "18"}],
+            [
+                {
+                    "description": "Steel pins",
+                    "hsn": "7317",
+                    "qty": 10,
+                    "rate": "100.00",
+                    "tax_rate": "18",
+                }
+            ],
         ),
         voucher_date=f"{PERIOD_ALT}-11",
     )
@@ -283,9 +298,7 @@ def test_purchase_debits_input_ledgers(demo):
             "party_gstin": KA_GSTIN,
             "supplier_state": SUPPLIER,
             "place_of_supply": SUPPLIER,
-            "items": [
-                {"description": "Palm oil tins", "hsn": "1511", "qty": 5, "rate": "200.00"}
-            ],
+            "items": [{"description": "Palm oil tins", "hsn": "1511", "qty": 5, "rate": "200.00"}],
         },
         voucher_date=f"{PERIOD_ALT}-12",
     )
@@ -373,8 +386,15 @@ def test_hsn_slab_disagreement_is_a_veto(demo):
             "Greedy Traders",
             KA_GSTIN,
             "29",
-            [{"description": "Palm oil tins", "hsn": "1511", "qty": 1, "rate": "100.00",
-              "tax_rate": "18"}],
+            [
+                {
+                    "description": "Palm oil tins",
+                    "hsn": "1511",
+                    "qty": 1,
+                    "rate": "100.00",
+                    "tax_rate": "18",
+                }
+            ],
         ),
     )
     assert r.status_code == 422, r.text
@@ -444,9 +464,7 @@ def test_gstin_and_state_guards(demo):
 
     r = post_gst(
         demo,
-        b2b_sale(
-            "Bad State", KA_GSTIN, "99", [{"description": "Pins", "qty": 1, "rate": "10"}]
-        ),
+        b2b_sale("Bad State", KA_GSTIN, "99", [{"description": "Pins", "qty": 1, "rate": "10"}]),
     )
     assert r.status_code == 422, r.text
     assert "not a GST state" in r.json()["detail"]
@@ -555,9 +573,7 @@ def test_statements_net_reversals(demo):
 
 
 def test_nil_month_and_guards(demo):
-    r = demo.get(
-        f"/api/v1/reports/pack/gstr1?period={PERIOD_EMPTY}", headers=default_headers(demo)
-    )
+    r = demo.get(f"/api/v1/reports/pack/gstr1?period={PERIOD_EMPTY}", headers=default_headers(demo))
     assert r.status_code == 200
     assert b"nil statement" in r.content
     assert gstr1_rows(demo, PERIOD_EMPTY) == [list(GSTR1_CSV_HEADER)]
@@ -589,9 +605,7 @@ def test_quick_tax_excluded_and_footnoted(demo):
     r = post_gst(demo, {"rate": "18"}, voucher_date=f"{PERIOD_QUICK}-15")
     assert r.status_code == 201, r.text
 
-    r = demo.get(
-        f"/api/v1/reports/pack/gstr1?period={PERIOD_QUICK}", headers=default_headers(demo)
-    )
+    r = demo.get(f"/api/v1/reports/pack/gstr1?period={PERIOD_QUICK}", headers=default_headers(demo))
     assert r.status_code == 200
     assert b"quick-tax voucher" in r.content
     assert gstr1_rows(demo, PERIOD_QUICK) == [list(GSTR1_CSV_HEADER)]
@@ -616,9 +630,7 @@ def test_books_are_strangers(demo):
     assert r.status_code == 201, r.text
 
     # the default book, pinned via header — Helios' 999.00 never leaks
-    chennai = next(
-        row for row in gstr1_rows(demo, PERIOD)[1:] if row[1] == "Chennai Traders"
-    )
+    chennai = next(row for row in gstr1_rows(demo, PERIOD)[1:] if row[1] == "Chennai Traders")
     assert chennai[6] == "2097.00"
 
 
@@ -748,12 +760,30 @@ def test_bridge_ships_parks_and_retries(tmp_path, adapter):
     outbox = tmp_path / "outbox.jsonl"
     responses = tmp_path / "irn-responses.jsonl"
     pending = [
-        {"kind": "lf-gst-invoice/1", "voucher_no": "SAL 10", "voucher_id": 10,
-         "buyer": {"name": "Fine Traders", "gstin": KA_GSTIN}, "items": [], "totals": {}},
-        {"kind": "lf-gst-invoice/1", "voucher_no": "SAL 11", "voucher_id": 11,
-         "buyer": {"name": "Broken Traders", "gstin": KA_GSTIN}, "items": [], "totals": {}},
-        {"kind": "lf-gst-invoice/1", "voucher_no": "SAL 12", "voucher_id": 12,
-         "buyer": {"name": "Flaky Traders", "gstin": KA_GSTIN}, "items": [], "totals": {}},
+        {
+            "kind": "lf-gst-invoice/1",
+            "voucher_no": "SAL 10",
+            "voucher_id": 10,
+            "buyer": {"name": "Fine Traders", "gstin": KA_GSTIN},
+            "items": [],
+            "totals": {},
+        },
+        {
+            "kind": "lf-gst-invoice/1",
+            "voucher_no": "SAL 11",
+            "voucher_id": 11,
+            "buyer": {"name": "Broken Traders", "gstin": KA_GSTIN},
+            "items": [],
+            "totals": {},
+        },
+        {
+            "kind": "lf-gst-invoice/1",
+            "voucher_no": "SAL 12",
+            "voucher_id": 12,
+            "buyer": {"name": "Flaky Traders", "gstin": KA_GSTIN},
+            "items": [],
+            "totals": {},
+        },
     ]
     outbox.write_text("".join(json.dumps(line) + "\n" for line in pending))
 

@@ -234,32 +234,24 @@ def load_hsn_table(path: str | Path) -> tuple[HsnRate, ...]:
             raise ValidationError(f"gst: HSN table row {i} must be an object")
         hsn = str(row.get("hsn") or "").strip()
         if not hsn.isdigit() or not 2 <= len(hsn) <= 8:
-            raise ValidationError(
-                f"gst: HSN table row {i}: hsn must be 2-8 digits, got {hsn!r}"
-            )
+            raise ValidationError(f"gst: HSN table row {i}: hsn must be 2-8 digits, got {hsn!r}")
         try:
             rate = Decimal(str(row.get("rate")))
         except ArithmeticError:
-            raise ValidationError(
-                f"gst: HSN table row {i}: rate must be a number"
-            ) from None
+            raise ValidationError(f"gst: HSN table row {i}: rate must be a number") from None
         if rate < 0:
             raise ValidationError(f"gst: HSN table row {i}: rate must be >= 0")
         try:
             eff_from = date.fromisoformat(str(row.get("effective_from") or ""))
             eff_to = (
-                date.fromisoformat(str(row["effective_to"]))
-                if row.get("effective_to")
-                else None
+                date.fromisoformat(str(row["effective_to"])) if row.get("effective_to") else None
             )
         except ValueError:
             raise ValidationError(
                 f"gst: HSN table row {i}: effective_from/effective_to must be YYYY-MM-DD"
             ) from None
         if eff_to is not None and eff_to < eff_from:
-            raise ValidationError(
-                f"gst: HSN table row {i}: effective_to precedes effective_from"
-            )
+            raise ValidationError(f"gst: HSN table row {i}: effective_to precedes effective_from")
         table.append(
             HsnRate(
                 hsn=hsn,
@@ -292,7 +284,8 @@ def rate_for(table: tuple[HsnRate, ...], hsn: str, on: date) -> Decimal | None:
     candidates = [
         row
         for row in table
-        if digits.startswith(row.hsn) and row.effective_from <= on
+        if digits.startswith(row.hsn)
+        and row.effective_from <= on
         and (row.effective_to is None or on <= row.effective_to)
     ]
     if not candidates:
@@ -301,9 +294,7 @@ def rate_for(table: tuple[HsnRate, ...], hsn: str, on: date) -> Decimal | None:
     winners = [row for row in candidates if row.effective_from == latest]
     rates = {row.rate for row in winners}
     if len(rates) > 1:
-        pretty = ", ".join(
-            sorted(f"{row.rate}% from {row.effective_from}" for row in winners)
-        )
+        pretty = ", ".join(sorted(f"{row.rate}% from {row.effective_from}" for row in winners))
         raise ValidationError(
             f"gst: HSN {hsn!r} has conflicting slabs in force on {on.isoformat()}: {pretty}"
         )
@@ -316,7 +307,8 @@ def hsn_description(table: tuple[HsnRate, ...], hsn: str, on: date) -> str:
     candidates = [
         row
         for row in table
-        if digits.startswith(row.hsn) and row.effective_from <= on
+        if digits.startswith(row.hsn)
+        and row.effective_from <= on
         and (row.effective_to is None or on <= row.effective_to)
     ]
     if not candidates:
@@ -385,8 +377,7 @@ def _resolve_slab(item: dict, index: int, table: tuple[HsnRate, ...], on: date) 
         raw = str(explicit).strip()
         if raw not in TAX_SLABS:
             raise ValidationError(
-                f"gst: {where}.tax_rate {raw!r} is not a GST slab "
-                f"(one of {', '.join(TAX_SLABS)})"
+                f"gst: {where}.tax_rate {raw!r} is not a GST slab (one of {', '.join(TAX_SLABS)})"
             )
         declared = Decimal(raw)
         if table_rate is not None and table_rate != declared:
@@ -397,9 +388,7 @@ def _resolve_slab(item: dict, index: int, table: tuple[HsnRate, ...], on: date) 
         return declared
     if table_rate is not None:
         return table_rate
-    raise ValidationError(
-        f"gst: {where}: pass tax_rate (a slab) or hsn (a table-known chapter)"
-    )
+    raise ValidationError(f"gst: {where}: pass tax_rate (a slab) or hsn (a table-known chapter)")
 
 
 def _tax_split(tax: Decimal, kind: str) -> tuple[Decimal, Decimal, Decimal]:
@@ -447,14 +436,10 @@ def build_gst_document(draft: VoucherDraft, resolver: Resolver) -> VoucherDraft:
     return _build_quick_tax(draft, resolver, doc)
 
 
-def _build_document_mode(
-    draft: VoucherDraft, resolver: Resolver, doc: dict
-) -> VoucherDraft:
+def _build_document_mode(draft: VoucherDraft, resolver: Resolver, doc: dict) -> VoucherDraft:
     mode = str(doc.get("mode") or "sale").strip().lower()
     if mode not in ("sale", "purchase"):
-        raise ValidationError(
-            f"gst: mode must be one of sale, purchase, got {doc.get('mode')!r}"
-        )
+        raise ValidationError(f"gst: mode must be one of sale, purchase, got {doc.get('mode')!r}")
     for other in ("invoice", "receipt", "stock", "payroll"):
         if draft.meta.get(other) is not None:
             raise ValidationError(
@@ -536,9 +521,7 @@ def _build_document_mode(
                     continue
                 # TallyPrime's naming: CGST/SGST/IGST Payable outward,
                 # Input CGST/SGST/IGST inward — all under Duties & Taxes
-                ledger_name = (
-                    f"{base_name} Payable" if mode == "sale" else f"Input {base_name}"
-                )
+                ledger_name = f"{base_name} Payable" if mode == "sale" else f"Input {base_name}"
                 tax_ledger = resolver.ensure_ledger(ledger_name, TAX_GROUP)
                 lines.append(
                     DraftLine(
@@ -591,9 +574,7 @@ def _build_document_mode(
     return draft.with_lines(lines)
 
 
-def _build_quick_tax(
-    draft: VoucherDraft, resolver: Resolver, doc: dict
-) -> VoucherDraft:
+def _build_quick_tax(draft: VoucherDraft, resolver: Resolver, doc: dict) -> VoucherDraft:
     """The legacy shape (``{"rate": ...}``): tax on the first credit line,
     split by place of supply — CGST/SGST intra (the example's behavior,
     unchanged), IGST inter (new)."""
@@ -677,7 +658,7 @@ def irp_envelope(event_data: dict) -> dict | None:
     if computed.get("mode") != "sale" or not computed.get("party_gstin"):
         return None
     items = []
-    for item in (doc.get("items") or []):
+    for item in doc.get("items") or []:
         if not isinstance(item, dict):
             continue
         qty = _decimal(item.get("qty", 1), "qty")
@@ -786,11 +767,7 @@ def _net_gst_documents(resolver: Resolver) -> list[PriorDocument]:
     out (a reversed original drops, exactly like the payroll fold)."""
     documents = resolver.prior_documents(META_KEY)
     reversed_ids = {d.reversal_of for d in documents if d.reversal_of is not None}
-    return [
-        d
-        for d in documents
-        if d.reversal_of is None and d.voucher_id not in reversed_ids
-    ]
+    return [d for d in documents if d.reversal_of is None and d.voucher_id not in reversed_ids]
 
 
 def _in_period(document: PriorDocument, period: str) -> bool:
@@ -962,16 +939,9 @@ def hsn_rows(
 def _required_period(params: dict[str, str]) -> str:
     period = str(params.get("period") or "").strip()
     if not period:
-        raise ValidationError(
-            "gst: pass ?period=YYYY-MM — the tax month the statement covers"
-        )
+        raise ValidationError("gst: pass ?period=YYYY-MM — the tax month the statement covers")
     year, month = period[:4], period[5:7]
-    if (
-        len(period) != 7
-        or not year.isdigit()
-        or not month.isdigit()
-        or not 1 <= int(month) <= 12
-    ):
+    if len(period) != 7 or not year.isdigit() or not month.isdigit() or not 1 <= int(month) <= 12:
         raise ValidationError(f"gst: period must be YYYY-MM, got {period!r}")
     return period
 
@@ -986,9 +956,7 @@ def _format(params: dict[str, str]) -> str:
 def _side(params: dict[str, str]) -> str:
     side = str(params.get("side") or "outward").strip().lower()
     if side not in ("outward", "inward", "both"):
-        raise ValidationError(
-            f"gst: side must be one of outward, inward, both, got {side!r}"
-        )
+        raise ValidationError(f"gst: side must be one of outward, inward, both, got {side!r}")
     return side
 
 
@@ -1002,8 +970,18 @@ def _quantizer(params: dict[str, str]):
 
 
 _MONTHS = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 )
 
 

@@ -152,8 +152,11 @@ def process_pending(outbox: Path, endpoint: str, responses: Path) -> dict:
         else:
             still_pending.append(line)
             stats["pending"] += 1
-            logger.warning("adapter unavailable (%s): %s stays pending", status or "network",
-                           line.get("voucher_no"))
+            logger.warning(
+                "adapter unavailable (%s): %s stays pending",
+                status or "network",
+                line.get("voucher_no"),
+            )
     _write_lines(outbox, still_pending)
     return stats
 
@@ -195,9 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.outbox:
         parser.error("no outbox given: pass --outbox or set LF_GST_OUTBOX")
     outbox = Path(args.outbox)
-    responses = Path(args.responses) if args.responses else outbox.with_name(
-        "irn-responses.jsonl"
-    )
+    responses = Path(args.responses) if args.responses else outbox.with_name("irn-responses.jsonl")
 
     while True:
         stats = process_pending(outbox, args.endpoint, responses)
