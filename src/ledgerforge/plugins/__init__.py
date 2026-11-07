@@ -13,9 +13,9 @@ drop-in directory on ``LF_PLUGIN_PATH``. See docs/plugin-guide.md.
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
+import json
 import logging
-import pkgutil
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -31,6 +31,15 @@ from sqlalchemy.orm import Session
 from .. import PLUGIN_API_VERSION
 from ..errors import ValidationError
 from ..models import Book, Group, Ledger, Voucher
+from .trust import (
+    TrustError,
+    TrustStore,
+    VerifiedFacts,
+    fingerprint,
+    sha256_hex,
+    static_manifest_facts,
+    verify_signature,
+)
 
 logger = logging.getLogger("ledgerforge.plugins")
 
@@ -67,6 +76,44 @@ class PluginManifest:
     name: str
     version: str
     api_compat: str
+
+
+#: Why a loaded plugin was allowed to register (ADR-016):
+#: - ``trusted`` — the operator's own channel: first-party packs or pip
+#:   entry-points (code the operator chose to install);
+#: - ``signed`` — a drop-in with a valid detached signature by a publisher
+#:   approved in the drop-in directory's trust store;
+#: - ``acknowledged`` — a drop-in whose exact bytes the operator pinned
+#:   after review (``ledgerforge plugins ack``).
+LoadedTrust = Literal["trusted", "signed", "acknowledged"]
+
+
+@dataclass(frozen=True)
+class LoadedPlugin:
+    """One plugin that loaded — its manifest, its channel, its trust basis."""
+
+    manifest: PluginManifest
+    source: Literal["entry-point", "drop-in"]
+    trust: LoadedTrust
+
+
+@dataclass(frozen=True)
+class PluginRefusal:
+    """One plugin (or directory) that did not load, and why."""
+
+    module: str
+    reason: str
+
+
+def _import_plugin_file(path: Path) -> Any:
+    """Import a drop-in module by file location — the directory is never on
+    ``sys.path``, so a plugin cannot shadow a real package (and vice versa)."""
+    spec = importlib.util.spec_from_file_location(f"ledgerforge.dropin.{path.stem}", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot import plugin file {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @dataclass
@@ -354,10 +401,25 @@ class PluginRegistry:
 class PluginManager:
     def __init__(self) -> None:
         self.registry = PluginRegistry()
-        self.loaded: list[PluginManifest] = []
+        #: Everything that loaded, with its source channel and trust basis.
+        self.plugins: list[LoadedPlugin] = []
+        #: Everything that was refused at boot, with the reason — surfacing
+        #: refusals is half the trust model's value (ADR-016).
+        self.refusals: list[PluginRefusal] = []
+
+    @property
+    def loaded(self) -> list[PluginManifest]:
+        """Compat view: the manifests of everything that loaded."""
+        return [record.manifest for record in self.plugins]
 
     # ------------------------------------------------------------ loading
-    def load_module(self, module: Any) -> None:
+    def load_module(
+        self,
+        module: Any,
+        *,
+        source: Literal["entry-point", "drop-in"] = "entry-point",
+        trust: LoadedTrust = "trusted",
+    ) -> None:
         manifest = getattr(module, "PLUGIN", None)
         if not isinstance(manifest, PluginManifest):
             raise RuntimeError(f"{module!r} exposes no PLUGIN manifest")
@@ -366,31 +428,120 @@ class PluginManager:
                 f"Plugin {manifest.name} targets plugin API {manifest.api_compat}; "
                 f"this build supports {PLUGIN_API_VERSION} — refusing to load"
             )
+        if any(record.manifest.name == manifest.name for record in self.plugins):
+            raise RuntimeError(
+                f"plugin {manifest.name} is already loaded — refusing the duplicate "
+                "(same pack installed twice? uninstall one)"
+            )
         register = getattr(module, "register", None)
         if not callable(register):
             raise RuntimeError(f"Plugin {manifest.name} exposes no register()")
         register(self.registry)
-        self.loaded.append(manifest)
-        logger.info("loaded plugin %s %s", manifest.name, manifest.version)
+        self.plugins.append(LoadedPlugin(manifest=manifest, source=source, trust=trust))
+        logger.info("loaded plugin %s %s (%s, %s)", manifest.name, manifest.version, source, trust)
+
+    # ------------------------------------------------------- the trust gate
+    @staticmethod
+    def _gate_dropin(py_file: Path, store: TrustStore) -> VerifiedFacts | None:
+        """ADR-016: decide whether a drop-in may load — **before importing it**.
+
+        Returns the signed facts (the module may load as *signed*), or
+        ``None`` (the operator pinned these exact bytes — *acknowledged*).
+        Raises :class:`TrustError` when the plugin must be refused: unsigned,
+        tampered, by an unapproved publisher, or signed for a different
+        release than the one on disk.
+        """
+        digest = sha256_hex(py_file.read_bytes())
+        if store.acknowledgement_matches(py_file.stem, digest):
+            return None
+        sig_path = py_file.with_name(py_file.name + ".sig")
+        if not sig_path.exists():
+            raise TrustError(
+                "no operator acknowledgement in .trust.json and no detached signature "
+                f"({py_file.name}.sig) — see `ledgerforge plugins ack` / `install`"
+            )
+        try:
+            sig_doc = json.loads(sig_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise TrustError(f"{sig_path.name} is not valid JSON: {exc}") from exc
+        facts = verify_signature(sig_doc, py_file.read_bytes())
+        if not store.is_approved(facts.public_key):
+            raise TrustError(
+                f"signature is valid but publisher {fingerprint(facts.public_key)} "
+                "is not approved in .trust.json — approve only keys you have verified"
+            )
+        static = static_manifest_facts(py_file)
+        if static is None:
+            raise TrustError(
+                "PLUGIN manifest is not statically readable (computed or conditional); "
+                "a signature cannot pin what the code will declare — acknowledge it instead"
+            )
+        if (static["name"], static["version"], static["api_compat"]) != (
+            facts.name,
+            facts.version,
+            facts.api_compat,
+        ):
+            raise TrustError(
+                f"signed as {facts.name} {facts.version} (API {facts.api_compat}) but the "
+                f"module declares {static['name']} {static['version']} (API "
+                f"{static['api_compat']}) — not the release that was signed"
+            )
+        return facts
 
     def discover(self, extra_path: str = "") -> None:
-        """Entry-point plugins + drop-in directories."""
+        """Entry-point plugins (trusted by installation) + drop-in directories.
+
+        A drop-in module loads only through the ADR-016 gate: a detached
+        signature by an approved publisher (checked against the artifact
+        bytes and the statically-extracted manifest facts *before the first
+        line of plugin code executes*), or an operator acknowledgement
+        pinning the exact bytes. Everything else is refused loudly and
+        recorded in :attr:`refusals` — never silently ignored, never loaded.
+        """
         for ep in entry_points(group="ledgerforge.plugins"):
             try:
                 self.load_module(ep.load())
-            except Exception:  # noqa: BLE001 — a bad plugin must not kill boot
+            except Exception as exc:  # noqa: BLE001 — a bad plugin must not kill boot
                 logger.exception("failed to load plugin %s", ep.name)
+                self.refusals.append(PluginRefusal(module=ep.name, reason=str(exc)))
         for raw in filter(None, [p.strip() for p in extra_path.split(":")]):
             base = Path(raw)
             if not base.is_dir():
                 logger.warning("LF_PLUGIN_PATH entry %s is not a directory", base)
                 continue
-            for mod_info in pkgutil.iter_modules([str(base)]):
+            try:
+                store = TrustStore.load(base)
+            except TrustError as exc:
+                logger.error("refusing all drop-ins in %s: %s", base, exc)
+                self.refusals.append(PluginRefusal(module=str(base), reason=str(exc)))
+                continue
+            for py_file in sorted(base.glob("*.py")):
+                module_name = py_file.stem
+                if module_name.startswith("_"):
+                    continue
                 try:
-                    module = importlib.import_module(mod_info.name)
-                    self.load_module(module)
-                except Exception:  # noqa: BLE001
-                    logger.exception("failed to load drop-in plugin %s", mod_info.name)
+                    facts = self._gate_dropin(py_file, store)
+                    module = _import_plugin_file(py_file)
+                    if facts is not None:  # signed: the executed manifest must match
+                        manifest = getattr(module, "PLUGIN", None)
+                        declared = (
+                            (manifest.name, manifest.version, manifest.api_compat)
+                            if isinstance(manifest, PluginManifest)
+                            else None
+                        )
+                        if declared != (facts.name, facts.version, facts.api_compat):
+                            raise TrustError(  # noqa: TRY301 — the gate's final word
+                                f"module executes as {declared} but was signed as "
+                                f"{(facts.name, facts.version, facts.api_compat)} — not loading it"
+                            )
+                    self.load_module(
+                        module,
+                        source="drop-in",
+                        trust="signed" if facts is not None else "acknowledged",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("refused drop-in plugin %s", module_name)
+                    self.refusals.append(PluginRefusal(module=module_name, reason=str(exc)))
 
     # ------------------------------------------------------------ execution
     def transform(self, draft: VoucherDraft, resolver: Resolver) -> VoucherDraft:

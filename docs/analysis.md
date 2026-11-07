@@ -421,7 +421,7 @@ Voucher payload
 ### 5.6 Governance
 
 - `ledgerforge.plugin_api` follows semver; breaking changes ship with a deprecation window (two minor releases), and `api_compat` lets the loader refuse loudly instead of misbehaving.
-- A community plugin index (curated list + CI badge requirements) is a roadmap milestone; until then, entry-points + the `plugins/` convention serve as the mechanism.
+- A community plugin index (curated list + CI badge requirements) landed in v0.12 as `community/plugins/index.json` with Ed25519-signed entries and a boot-time trust gate for drop-ins (ADR-016); entry-points + the pip channel remain the trusted installation path.
 
 ### 5.7 Licensing decision (D5)
 
@@ -599,7 +599,7 @@ curl -s localhost:8000/api/v1/reports/trial-balance?as_of=2026-11-06
 | Statutory bridge (PF/ESI) | **Landed (v0.10)** | The fourth plugin pack, **zero schema change** (ADR-014): plugin API 0.6 adds pack reports (`register_report(key, factory)` + `PackReport`, served at `GET /reports/pack/{key}` as PDF via the ADR-013 layout engine or CSV); the statutory pack folds one month's payroll runs through the payroll pack's new public `period_wages()` fold into EPF statements (wage bases from configured components, the statutory ceiling, the EE/EPS/ER/EDLI split — ER derived so shares reconstruct the rate) and ESI statements (threshold test, EE/ER shares) — rates, ceilings and wage-component sets are parameters with long-standing defaults, UAN/IP identifiers ride the run entries (blank, never invented), and the voucher screen gained `Ctrl+P` to print any posting voucher through the same endpoint as payslips |
 | Daybook browser + TDS | **Landed (v0.11)** | The browse/reprint loop closes (ADR-015): the web daybook (`Alt+B`, `↑/↓`/`j/k`, `Enter`/`Ctrl+P` print, `Esc` back) lists every posted voucher with engine-side type/date filters, a client-side find and document chips; `VoucherOut.amount` (the debit-side total, exact Decimal quantized to cents — additive, so the client never sums, Law 3) is the amount column; a multi-employee payroll run points at the payslip screen instead of erroring. The statutory pack's third statement, **TDS** (`GET /reports/pack/tds`), reports what the runs actually withheld per deductee (TDS/Income Tax components by default, `component=` override; other withheld components shown alongside; PANs ride the run entries, blank never invented) — a deduction record, never a slab computation |
 | Report scale-out | Watch | Partitioning + BRIN + optional eventually-consistent balance cache (§4.3) — only when books pass millions of entries |
-| Plugin trust model | Watch | Signed plugin index, capability-scoped registry, sandboxed UI slots (§5.5) |
+| Plugin trust model | **Landed (v0.12)** | The community index & signed drop-ins (ADR-016): a curated `community/plugins/index.json` whose entries carry Ed25519 release signatures (facts + artifact bytes); a boot-time gate that verifies signature → publisher approval → static manifest facts **before the first line of a drop-in executes** (unsigned/tampered/relabelled/unapproved/future-API plugins are refused loudly and recorded, never silently loaded); operator acknowledgement as the keyless escape hatch (exact-byte pins); the `ledgerforge plugins` CLI (keygen/sign/verify/index/install/ack/list) as the whole author/operator lifecycle; the admin `GET /api/v1/plugins` and the `Alt+X` screen surface loaded packs (channel + trust) and refusals alike. Sandbox-style UI slots (§5.5) remain Phase-3 |
 
 ---
 

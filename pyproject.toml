@@ -47,6 +47,9 @@ Repository = "https://github.com/mir-ashiq/ledgerforge"
 Issues = "https://github.com/mir-ashiq/ledgerforge/issues"
 Changelog = "https://github.com/mir-ashiq/ledgerforge/releases"
 
+[project.scripts]
+ledgerforge = "ledgerforge.__main__:main"
+
 [project.entry-points."ledgerforge.plugins"]
 example_gst = "ledgerforge.contrib.example_gst"
 invoicing = "ledgerforge.contrib.invoicing"
@@ -65,6 +68,9 @@ packages = ["src/ledgerforge"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# community/plugins holds RELEASED artifacts: their bytes are pinned by
+# sha256 + signature in index.json — the formatter never touches them.
+extend-exclude = ["community"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

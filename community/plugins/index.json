@@ -1,0 +1,18 @@
+{
+  "index_version": 1,
+  "updated": "2026-11-07",
+  "plugins": [
+    {
+      "name": "webhook-forwarder",
+      "version": "0.1.0",
+      "api_compat": "0.2",
+      "summary": "Forwards every voucher.posted event to the webhook in LF_WEBHOOK_URL \u2014 the after-commit event tier in miniature (e-invoicing / BI-sync pattern).",
+      "author": "mir-ashiq",
+      "homepage": "https://github.com/mir-ashiq/ledgerforge/tree/main/community/plugins",
+      "artifact": "webhook_forwarder.py",
+      "sha256": "e70b10100568a16f8a0fecb934ce553a59ff8e467232447b228bb52364e75752",
+      "publisher_key": "JjaTzpHtX/BMfLvAYAOF9F8RSXpb2wiDXJZj+PlQN7o=",
+      "signature": "I75VRjBdWyH6aIOuj+XOZZUvwXgBtc+0xjnAkbku6bJYQhtZuHYqfsMQydjZThD6I/MSOIBkuYPJAraUks+oDQ=="
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Plugin Guide
 
-**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, `docs/analysis.md` §5.
+**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report); **publishing:** `community/plugins/webhook_forwarder.py` (a signed community release) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, ADR-016, `docs/analysis.md` §5.
 
 ## The two tiers
 
@@ -162,17 +162,52 @@ from `payroll.period_wages(resolver, period)` — the same fold the payslips
 replay — with rates, ceilings, wage-component sets and TDS component names
 as parameters (`tests/test_statutory_plugin.py` pins the whole path).
 
-## Installation
+## Installation & the trust model (ADR-016)
 
-- **pip path:** declare an entry point in your package —
+Three channels, three trust bases:
+
+- **pip path (trusted by installation):** declare an entry point in your package —
   ```toml
   [project.entry-points."ledgerforge.plugins"]
   my-gst-pack = "my_gst_pack:PLUGIN_MODULE"
   ```
-  (the module containing `register`).
-- **Drop-in path:** put the package/folder on `LF_PLUGIN_PATH` (default: `./plugins`); every module with `PLUGIN` + `register` is loaded at startup.
+  (the module containing `register`). The operator chose to install it; that
+  is the trust decision.
+- **Community index (signed):** `ledgerforge plugins install my-gst-pack`
+  fetches the release from the [curated index](../../community/plugins/index.json),
+  verifies its Ed25519 signature (release facts + artifact bytes) against the
+  publisher key the index records, checks the `api_compat` floor, and lands
+  plugin + `.sig` + publisher approval in the drop-in directory.
+- **Drop-in path (proof required):** a single-file module on `LF_PLUGIN_PATH`
+  (default: `./plugins`) loads **only** with proof — a valid `.py.sig` by an
+  approved publisher, or an operator acknowledgement pinning the exact
+  bytes (`ledgerforge plugins ack <module> --path ./plugins`). Everything
+  else is refused at boot, loudly, without executing a line of it — and the
+  refusal (with reason) is visible in `ledgerforge plugins list`, the
+  `GET /api/v1/plugins` endpoint and the plugins screen (`Alt+X`).
 
-Incompatible plugins (`api_compat` outside the supported range) are refused loudly at boot — never silently misbehaving.
+A signature covers `{name, version, api_compat, sha256}` — it cannot be
+replayed onto another release, a rename, or changed bytes. The manifest
+must be statically readable for the signature path (plain string keywords);
+a computed manifest loads only via acknowledgement. The same pack loaded
+through two channels is refused the second time — transformers would run
+twice on one posting.
+
+Incompatible plugins (`api_compat` outside the supported range) are refused loudly at boot and at install — never silently misbehaving.
+
+## Publishing to the community index (author-side)
+
+1. Generate a publisher identity once: `ledgerforge plugins keygen --out ~/.ledgerforge-keys`
+   (the private PEM never leaves your machine).
+2. Keep the manifest static — `PLUGIN = PluginManifest(name=…, version=…, api_compat=…)`
+   with plain string keywords — and declare the **oldest** plugin API your
+   code runs on (it is a floor, not a pin).
+3. Sign the release: `ledgerforge plugins sign my_pack.py --key ~/.ledgerforge-keys/publisher_ed25519.pem`
+   writes `my_pack.py.sig`.
+4. Open a pull request against `community/plugins/index.json` adding your
+   artifact, its sha256, your public key and the signature — see the
+   curation requirements in [community/plugins/README.md](../../community/plugins/README.md).
+   The sample entry (`webhook-forwarder`) is a complete, signed example.
 
 ## What never changes
 

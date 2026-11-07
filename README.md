@@ -391,6 +391,48 @@ Reprints are identical: posted entries are immutable (Law 2), so the
 hundredth reprint is byte-for-byte the document that printed the day it
 was posted.
 
+## The trust bridge: community index & signed plugins (ADR-016)
+
+The last planned roadmap line: who vouches for the code that runs inside
+your posting transactions? Three loading channels, three answers —
+first-party packs (reviewed in this repo), pip installs (you chose them),
+and drop-ins, which now load **only with proof**:
+
+- **A publisher's signature** — Ed25519 over the release *facts*
+  (`name`, `version`, `api_compat`) plus the artifact's `sha256`, so a
+  signature cannot be replayed onto another release or changed bytes —
+  from a key your trust store approved; or
+- **Your acknowledgement** — `ledgerforge plugins ack` pins the exact
+  bytes of a plugin you reviewed yourself.
+
+Everything else is refused at boot — **before the first line of the
+plugin executes** (the gate reads the manifest statically, no import),
+loudly, with the reason recorded. The refusals are the feature's other
+half: `ledgerforge plugins list` shows them, `GET /api/v1/plugins`
+(admin) returns them, and the plugins screen (`Alt+X`) renders both
+tables with the trust labels explained in place.
+
+The **community plugin index** (`community/plugins/index.json`, curated
+by pull request) is where signatures and publisher keys meet operators:
+one command verifies and lands a release end to end.
+
+```bash
+# the whole lifecycle — author side and operator side
+ledgerforge plugins keygen --out ~/.ledgerforge-keys   # author identity
+ledgerforge plugins sign my_pack.py --key ~/.ledgerforge-keys/publisher_ed25519.pem
+ledgerforge plugins index                               # what's curated
+ledgerforge plugins install webhook-forwarder --path ./plugins
+ledgerforge plugins ack hometown_pack --path ./plugins  # your own reviewed code
+ledgerforge plugins list --path ./plugins               # what loads, and why
+```
+
+Design: [ADR-016](docs/adr/016-plugin-trust.md), the
+[plugin guide](docs/plugin-guide.md#installation--the-trust-model-adr-016),
+the [curation policy](community/plugins/README.md). Pinned by
+`tests/test_plugin_trust.py` (25 tests, including "an unsigned drop-in
+never executes" and "the committed index entry verifies against the
+committed artifact").
+
 ## Statutory bridge: PF, ESI & TDS statements (ADR-014)
 
 The payroll pack's wage folds are the input to the statements an
@@ -527,7 +569,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.11.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.12.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -538,12 +580,19 @@ via plugin document views (plugin API 0.5), payslips, tax invoices and the
 voucher-slip fallback, plus the payslip screen — the statutory
 bridge (v0.10): PF & ESI statements folded from the payroll runs as the
 first pack report (plugin API 0.6), with `Ctrl+P` on the voucher screen
-printing any posting voucher — **and the daybook browser (v0.11):
-`Alt+B` browses every posted voucher with engine-computed amounts and
-reprints any of them, while the statutory pack gains TDS as the second
-pack report — what the runs actually withheld, per deductee**. The
-planned roadmap is fully landed; what remains is deliberately conditional
-(see [docs/analysis.md §9](docs/analysis.md)):
+printing any posting voucher — the daybook browser (v0.11): `Alt+B`
+browses every posted voucher with engine-computed amounts and reprints any
+of them, while the statutory pack gains TDS as the second pack report —
+what the runs actually withheld, per deductee — **and the trust bridge
+(v0.12): a signed community plugin index
+([community/plugins](community/plugins)) with the full author/operator
+lifecycle (`ledgerforge plugins keygen/sign/install/ack/list`), a
+boot-time trust gate that refuses unsigned, tampered or unapproved
+drop-ins *before executing a line of them*, and the plugins screen
+(`Alt+X`) showing every loaded pack's channel and trust basis plus every
+refusal and why (ADR-016)**. The planned roadmap is fully landed; what
+remains is deliberately conditional (see
+[docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -567,7 +616,10 @@ planned roadmap is fully landed; what remains is deliberately conditional
 - [x] Daybook browser: every posted voucher browsable (`Alt+B`) and
       reprintable through the print bridge, with the engine-computed
       amount column; TDS as the second pack report (ADR-015 + ADR-014)
-- [ ] Community plugin index, signed plugin trust model
+- [x] Community plugin index + signed plugin trust model: Ed25519 release
+      signatures (facts + bytes), the boot-time drop-in gate (refuse before
+      execution), the `ledgerforge plugins` CLI, the admin plugins API and
+      the `Alt+X` screen (ADR-016)
 - [ ] Report scale-out (partitioning + BRIN) — only when books pass
       millions of entries
 

@@ -95,3 +95,27 @@ export interface PayrollRunDoc {
     total_net: string;
   };
 }
+
+/** The plugin inventory (ADR-016): what loaded, through which channel. */
+export interface PluginOut {
+  name: string;
+  version: string;
+  api_compat: string;
+  /** "entry-point" = first-party pack or pip install (operator's channel);
+   *  "drop-in" = LF_PLUGIN_PATH module that passed the trust gate. */
+  source: 'entry-point' | 'drop-in';
+  /** "trusted" = operator's own channel; "signed" = approved publisher's
+   *  detached signature; "acknowledged" = operator-pinned bytes. */
+  trust: 'trusted' | 'signed' | 'acknowledged';
+}
+
+/** A plugin (or drop-in directory) that did not load, and why. */
+export interface PluginRefusalOut {
+  module: string;
+  reason: string;
+}
+
+export interface PluginsOut {
+  plugins: PluginOut[];
+  refused: PluginRefusalOut[];
+}

@@ -7,6 +7,7 @@
 import type {
   GroupOut,
   LedgerOut,
+  PluginsOut,
   VoucherOut,
   VoucherPostPayload,
 } from './types';
@@ -112,4 +113,7 @@ export const api = {
         ? `/vouchers/${voucherId}/pdf?employee=${encodeURIComponent(employee)}`
         : `/vouchers/${voucherId}/pdf`,
     ),
+  /** The plugin inventory (ADR-016): loaded packs with their channel and
+   *  trust basis, plus everything refused at boot and why. */
+  plugins: () => request<PluginsOut>('/plugins'),
 };

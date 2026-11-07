@@ -1,8 +1,8 @@
 /**
  * Application root: owns the keymap lifecycle (with user-binding persistence),
  * the prefetched masters (ledger + group indexes), screen switching and the
- * command palette. Screens: VoucherScreen (entry), PayslipScreen (ADR-013)
- * and DaybookScreen (ADR-015).
+ * command palette. Screens: VoucherScreen (entry), PayslipScreen (ADR-013),
+ * DaybookScreen (ADR-015) and PluginsScreen (ADR-016).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -12,10 +12,11 @@ import type { GroupOut, LedgerOut } from './api/types';
 import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
 import { PayslipScreen } from './components/PayslipScreen';
+import { PluginsScreen } from './components/PluginsScreen';
 import { VoucherScreen } from './components/VoucherScreen';
 import { localStorageKeymapStore } from './keymapStore';
 
-type Screen = 'voucher' | 'payslip' | 'daybook';
+type Screen = 'voucher' | 'payslip' | 'daybook' | 'plugins';
 
 export default function App() {
   const [ledgers, setLedgers] = useState<LedgerOut[]>([]);
@@ -70,6 +71,11 @@ export default function App() {
     { id: 'daybook.open', title: 'Daybook — browse & reprint posted vouchers', run: () => setScreen('daybook') },
     'Alt+B',
   );
+  // the plugins screen (ADR-016): Alt+X (extensions) opens, Esc is back
+  useCommand(
+    { id: 'plugins.open', title: 'Plugins — loaded packs & trust status', run: () => setScreen('plugins') },
+    'Alt+X',
+  );
 
   return (
     <>
@@ -84,8 +90,10 @@ export default function App() {
         />
       ) : screen === 'payslip' ? (
         <PayslipScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
-      ) : (
+      ) : screen === 'daybook' ? (
         <DaybookScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : (
+        <PluginsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} ctxRef={paletteCtxRef} />}
     </>
