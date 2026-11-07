@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ledgerforge"
-version = "0.17.0"
+version = "0.18.0"
 description = "Community-driven, keyboard-first, double-entry business management engine — inspired by TallyPrime"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,12 +39,22 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.5",
     "pgserver>=0.1",
+    "pytest-qt>=4.4",
+    "PySide6>=6.6",
+    "Pillow>=10.3",
 ]
 # The zero-config desktop edition (ADR-021): the pgserver portable
 # PostgreSQL distribution — the embedded database behind
 # `ledgerforge desktop` and the Windows build.
 desktop = [
     "pgserver>=0.1",
+]
+# The native Windows application (ADR-022): the Qt 6 shell that replaces
+# the v0.17 browser window — a real desktop program, menus and dialogs of
+# its own, no browser anywhere in the loop.
+gui = [
+    "pgserver>=0.1",
+    "PySide6>=6.6",
 ]
 
 [project.urls]
@@ -56,6 +66,7 @@ Changelog = "https://github.com/mir-ashiq/ledgerforge/releases"
 [project.scripts]
 ledgerforge = "ledgerforge.__main__:main"
 ledgerforge-desktop = "ledgerforge.desktop:main"
+ledgerforge-native = "ledgerforge.nativeapp:main"
 lf-irn-bridge = "ledgerforge.contrib.irn_bridge:main"
 
 [project.entry-points."ledgerforge.plugins"]

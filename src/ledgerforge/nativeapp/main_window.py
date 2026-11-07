@@ -1,0 +1,223 @@
+"""The main window — one native frame around the whole product.
+
+Sidebar navigation (Alt+1..6), native menu bar, a status bar that carries the
+engine's heartbeat, and the keyboard identity the engine was built for:
+Ctrl+N posts a voucher from anywhere, F5 refreshes the page in focus, Ctrl+Q
+quits. The window IS the application — nothing opens a browser, ever.
+"""
+
+from __future__ import annotations
+
+from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QStackedWidget,
+    QStatusBar,
+    QWidget,
+)
+
+from .client import ApiClient
+from .daybook import DayBookPage
+from .masters import MastersPage
+from .models import Book
+from .periods import PeriodsPage
+from .reports import ReportsPage
+from .sandbox import SandboxPage
+from .tasks import run
+from .voucher_dialog import NewVoucherDialog, VoucherViewDialog
+from .widgets import app_icon, error_detail
+
+#: (page key, sidebar label) in navigation order.
+PAGES = [
+    ("daybook", "Day Book"),
+    ("masters", "Masters"),
+    ("reports", "Reports"),
+    ("periods", "Periods"),
+    ("sandbox", "Sandbox"),
+]
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, client: ApiClient, data_dir: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._client = client
+        self._data_dir = data_dir
+        self._books: list[Book] = []
+
+        self.setWindowTitle("LedgerForge")
+        self.setWindowIcon(app_icon())
+        self.resize(1180, 760)
+
+        # ---- pages ------------------------------------------------------
+        self.pages = QStackedWidget()
+        self.daybook = DayBookPage(client)
+        self.masters = MastersPage(client)
+        self.reports = ReportsPage(client)
+        self.periods = PeriodsPage(client)
+        self.sandbox = SandboxPage(client)
+        for page in (self.daybook, self.masters, self.reports, self.periods, self.sandbox):
+            self.pages.addWidget(page)
+
+        self.daybook.open_voucher_requested.connect(self.open_voucher)
+        self.daybook.new_voucher_requested.connect(self.new_voucher)
+
+        # ---- sidebar ----------------------------------------------------
+        self.sidebar = QListWidget()
+        self.sidebar.setFixedWidth(190)
+        for _key, label in PAGES:
+            QListWidgetItem(label, self.sidebar)
+        self.sidebar.setCurrentRow(0)
+        self.sidebar.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.sidebar.currentRowChanged.connect(self._page_changed)
+
+        # central: sidebar + pages
+        from PySide6.QtWidgets import QHBoxLayout
+
+        central = QWidget()
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.sidebar)
+        layout.addWidget(self.pages, stretch=1)
+        self.setCentralWidget(central)
+
+        self._build_menus()
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.engine_status = self.status_bar
+        self.status_bar.showMessage("engine starting…")
+
+        self._load_books()
+        self.daybook.reload()
+        self.masters.reload()
+        self.sandbox.reload()
+
+    # ---------------------------------------------------------------- menus
+    def _build_menus(self) -> None:
+        file_menu = self.menuBar().addMenu("&File")
+
+        new_action = QAction("&New voucher…", self)
+        new_action.setShortcut(QKeySequence("Ctrl+N"))
+        new_action.triggered.connect(self.new_voucher)
+        file_menu.addAction(new_action)
+
+        refresh_action = QAction("&Refresh", self)
+        refresh_action.setShortcut(QKeySequence("F5"))
+        refresh_action.triggered.connect(self.refresh_current)
+        file_menu.addAction(refresh_action)
+
+        file_menu.addSeparator()
+        quit_action = QAction("E&xit", self)
+        quit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        navigate = self.menuBar().addMenu("&Navigate")
+        for index, (_key, label) in enumerate(PAGES):
+            action = QAction(f"&{index + 1}  {label}", self)
+            action.setShortcut(QKeySequence(f"Alt+{index + 1}"))
+            action.triggered.connect(lambda _checked=False, row=index: self._goto(row))
+            navigate.addAction(action)
+
+        help_menu = self.menuBar().addMenu("&Help")
+        about = QAction("&About LedgerForge", self)
+        about.triggered.connect(self._about)
+        help_menu.addAction(about)
+
+    def _about(self) -> None:
+        from .. import __version__
+
+        QMessageBox.about(
+            self,
+            "About LedgerForge",
+            f"<b>LedgerForge {__version__}</b><br>"
+            "The native desktop edition — keyboard-first, double-entry "
+            "bookkeeping with an embedded engine.<br><br>"
+            f"Data directory: <code>{self._data_dir}</code><br>"
+            'AGPL-3.0 — <a href="https://github.com/mir-ashiq/ledgerforge">github.com/mir-ashiq/ledgerforge</a>',
+        )
+
+    # ------------------------------------------------------------ navigation
+    def _goto(self, row: int) -> None:
+        self.sidebar.setCurrentRow(row)
+
+    def _page_changed(self, row: int) -> None:
+        self.pages.setCurrentIndex(row)
+        self.refresh_current()
+
+    def refresh_current(self) -> None:
+        page = self.pages.currentWidget()
+        reloader = getattr(page, "reload", None) or getattr(page, "refresh", None)
+        if callable(reloader):
+            reloader()
+
+    # ---------------------------------------------------------------- books
+    def _load_books(self) -> None:
+        def load():
+            books = self._client.books()
+            if books and self._client.book_id is None:
+                self._client.set_book(books[0].id)
+            return books
+
+        run(load, self._books_loaded, self._books_failed)
+
+    def _books_loaded(self, books: list[Book]) -> None:
+        self._books = books
+        if books:
+            self.setWindowTitle(f"LedgerForge — {books[0].name}")
+
+        def health():
+            return self._client.health()
+
+        run(health, self._engine_ready, self._engine_unreachable)
+
+    def _engine_unreachable(self, _error: object) -> None:
+        self.status_bar.showMessage("engine unreachable", 0)
+
+    def _engine_ready(self, health: dict) -> None:
+        book = f" · {self._books[0].name}" if self._books else ""
+        self.status_bar.showMessage(
+            f"engine {health.get('version', '?')} — connected{book} · data: {self._data_dir}", 0
+        )
+
+    def _books_failed(self, error: object) -> None:
+        self.status_bar.showMessage(f"books unavailable — {error_detail(error)}", 0)
+
+    # -------------------------------------------------------------- vouchers
+    def new_voucher(self) -> None:
+        names = self.masters.ledger_names()
+        if not names:  # first run: pull masters inline, then open
+            run(
+                self._client.ledgers,
+                lambda ledgers: self._open_new_voucher([led.name for led in ledgers]),
+                lambda error: QMessageBox.critical(
+                    self, "New Voucher", f"Could not load ledgers:\n{error_detail(error)}"
+                ),
+            )
+            return
+        self._open_new_voucher(names)
+
+    def _open_new_voucher(self, names: list[str]) -> None:
+        dialog = self._build_new_voucher(names)
+        dialog.exec()
+
+    def _build_new_voucher(self, names: list[str]) -> NewVoucherDialog:
+        dialog = NewVoucherDialog(self._client, names, self)
+        dialog.posted.connect(lambda _v: self.daybook.reload())
+        return dialog
+
+    def open_voucher(self, voucher_id: int) -> None:
+        run(
+            lambda: self._client.voucher(voucher_id),
+            self._show_voucher,
+            lambda error: QMessageBox.critical(
+                self, "Voucher", f"Could not load the voucher:\n{error_detail(error)}"
+            ),
+        )
+
+    def _show_voucher(self, voucher) -> None:
+        VoucherViewDialog(self._client, voucher, self).exec()

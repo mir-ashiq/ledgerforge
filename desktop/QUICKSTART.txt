@@ -1,38 +1,50 @@
-LedgerForge Desktop — QUICKSTART
-================================
+LedgerForge Native — QUICKSTART
+===============================
 
 WHAT THIS IS
-  LedgerForge as a single Windows application. Double-click LedgerForge.exe:
-  it starts its own embedded PostgreSQL and the web UI on your machine
-  (127.0.0.1, loopback only — nothing is exposed to the network), then opens
-  your browser. Keep the console window open while you work; close it (or
-  press Ctrl+C in it) to stop. Your books live in %LOCALAPPDATA%\LedgerForge.
+  LedgerForge as a real Windows program. Double-click LedgerForge.exe: a
+  native window opens — its own menus, its own tables, its own file
+  dialogs. No browser, no website, no console window. Behind the window an
+  embedded engine (PostgreSQL + the LedgerForge core) runs invisibly on
+  your machine, loopback only — nothing is exposed to the network. Close
+  the window to stop. Your books live in %LOCALAPPDATA%\LedgerForge.
 
 FIRST RUN
   1. Double-click LedgerForge.exe.
      Windows SmartScreen may warn about unsigned binaries — "More info" ->
      "Run anyway". The zip's SHA-256 is published as checksums.txt in the
      release for verification.
-  2. Wait for "serving on http://127.0.0.1:8420/" — the first run prepares
-     the database; later starts are faster.
-  3. Your browser opens on the keyboard-first voucher screen. Post your
-     first voucher: type a ledger name, Enter, an amount, Enter ... Ctrl+A
-     accepts. Alt+C creates a missing ledger mid-flight, Ctrl+K shows every
-     keybinding.
+  2. A small splash says "Starting the embedded engine…". The first run
+     prepares the database (about a minute); later starts are faster.
+  3. The main window opens on the Day Book. Post your first voucher:
+     Ctrl+N, pick a type (JV, PYT, RCT, SAL…), type a ledger name (the
+     box autocompletes), an amount, Debit; add the Credit line; when the
+     balance label turns green, press "Post voucher". Enter opens the
+     selected voucher from the day book; F5 refreshes; Alt+1..5 jump
+     between pages; Ctrl+Q quits.
+
+THE PAGES
+  Day Book   your vouchers: date/type filters, search, double-click to view
+             (Save as PDF is in the voucher window)
+  Masters    the chart of accounts: ledgers and groups, New Ledger…
+  Reports    Trial Balance, Profit & Loss, Balance Sheet, FY-close preview,
+             and the GSTR-1 pack (save the statutory PDF or export CSV)
+  Periods    financial years: lock, unlock, close preview, close
+  Sandbox    plugin dashboards registered by installed plugins (ADR-019)
 
 COMMANDS
-  LedgerForge.exe                      normal start (port 8420)
-  LedgerForge.exe --port 9000          choose the port
-  LedgerForge.exe --no-browser         serve without opening a browser
+  LedgerForge.exe                      normal start
   LedgerForge.exe --data-dir D:\Books  keep the data somewhere else
-  LedgerForge.exe --smoke              self-check; exit code 0 = healthy
+  LedgerForge.exe --smoke              headless self-check; exit code 0
+                                       = healthy (what the release runs)
 
 DATA, BACKUPS, MOVING MACHINES
   Everything lives in the data directory (default %LOCALAPPDATA%\LedgerForge):
   pgdata\ is the embedded database, plugins\ is where signed community
-  plugins drop in. Copy the whole folder to move machines; copy it somewhere
-  safe for a backup. The engine underneath is append-only and exact-decimal
-  double-entry bookkeeping — see the documentation linked below.
+  plugins drop in, engine.log is the engine child's log. Copy the whole
+  folder to move machines; copy it somewhere safe for a backup. The engine
+  underneath is append-only and exact-decimal double-entry bookkeeping —
+  see the documentation linked below.
 
 LICENSE / SOURCE
   LedgerForge is free software under AGPL-3.0. The complete source code for

@@ -33,6 +33,13 @@ jobs:
       - name: Install
         run: pip install -e ".[dev]"
 
+      # The native app's offscreen Qt tests (ADR-022) need the GUI stack's
+      # system libraries — headless, no display, QT_QPA_PLATFORM=offscreen.
+      - name: Qt system libraries (offscreen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+
       - name: Lint
         run: |
           ruff check .
@@ -42,6 +49,7 @@ jobs:
         run: python -m pytest -v
         env:
           LF_TEST_ADMIN_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
+          QT_QPA_PLATFORM: offscreen
 
       - name: Alembic CLI smoke (upgrade, stamp, downgrade on a scratch database)
         run: |

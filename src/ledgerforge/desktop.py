@@ -219,7 +219,12 @@ def build_server(
 
     import uvicorn
 
-    config = uvicorn.Config(app, host=host, port=port, log_level=log_level)
+    # loop="asyncio": the desktop is a GUI process (ADR-022's Qt shell runs
+    # the engine in-process) — uvloop's libuv grabs signal handlers and file
+    # descriptors that Qt's event loop also manages, and the two collide
+    # (hard segfaults under concurrent load). The standard asyncio loop
+    # keeps them apart; throughput is irrelevant on a loopback single-user.
+    config = uvicorn.Config(app, host=host, port=port, log_level=log_level, loop="asyncio")
     return uvicorn.Server(config)
 
 

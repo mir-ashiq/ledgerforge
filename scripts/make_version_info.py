@@ -39,7 +39,7 @@ VSVersionInfo(
         [StringStruct('CompanyName', 'mir-ashiq / LedgerForge community'),
         StringStruct(
           'FileDescription',
-          'LedgerForge Desktop - keyboard-first double-entry bookkeeping'
+          'LedgerForge Native - double-entry bookkeeping in a native window'
         ),
         StringStruct('FileVersion', '{__version__}'),
         StringStruct('InternalName', 'LedgerForge'),
@@ -48,7 +48,7 @@ VSVersionInfo(
           'AGPL-3.0-only - https://github.com/mir-ashiq/ledgerforge'
         ),
         StringStruct('OriginalFilename', 'LedgerForge.exe'),
-        StringStruct('ProductName', 'LedgerForge Desktop'),
+        StringStruct('ProductName', 'LedgerForge Native'),
         StringStruct('ProductVersion', '{__version__}')])
       ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])

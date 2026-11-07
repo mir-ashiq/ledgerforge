@@ -60,11 +60,12 @@ Decisions are recorded as ADRs in [docs/adr/](docs/adr/).
 
 Download `LedgerForge-<version>-win64.zip` from
 [releases](https://github.com/mir-ashiq/ledgerforge/releases/latest), extract,
-and double-click `LedgerForge.exe`. An embedded PostgreSQL, the engine and the
-keyboard-first UI come up on `127.0.0.1` and your browser opens on the
-voucher screen — nothing to install, nothing exposed to the network. Your
-books live in `%LOCALAPPDATA%\LedgerForge`. More:
-[the desktop edition](#the-desktop-edition-a-windows-application-adr-021).
+and double-click `LedgerForge.exe`. **A native window opens** — menus,
+tables and file dialogs of its own, no browser anywhere. An embedded
+PostgreSQL and the whole engine run invisibly on your machine — nothing to
+install, nothing exposed to the network. Your books live in
+`%LOCALAPPDATA%\LedgerForge`. More:
+[the native application](#the-native-application-a-real-windows-program-adr-022).
 
 **Docker:**
 
@@ -614,44 +615,55 @@ PLUGIN = PluginManifest(
 Design: [ADR-019](docs/adr/019-sandbox-ui-slots.md),
 [plugin guide](docs/plugin-guide.md).
 
-## The desktop edition: a Windows application (ADR-021)
+## The native application: a real Windows program (ADR-022)
 
 Everything above assumes an operator: PostgreSQL somewhere, containers,
-ports. The desktop edition is the other promise kept — *download,
-double-click, start typing*:
+ports. The native application is the other promise kept — *download,
+double-click, a window opens, start typing*:
 
 - **`LedgerForge.exe`** (built per release on a real Windows runner by the
-  [`release-windows`](.github/workflows/release-windows.yml) workflow) boots
-  an **embedded PostgreSQL** (the pgserver portable distribution) into
-  `%LOCALAPPDATA%\LedgerForge\pgdata`, provisions the default book, serves the
-  built web UI **same-origin** on `127.0.0.1:8420`, and opens your browser.
-  The console window is the app — logs visible, `Ctrl+C` to stop, data
-  survives restarts and upgrades.
+  [`release-windows`](.github/workflows/release-windows.yml) workflow) opens
+  a **native Qt window**: Day Book, Masters, Reports (Trial Balance, P&L,
+  Balance Sheet, GSTR-1 pack with statutory PDF export), Periods, Sandbox —
+  native menus and file dialogs, a taskbar icon, no console. **No browser
+  is launched; no web UI ships.** The engine — an **embedded PostgreSQL**
+  (the pgserver portable distribution) plus the FastAPI core — runs in a
+  **child process** (ADR-022: Qt and libpq do not share an address space
+  gracefully), loopback only, stopped when the window closes. Data lives in
+  `%LOCALAPPDATA%\LedgerForge` and survives restarts, upgrades, and the
+  v0.17 → v0.18 transition unchanged.
+- **Keyboard-first survives the platform change**: `Ctrl+N` posts a voucher
+  from anywhere, `F5` refreshes, `Enter` opens, `Alt+1..5` navigates — the
+  entry form's balance gate unlocks the Post button only when debits equal
+  credits to the cent, mirroring the engine's own Law-1 check.
 - **The engine is not downgraded.** No SQLite fork: the same deferrable
   Law-1 trigger, the same `NUMERIC(26,8)`, the same partitions — one engine,
-  two deployments.
+  web, Docker and desktop. The window is an API client, zero business logic
+  in the GUI.
 - **Loopback-only and single-user by construction**: `LF_AUTH_MODE=disabled`
   on a port no other machine can reach; the `LF_REQUIRE_AUTH` guard stays
   armed for network deployments (ADR-020).
 - **The trust gate still gates.** Drop signed community plugins into
   `%LOCALAPPDATA%\LedgerForge\plugins` — the ADR-016 verify-before-execute
-  gate is unchanged.
+  gate is unchanged, and their dashboards appear in the Sandbox page.
 - **Every release self-proves**: the workflow runs `LedgerForge.exe --smoke`
-  (boot → schema → `/health` → web UI) before publishing the zip + SHA-256
-  checksums. A failed smoke test fails the release.
+  offscreen (boot → schema → `/health` → the native window → day book +
+  trial balance + GSTR-1) before publishing the zip + SHA-256 checksums. A
+  failed smoke test fails the release.
 
 From source (any OS — pgserver ships Linux/macOS binaries too):
 
 ```bash
-pip install -e ".[desktop]"
-npm --prefix frontend/web run build
-ledgerforge-desktop            # or: ledgerforge desktop
-ledgerforge-desktop --smoke    # the same self-check the release runs
+pip install -e ".[gui]"
+ledgerforge-native             # the window
+ledgerforge-native --smoke     # the same self-check the release runs
 ```
 
-The launcher lives in `src/ledgerforge/desktop.py`, the packaging in
-[desktop/](desktop/) (PyInstaller spec + build guide), the decision record in
-[ADR-021](docs/adr/021-desktop-edition.md).
+The window lives in `src/ledgerforge/nativeapp/`, the packaging in
+[desktop/](desktop/) (PyInstaller spec + build guide), the decision record
+in [ADR-022](docs/adr/022-native-shell.md). The v0.17 browser-based local
+edition (`ledgerforge-desktop`, ADR-021) still runs from source for those
+who want it.
 
 ## What's inside
 
@@ -681,9 +693,13 @@ tests/              laws, hierarchy, immutability, reports, concurrency, plugins
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py,
                     bench_scale_out.py), init_db.sh, regen_baseline.py
-desktop/            the desktop edition's packaging (ADR-021): the PyInstaller
-                    spec, the frozen-app entry point, the quickstart that ships
-                    in the zip — plus release-windows.yml building it per tag
+desktop/            the native application's packaging (ADR-022): the PyInstaller
+                    spec, the frozen-app entry point, the icon, the quickstart
+                    that ships in the zip — plus release-windows.yml building
+                    it per tag
+src/ledgerforge/
+  nativeapp/         the Qt window (ADR-022): client, pages, dialogs, smoke
+  desktop.py         the ADR-021 engine stack both editions share
 ```
 
 ## Performance (measured, reproducible)
@@ -791,9 +807,10 @@ proving the full keyboard flow in real Chromium (CI job `e2e`), and the
 production runbook — `ops/` backup + restore drills, the hardened
 `docker-compose.prod.yml`, [docs/deployment.md](docs/deployment.md) —
 and, beyond the planned roadmap, **the desktop edition (v0.17, ADR-021): a
-Windows application** — `LedgerForge.exe`, an embedded PostgreSQL, the web
-UI same-origin on loopback, released per tag with a self-proving smoke
-gate.
+Windows application** — and its v0.18 correction, **the native application
+(ADR-022): a real Windows program** — `LedgerForge.exe` opens a native Qt
+window (no browser), the embedded engine runs in a child process, released
+per tag with a self-proving offscreen smoke gate.
 The planned roadmap is fully landed; the desktop edition followed it, and
 what remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
