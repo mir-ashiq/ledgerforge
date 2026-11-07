@@ -12,6 +12,8 @@ import type {
   FyCloseReportOut,
   GroupOut,
   LedgerOut,
+  OpenBillsOut,
+  OutstandingReport,
   PeriodCloseResult,
   PeriodCreateInput,
   PeriodOut,
@@ -186,4 +188,18 @@ export const api = {
    *  final (admin role). */
   closePeriod: (periodId: number) =>
     request<PeriodCloseResult>(`/periods/${periodId}/close`, { method: 'POST' }),
+  /** One party's open bills + on-account — the allocation dialog's feed
+   * (ADR-023, plugin API 0.8: pack reports answer JSON). */
+  openBills: (party: string) =>
+    request<OpenBillsOut>(
+      `/reports/pack/bills-open?party=${encodeURIComponent(party)}&format=json`,
+    ),
+  /** The outstanding book with ageing — receivable ('dr') or payable ('cr'),
+   * optionally one party (ADR-023). */
+  outstanding: (side: 'dr' | 'cr', party?: string) => {
+    const params = new URLSearchParams({ format: 'json' });
+    if (party) params.set('party', party);
+    const key = side === 'dr' ? 'bills-receivable' : 'bills-payable';
+    return request<OutstandingReport>(`/reports/pack/${key}?${params.toString()}`);
+  },
 };

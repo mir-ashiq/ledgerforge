@@ -35,6 +35,9 @@ export interface VoucherPostPayload {
   /** Idempotency key; resending a failed post replays safely. */
   client_token: string;
   entries: VoucherPostLine[];
+  /** Business-document payloads (ADR-010): the bills pack's allocations
+   * (ADR-023) ride here alongside invoice/stock/payroll documents. */
+  meta?: Record<string, unknown>;
 }
 
 export interface VoucherOut {
@@ -219,4 +222,62 @@ export interface ReversalPayload {
   reversal_date?: string;
   narration?: string;
   client_token?: string;
+}
+
+// ---- bills: bill-wise & outstanding (ADR-023, plugin API 0.8) ----------------
+
+/** One open bill of one party — a row of the `bills-open` pack report
+ * (JSON, plugin API 0.8). Amounts are strings (Law 3). */
+export interface OpenBill {
+  ref: string;
+  /** "dr" = the party owes you (receivable); "cr" = advance/payable. */
+  side: 'dr' | 'cr';
+  opened_on: string;
+  due_on: string;
+  outstanding: string; // signed: dr > 0, cr < 0
+  bucket: string; // ageing bucket as of the report's as-of date
+  interest_annual: string | null;
+}
+
+/** GET /reports/pack/bills-open?party=…&format=json */
+export interface OpenBillsOut {
+  party: string;
+  as_of: string;
+  bills: OpenBill[];
+  on_account: string; // signed pool: > 0 the party owes, < 0 credit
+}
+
+/** One open bill row of the receivable/payable reports. */
+export interface OutstandingBill extends OpenBill {
+  party: string;
+}
+
+/** GET /reports/pack/bills-receivable|bills-payable?format=json */
+export interface OutstandingReport {
+  side: 'dr' | 'cr';
+  as_of: string;
+  party: string | null;
+  bills: OutstandingBill[];
+  on_account: Record<string, string>;
+  party_totals: Record<string, string>;
+  ageing: Record<string, string>;
+  total: string;
+}
+
+/** A bill allocation ref the voucher screen's dialog builds (ADR-023):
+ * dr/cr exactly like ledger lines — TallyPrime's bill-wise columns. */
+export interface BillRef {
+  kind: 'new' | 'against' | 'on_account';
+  ref?: string;
+  dr?: string;
+  cr?: string;
+  due_days?: number;
+  due_on?: string;
+  interest?: { annual: string; grace_days?: number };
+}
+
+export interface BillsDoc {
+  party: string;
+  refs: BillRef[];
+  default_interest?: { annual: string; grace_days?: number };
 }

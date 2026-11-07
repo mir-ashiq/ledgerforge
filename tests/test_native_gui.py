@@ -34,6 +34,7 @@ class StubClient:
 
     def __init__(self):
         self.book_id = 1
+        self.posts = []
         self.ledgers_list = [
             Ledger(1, "Cash", None, 11, "Cash-in-Hand", True),
             Ledger(2, "Sales Account", None, 12, "Sales Accounts", True),
@@ -135,9 +136,38 @@ class StubClient:
         return {"lines": [], "balanced": True}
 
     def pack(self, key, **params):
-        return b"pdf-bytes", "application/pdf", "gstr1.pdf"
+        return b"pdf-bytes", "application/pdf", f"{key}.pdf"
+
+    def pack_json(self, key, **params):
+        # the bills pack's open-bills feed (ADR-023, plugin API 0.8)
+        return {
+            "party": "Acme Traders",
+            "as_of": "2026-11-07",
+            "bills": [
+                {
+                    "ref": "INV-42",
+                    "side": "dr",
+                    "opened_on": "2026-08-01",
+                    "due_on": "2026-08-31",
+                    "outstanding": "1000.00",
+                    "bucket": "61-90",
+                    "interest_annual": "18",
+                },
+                {
+                    "ref": "ADV-1",
+                    "side": "cr",
+                    "opened_on": "2026-10-01",
+                    "due_on": "2026-10-01",
+                    "outstanding": "-200.00",
+                    "bucket": "not due",
+                    "interest_annual": None,
+                },
+            ],
+            "on_account": "0.00",
+        }
 
     def create_voucher(self, **payload):
+        self.posts.append(payload)
         return self.vouchers_list[0]
 
     def create_ledger(self, name, **kwargs):
@@ -461,3 +491,144 @@ def test_voucher_dialog_f4_f9_switch_the_type(qtbot, stub):
     for key, code in TYPE_KEYS.items():
         qtbot.keyClick(dialog, getattr(Qt.Key, f"Key_{key}"))
         assert dialog.type_box.currentData() == code, f"{key} should select {code}"
+
+
+# --------------------------------------------------- bills (ADR-023, Phase 2)
+def test_bill_dialog_allocates_against_with_on_account_remainder(qtbot, stub):
+    """The native allocation dialog: settle open bills, the remainder lands
+    on account — the refs the engine's meta.bills expects (dr/cr like the
+    ledger lines, signed by the movement's direction)."""
+    from decimal import Decimal
+
+    from ledgerforge.nativeapp.bill_dialog import BillAllocationDialog
+
+    dialog = BillAllocationDialog(stub, "Acme Traders", Decimal("-750.00"))
+    qtbot.addWidget(dialog)
+    dialog._loaded(stub.pack_json("bills-open", party="Acme Traders"))
+
+    # one settleable receivable (INV-42), one dimmed advance (ADV-1)
+    assert dialog.table.rowCount() == 2
+    cell = dialog.table.cellWidget(0, 4)
+    cell.setText("700")
+    assert dialog._allocated() == Decimal("700.00")
+
+    dialog._accept()
+    assert dialog.refs() == [
+        {"kind": "against", "ref": "INV-42", "cr": "700.00"},
+        {"kind": "on_account", "cr": "50.00"},
+    ]
+
+
+def test_bill_dialog_new_ref_remainder(qtbot, stub):
+    from decimal import Decimal
+
+    from ledgerforge.nativeapp.bill_dialog import BillAllocationDialog
+
+    dialog = BillAllocationDialog(stub, "Acme Traders", Decimal("-750.00"))
+    qtbot.addWidget(dialog)
+    dialog._loaded(stub.pack_json("bills-open", party="Acme Traders"))
+
+    dialog.new_ref_box.setChecked(True)
+    dialog.new_ref_edit.setText("ADV-2")
+    dialog.new_due_edit.setText("15")
+    dialog._accept()
+    assert dialog.refs() == [{"kind": "new", "ref": "ADV-2", "cr": "750.00", "due_days": 15}]
+
+
+def test_bill_dialog_over_allocation_blocks_ok(qtbot, stub):
+    from decimal import Decimal
+
+    from ledgerforge.nativeapp.bill_dialog import BillAllocationDialog
+
+    dialog = BillAllocationDialog(stub, "Acme Traders", Decimal("-750.00"))
+    qtbot.addWidget(dialog)
+    dialog._loaded(stub.pack_json("bills-open", party="Acme Traders"))
+
+    dialog.table.cellWidget(0, 4).setText("900")  # over the movement, under the bill
+    assert not dialog.buttons.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
+
+    dialog.table.cellWidget(0, 4).setText("750")  # the whole movement against the bill
+    assert dialog.buttons.button(QDialogButtonBox.StandardButton.Ok).isEnabled()
+    dialog._accept()
+    assert dialog.refs() == [{"kind": "against", "ref": "INV-42", "cr": "750.00"}]
+
+
+def test_voucher_dialog_party_movement_and_armed_meta(qtbot, stub):
+    """The entry form's party detection: the first party line's ledger and
+    its signed movement; armed refs ride the post as meta.bills."""
+    dialog = NewVoucherDialog(
+        stub,
+        ["Cash", "HDFC Bank", "Acme Traders"],
+        party_names=["Acme Traders"],
+    )
+    qtbot.addWidget(dialog)
+
+    # no party line yet -> nothing to allocate
+    assert dialog._party_movement() is None
+
+    # line 1: the party credited 750 (a receipt); line 2: the bank debited
+    dialog._lines[0].ledger.setCurrentText("Acme Traders")
+    dialog._lines[0].dc.setCurrentText("Credit")
+    dialog._lines[0].amount.setText("750")
+    assert dialog._party_movement() == ("Acme Traders", Decimal("-750.00"))
+
+    dialog._lines[1].ledger.setCurrentText("HDFC Bank")
+    dialog._lines[1].dc.setCurrentText("Debit")
+    dialog._lines[1].amount.setText("750")
+    assert dialog.is_balanced()
+
+    # arm the allocation (the dialog itself is covered above)
+    dialog._bill_party = "Acme Traders"
+    dialog._bill_refs = [
+        {"kind": "against", "ref": "INV-42", "cr": "700.00"},
+        {"kind": "on_account", "cr": "50.00"},
+    ]
+    dialog._submit()
+    qtbot.waitUntil(lambda: len(stub.posts) == 1, timeout=3000)
+    assert stub.posts[0]["meta"] == {
+        "bills": {
+            "party": "Acme Traders",
+            "refs": [
+                {"kind": "against", "ref": "INV-42", "cr": "700.00"},
+                {"kind": "on_account", "cr": "50.00"},
+            ],
+        }
+    }
+
+
+def test_reports_page_carries_the_bills_pack(qtbot, stub, monkeypatch):
+    """The reports combo carries the bills entries; the statement's party
+    field appears only for it; the outstanding book renders as CSV rows."""
+    saved: list[tuple[bytes, str]] = []
+
+    def fake_write_pack(self, content: bytes, filename: str) -> None:  # noqa: ANN001
+        saved.append((content, filename))
+
+    monkeypatch.setattr(ReportsPage, "_write_pack", fake_write_pack)
+    page = ReportsPage(stub)
+    qtbot.addWidget(page)
+
+    keys = [page.report_box.itemData(i) for i in range(page.report_box.count())]
+    for key in ("bills-receivable", "bills-payable", "ledger-statement", "bills-interest"):
+        assert key in keys
+
+    # the statement needs a party — its field shows and its loader demands one
+    index = keys.index("ledger-statement")
+    page.report_box.setCurrentIndex(index)
+    assert page.party_edit.isVisibleTo(page)
+    try:
+        page._load_statement()
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+    page.party_edit.setText("Acme Traders")
+    loader = page._load_statement()
+    content, _media, _name = loader()  # the stub answers; the loader built the params
+    assert isinstance(content, bytes)
+
+    # the outstanding book: the pack bridge hands the PDF/CSV payload to the
+    # writer (the file dialog itself is stubbed away — offscreen has no user)
+    page.report_box.setCurrentIndex(keys.index("bills-receivable"))
+    page._render(page._load_bills()())
+    assert saved and saved[0][1] == "bills-receivable.pdf"

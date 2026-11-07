@@ -193,20 +193,29 @@ class MainWindow(QMainWindow):
         if not names:  # first run: pull masters inline, then open
             run(
                 self._client.ledgers,
-                lambda ledgers: self._open_new_voucher([led.name for led in ledgers]),
+                lambda ledgers: self._open_new_voucher(
+                    [led.name for led in ledgers],
+                    [
+                        led.name
+                        for led in ledgers
+                        if led.group_name in ("Sundry Debtors", "Sundry Creditors")
+                    ],
+                ),
                 lambda error: QMessageBox.critical(
                     self, "New Voucher", f"Could not load ledgers:\n{error_detail(error)}"
                 ),
             )
             return
-        self._open_new_voucher(names)
+        self._open_new_voucher(names, self.masters.party_names())
 
-    def _open_new_voucher(self, names: list[str]) -> None:
-        dialog = self._build_new_voucher(names)
+    def _open_new_voucher(self, names: list[str], party_names: list[str]) -> None:
+        dialog = self._build_new_voucher(names, party_names)
         dialog.exec()
 
-    def _build_new_voucher(self, names: list[str]) -> NewVoucherDialog:
-        dialog = NewVoucherDialog(self._client, names, self)
+    def _build_new_voucher(
+        self, names: list[str], party_names: list[str] | None = None
+    ) -> NewVoucherDialog:
+        dialog = NewVoucherDialog(self._client, names, self, party_names=party_names)
         dialog.posted.connect(lambda _v: self.daybook.reload())
         return dialog
 

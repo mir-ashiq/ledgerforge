@@ -162,3 +162,12 @@ class MastersPage(QWidget):
     def ledger_names(self) -> list[str]:
         """The voucher entry form's autocomplete list."""
         return [ledger.name for ledger in self._ledgers]
+
+    def party_names(self) -> list[str]:
+        """The bill-managed party ledgers (ADR-023): Sundry Debtors and
+        Sundry Creditors — the voucher form's allocation dialog keys on these."""
+        return [
+            ledger.name
+            for ledger in self._ledgers
+            if ledger.group_name in ("Sundry Debtors", "Sundry Creditors")
+        ]

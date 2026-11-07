@@ -51,7 +51,7 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 - **Validator** `(draft, resolve) -> None` — raise `ValidationError` to veto (HTTP 422). Runs inside the transaction.
 - **Event handler** `(event: DomainEvent) -> None` — receives `voucher.posted` (the full document payload) and `master.created` (`kind` of `group` or `ledger` with the master's identity and placement — fired by `POST /api/v1/groups` and `POST /api/v1/ledgers`; `Resolver.ensure_ledger` creates in-transaction and fires nothing) after commit. Failures are isolated.
 - **Document-view factory** `(ctx: DocumentContext) -> DocumentView | None` — **plugin API 0.5 (ADR-013):** owns the print layout for `meta[key]` documents. Return a view to claim, `None` to decline (the voucher slip takes over). See [Printing a document](#printing-a-document-api-05-adr-013).
-- **Report factory** `(resolver, params) -> PackReport` — **plugin API 0.6 (ADR-014):** publishes a book-scoped report under a key, served at `GET /api/v1/reports/pack/{key}` as PDF (through the shared layout engine) or CSV. See [Publishing a report](#publishing-a-report-api-06-adr-014).
+- **Report factory** `(resolver, params) -> PackReport` — **plugin API 0.6 (ADR-014):** publishes a book-scoped report under a key, served at `GET /api/v1/reports/pack/{key}` as PDF (through the shared layout engine) or CSV — and, with ``data`` set, as JSON under ``?format=json`` (**plugin API 0.8, ADR-023**: the structured rows a UI consumes, the same fold the PDF renders from). See [Publishing a report](#publishing-a-report-api-06-adr-014).
 
 `Resolver` (inside-transaction helper):
 
@@ -60,6 +60,7 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 - `resolve.prior_documents(key)` — **plugin API 0.3 (ADR-011):** every posted voucher of the book whose `meta` carries `key`, oldest first, as `PriorDocument(voucher_id, voucher_no, voucher_date, reversal_of, meta)` — plus every voucher reversing one of those, so folds can net document pairs. The kernel interprets nothing; the payload is exactly what was stored.
 - `resolve.lock(name)` — **plugin API 0.3 (ADR-011):** transaction-scoped advisory lock on `"{book}:{name}"`, released at commit/rollback. Lock a voucher's names in **one sorted pass** (deadlock discipline).
 - `resolve.fy_start_month` — **plugin API 0.4 (ADR-012):** the book's fiscal-year start month, 1–12, read-only — the one fact a year-to-date fold needs to window its accumulators. Immutable once the book has vouchers.
+- `resolve.ledger_entries(ledger_id)` — **plugin API 0.8 (ADR-023):** every posted entry of the book on one ledger, oldest first, as `LedgerEntryLine(voucher_id, voucher_no, voucher_date, reversal_of, dc, amount, narration, meta)` — the engine-side rows a ledger statement folds, with the carrying voucher's `meta` so a pack can join its own documents (bill links) to the accounting lines. Book-scoped like every Resolver read; a ledger of another book answers empty.
 
 `api_compat` is a **floor, not a pin** (ADR-011): a plugin declaring an older minor keeps loading on a newer build; a plugin declaring a newer minor is refused loudly.
 
@@ -126,6 +127,7 @@ the kernel serves them at `GET /api/v1/reports/pack/{key}`:
 from ledgerforge.plugins import PackReport, PluginManifest
 
 PLUGIN = PluginManifest(name="tds-pack", version="0.1.0", api_compat="0.6")
+```
 
 ### Declaring a UI slot (API 0.7, ADR-019)
 
@@ -136,12 +138,14 @@ registry call, one manifest attribute:
 from ledgerforge.plugins import PluginManifest, SlotSpec
 
 PLUGIN = PluginManifest(
-    name="my-dash-pack", version="0.1.0", api_compat="0.7",
+    name="my-dash-pack",
+    version="0.1.0",
+    api_compat="0.7",
     slots=(
         SlotSpec(
-            key="my-dashboard",           # lowercase slug, unique across packs
-            title="My dashboard",           # shown in the Alt+U picker
-            html=HTML,                      # inline (<=128 KiB), or url="https://…"
+            key="my-dashboard",  # lowercase slug, unique across packs
+            title="My dashboard",  # shown in the Alt+U picker
+            html=HTML,  # inline (<=128 KiB), or url="https://…"
         ),
     ),
 )
@@ -156,7 +160,9 @@ Escape inside the sandbox posts `lf-slot:close`. The full protocol and a
 complete dashboard live in `ledgerforge/contrib/example_slot.py`;
 the design contract is [ADR-019](adr/019-sandbox-ui-slots.md).
 
+The report example, complete with the 0.8 JSON payload:
 
+```python
 def register(registry):
     registry.register_report("tds", tds_report)
 
@@ -168,10 +174,18 @@ def tds_report(resolver, params) -> PackReport:
     if not month:
         raise ValidationError("tds: pass ?month=YYYY-MM")
     rows = fold_documents(resolver.prior_documents("invoice"), month)
+    data = {"month": month, "rows": [row_as_json(r) for r in rows]}  # plugin API 0.8
     if params.get("format") == "csv":
-        return PackReport(title=f"TDS {month}", filename=f"TDS {month}", csv=to_csv(rows))
-    return PackReport(title=f"TDS {month}", filename=f"TDS {month}", view=tds_view(rows))
+        return PackReport(
+            title=f"TDS {month}", filename=f"TDS {month}", csv=to_csv(rows), data=data
+        )
+    return PackReport(title=f"TDS {month}", filename=f"TDS {month}", view=tds_view(rows), data=data)
 ```
+
+With `data` set, `GET /api/v1/reports/pack/{key}?format=json` answers the
+payload as JSON — one fold feeding the PDF, the CSV *and* a UI. The bills
+pack (ADR-023) is the reference consumer-producer: its `bills-open` report
+is what both allocation dialogs read.
 
 The contract:
 
