@@ -67,6 +67,10 @@ tests/
                           (real key events through the keyboard-kit pipeline)
   payslipScreen.spec.tsx  acceptance: runs indexed, Ctrl+P prints the PDF,
                           Esc is back (ADR-013)
+e2e/
+  keyboard-flow.spec.ts   browser-level: the full keyboard flow in real
+                          Chromium against the live engine + PostgreSQL
+                          (v0.16; `make e2e` from the repo root, CI job `e2e`)
 ```
 
-`npm test` · `npm run typecheck` · `npm run build`
+`npm test` · `npm run typecheck` · `npm run build` · `npm run test:e2e`

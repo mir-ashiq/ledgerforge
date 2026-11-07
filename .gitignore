@@ -22,3 +22,8 @@ node_modules/
 .vscode/
 .DS_Store
 plugins/
+
+# Playwright (browser E2E, frontend/web)
+test-results/
+playwright-report/
+blob-report/

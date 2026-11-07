@@ -47,3 +47,12 @@ baseline-check:
 bench:
         python scripts/bench_hierarchy.py $(if $(PGSERVER_DIR),--pgserver-dir $(PGSERVER_DIR),--admin-dsn $(BENCH_ADMIN_DSN))
         python scripts/bench_posting.py $(if $(PGSERVER_DIR),--pgserver-dir $(PGSERVER_DIR),--admin-dsn $(BENCH_ADMIN_DSN))
+
+## Browser-level E2E (v0.16): the full keyboard flow in real Chromium.
+## Prereqs: pip install -e ".[dev]", npm ci in frontend/web, and once:
+##   npx playwright install chromium
+## Database: a fresh lf_e2e via the embedded pgserver (or point
+## LF_TEST_ADMIN_URL at any running postgres superuser DSN).
+e2e:
+	python scripts/e2e_setup_db.py
+	cd frontend/web && npx playwright test
