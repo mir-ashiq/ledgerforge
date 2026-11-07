@@ -12,6 +12,13 @@ Demonstrates every hook type (docs/plugin-guide.md):
 All arithmetic is exact ``Decimal`` (Law 3); tax rounds half-up to 2 places,
 and the SGST line is computed as the remainder so the split always sums
 exactly to the total tax.
+
+NOTE (v0.13, ADR-017): this module is the **teaching example** — the plugin
+guide's worked demonstration. The real GST localization pack is
+``ledgerforge.contrib.gst`` (place of supply, HSN rate tables, GSTR
+statements, the IRN outbox); it owns the ``meta.gst`` entry-point in a
+running server. Load one or the other: both transformers claim the same
+meta key, and loading both would double-tax a quick-tax voucher.
 """
 
 from __future__ import annotations

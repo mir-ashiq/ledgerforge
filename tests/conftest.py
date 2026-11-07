@@ -122,11 +122,11 @@ def db_session(sqlalchemy_url: str):
 
 @pytest.fixture()
 def plugin_manager():
-    from ledgerforge.contrib import example_gst
+    from ledgerforge.contrib import gst
     from ledgerforge.plugins import PluginManager
 
     mgr = PluginManager()
-    mgr.load_module(example_gst)
+    mgr.load_module(gst)
     return mgr
 
 

@@ -38,11 +38,29 @@ def test_gst_transformer_splits_tax(client, fresh_db):
     assert ledgers["SGST Payable"]["group_name"] == "Duties & Taxes"
 
 
-def test_gst_odd_rate_splits_exactly(client, fresh_db):
-    """Rate 15 on 333.33: tax 50.00 → CGST 25.00 + SGST 25.00; the split
-    always sums to the total tax exactly (remainder arithmetic)."""
+def test_gst_odd_amount_splits_exactly(client, fresh_db):
+    """Rate 5 on 333.33: tax 16.67 → CGST 8.34 + SGST 8.33; the split
+    always sums to the total tax exactly (remainder arithmetic). The v0.13
+    GST pack whitelists rates to the statutory slabs — a non-slab rate
+    (15, 20, …) is a fat-finger veto, tested in test_gst_plugin.py."""
     create_ledger(client, "Odd Traders", "Sundry Debtors")
     create_ledger(client, "Odd Sales", "Sales Accounts")
+    r = post_voucher(
+        client,
+        meta={"gst": {"rate": "5"}},
+        entries=[
+            {"ledger_name": "Odd Traders", "dc": "D", "amount": "333.33"},
+            {"ledger_name": "Odd Sales", "dc": "C", "amount": "333.33"},
+        ],
+    )
+    assert r.status_code == 201, r.text
+    lines = {(e["ledger_name"], e["dc"]): Decimal(e["amount"]) for e in r.json()["entries"]}
+    assert lines[("Odd Traders", "D")] == Decimal("350.00")
+    assert lines[("CGST Payable", "C")] == Decimal("8.34")  # half-up of 8.335
+    assert lines[("SGST Payable", "C")] == Decimal("8.33")  # the remainder
+    assert lines[("CGST Payable", "C")] + lines[("SGST Payable", "C")] == Decimal("16.67")
+
+    # a non-slab rate is refused loudly (the compliance pack's whitelist)
     r = post_voucher(
         client,
         meta={"gst": {"rate": "15"}},
@@ -51,10 +69,8 @@ def test_gst_odd_rate_splits_exactly(client, fresh_db):
             {"ledger_name": "Odd Sales", "dc": "C", "amount": "333.33"},
         ],
     )
-    assert r.status_code == 201, r.text
-    lines = {(e["ledger_name"], e["dc"]): Decimal(e["amount"]) for e in r.json()["entries"]}
-    assert lines[("Odd Traders", "D")] == Decimal("383.33")
-    assert lines[("CGST Payable", "C")] + lines[("SGST Payable", "C")] == Decimal("50.00")
+    assert r.status_code == 422
+    assert "not a GST slab" in r.json()["detail"]
 
 
 def test_weekend_policy_validator(client, fresh_db):
@@ -86,10 +102,10 @@ def test_weekend_policy_validator(client, fresh_db):
 
 
 def test_posted_event_recorded(client, fresh_db):
-    from ledgerforge.contrib import example_gst
+    from ledgerforge.contrib import gst
 
     create_ledger(client, "Event Sales", "Sales Accounts")
-    example_gst.POSTED_EVENTS.clear()
+    gst.POSTED_EVENTS.clear()
     r = post_voucher(
         client,
         entries=[
@@ -98,7 +114,7 @@ def test_posted_event_recorded(client, fresh_db):
         ],
     )
     assert r.status_code == 201, r.text
-    assert example_gst.POSTED_EVENTS[-1]["voucher_no"] == r.json()["voucher_no"]
+    assert gst.POSTED_EVENTS[-1]["voucher_no"] == r.json()["voucher_no"]
 
 
 def test_api_compatibility_guard():
@@ -245,15 +261,20 @@ def test_resolver_lock_is_namespaced_and_reentrant(client, fresh_db, db_session)
 
 
 def test_entry_point_discovery():
-    """The example plugin is discoverable via the ledgerforge.plugins
-    entry-point group (this is how pip-installed packs load)."""
+    """The GST pack is discoverable via the ledgerforge.plugins entry-point
+    group (this is how pip-installed packs load) — the v0.13 release that
+    grew example_gst into a real localization plugin swapped the entry-point
+    (ADR-017); the example stays importable as the plugin guide's teaching
+    module, but only the gst pack owns meta.gst in a running server."""
     from importlib.metadata import entry_points
 
     from ledgerforge.plugins import PluginManager
 
     names = {ep.name for ep in entry_points(group="ledgerforge.plugins")}
-    assert "example_gst" in names
+    assert "gst" in names
+    assert "example_gst" not in names
 
     mgr = PluginManager()
     mgr.discover()
-    assert any(m.name == "example-gst" for m in mgr.loaded)
+    assert any(m.name == "gst" for m in mgr.loaded)
+    assert not any(m.name == "example-gst" for m in mgr.loaded)

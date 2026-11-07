@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ledgerforge"
-version = "0.12.0"
+version = "0.13.0"
 description = "Community-driven, keyboard-first, double-entry business management engine — inspired by TallyPrime"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -49,9 +49,10 @@ Changelog = "https://github.com/mir-ashiq/ledgerforge/releases"
 
 [project.scripts]
 ledgerforge = "ledgerforge.__main__:main"
+lf-irn-bridge = "ledgerforge.contrib.irn_bridge:main"
 
 [project.entry-points."ledgerforge.plugins"]
-example_gst = "ledgerforge.contrib.example_gst"
+gst = "ledgerforge.contrib.gst"
 invoicing = "ledgerforge.contrib.invoicing"
 inventory = "ledgerforge.contrib.inventory"
 payroll = "ledgerforge.contrib.payroll"

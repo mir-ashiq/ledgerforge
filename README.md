@@ -477,6 +477,53 @@ curl -s "localhost:8000/api/v1/reports/pack/tds?period=2026-10&component=TDS,Inc
 Design: [ADR-014](docs/adr/014-statutory-bridge.md),
 [plugin guide](docs/plugin-guide.md#publishing-a-report-api-06-adr-014).
 
+## GST compliance pack: place of supply, HSN tables, GSTR & e-invoicing (ADR-017)
+
+The plugin guide's worked example grew up: the **gst pack** (the fifth
+business pack, zero schema change, issue #6) is a real India localization.
+Post a document-mode sale and the transformer derives the TallyPrime lines
+— party at the grand total, one line per item, tax under *Duties & Taxes* —
+with the levy decided by **place of supply**: same state as the supplier ⇒
+CGST + SGST (the SGST line the exact remainder), different state ⇒ IGST.
+An item's slab comes from an **HSN rate table with effective dates** —
+mobile phones were 12% until 2020-03-31 and 18% from 2020-04-01, and a
+2019-dated voucher gets 12% because the calendar says so, not because
+someone edited the code (operators load their own notification history via
+`LF_GST_HSN_JSON`; the shipped table is an illustrative seed).
+
+Two **pack reports** serve the statements: `gstr1` (the outward B2B invoice
+register, GSTIN-wise, reversals netted) and `gst-hsn` (the HSN summary,
+`side=outward|inward|both`) — PDF via the shared layout engine or CSV,
+quick-tax vouchers footnoted rather than invented into GSTIN rows.
+
+The **e-invoicing bridge** is split along the plugin contract: B2B sales
+queue after commit to the `LF_GST_OUTBOX` JSONL outbox (never a network
+call inside posting), and `lf-irn-bridge` — a separate process — ships
+them to the operator's IRP adapter: 2xx records the IRN, 4xx parks with
+the error, 5xx/network retries on the next pass.
+
+```bash
+# a Karnataka supplier sells to Tamil Nadu — IGST, slab from the HSN table
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "SAL", "voucher_date": "2026-11-07",
+  "entries": [{"ledger_name": "Cash", "dc": "D", "amount": "0.01"}],
+  "meta": {"gst": {
+    "mode": "sale", "party": "Madras Machines", "party_gstin": "33ABCDE1234F1Z5",
+    "supplier_state": "29", "place_of_supply": "33",
+    "items": [{"description": "Feature phones", "hsn": "8517", "qty": 4, "rate": "1250.00"}]
+  }}}'
+
+# the month's outward B2B register, and its HSN summary
+curl -s "localhost:8000/api/v1/reports/pack/gstr1?period=2026-11" -o gstr1.pdf
+curl -s "localhost:8000/api/v1/reports/pack/gst-hsn?period=2026-11&side=both&format=csv" -o hsn.csv
+
+# the out-of-process bridge against your IRP adapter
+LF_GST_OUTBOX=/var/lib/ledgerforge/irn.jsonl lf-irn-bridge --endpoint https://asp.example/irp --once
+```
+
+Design: [ADR-017](docs/adr/017-gst-pack.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## What's inside
 
 ```
@@ -489,8 +536,10 @@ db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
                     + roles + per-book claims) · reporting (reports, printing:
                     the PDF writer + layout engine) · seeding · plugins ·
-                    contrib (example_gst + the invoicing, inventory, payroll
-                    and statutory packs)
+                    contrib (example_gst — the teaching module — plus the gst,
+                    invoicing, inventory, payroll and statutory packs; the gst
+                    pack ships with irn_bridge, the out-of-process e-invoicing
+                    bridge)
 frontend/           keyboard-kit — framework-agnostic command/keybinding/focus framework (TS)
                     web — the voucher-entry screen (with the print chip), command
                     palette, payslip screen and daybook browser (React + Vite)
@@ -569,7 +618,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.12.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.13.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -583,14 +632,18 @@ first pack report (plugin API 0.6), with `Ctrl+P` on the voucher screen
 printing any posting voucher — the daybook browser (v0.11): `Alt+B`
 browses every posted voucher with engine-computed amounts and reprints any
 of them, while the statutory pack gains TDS as the second pack report —
-what the runs actually withheld, per deductee — **and the trust bridge
+what the runs actually withheld, per deductee — the trust bridge
 (v0.12): a signed community plugin index
 ([community/plugins](community/plugins)) with the full author/operator
 lifecycle (`ledgerforge plugins keygen/sign/install/ack/list`), a
 boot-time trust gate that refuses unsigned, tampered or unapproved
 drop-ins *before executing a line of them*, and the plugins screen
 (`Alt+X`) showing every loaded pack's channel and trust basis plus every
-refusal and why (ADR-016)**. The planned roadmap is fully landed; what
+refusal and why (ADR-016) — **and the GST compliance pack (v0.13, issue
+#6): place of supply (CGST+SGST vs IGST), HSN rate tables with effective
+dates, GSTR-1 and HSN-summary statements as pack reports, and the
+e-invoicing bridge — the IRN outbox plus the out-of-process
+`lf-irn-bridge` (ADR-017)**. The planned roadmap is fully landed; what
 remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
 
@@ -620,6 +673,10 @@ remains is deliberately conditional (see
       signatures (facts + bytes), the boot-time drop-in gate (refuse before
       execution), the `ledgerforge plugins` CLI, the admin plugins API and
       the `Alt+X` screen (ADR-016)
+- [x] GST compliance pack (issue #6): place of supply (CGST+SGST vs IGST),
+      HSN rate tables with effective dates, GSTR-1 & HSN-summary statements
+      as pack reports, and the e-invoicing bridge — the IRN outbox + the
+      out-of-process `lf-irn-bridge` (ADR-017)
 - [ ] Report scale-out (partitioning + BRIN) — only when books pass
       millions of entries
 

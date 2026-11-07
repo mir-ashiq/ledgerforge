@@ -1,6 +1,6 @@
 # Plugin Guide
 
-**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report); **publishing:** `community/plugins/webhook_forwarder.py` (a signed community release) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, ADR-016, `docs/analysis.md` §5.
+**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (the teaching module — tax transform), `ledgerforge/contrib/gst.py` (a real localization pack: place of supply, HSN rate tables, GSTR statements, the IRN outbox), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report); **publishing:** `community/plugins/webhook_forwarder.py` (a signed community release) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, ADR-016, ADR-017, `docs/analysis.md` §5.
 
 ## The two tiers
 

@@ -301,16 +301,17 @@ def test_duplicate_manifest_name_refused(tmp_path, publisher):
     """Same pack twice (e.g. entry-point and drop-in): the second is
     refused — transformers would otherwise run twice on one posting."""
     private_pem, public_b64 = publisher
-    # identical manifest name to the first-party example plugin
-    _write_plugin(tmp_path, "example_gst_too", name="example-gst")
-    _sign_into(tmp_path, "example_gst_too", private_pem, name="example-gst")
+    # identical manifest name to the first-party GST pack (the v0.13
+    # entry-point; ADR-017)
+    _write_plugin(tmp_path, "gst_too", name="gst")
+    _sign_into(tmp_path, "gst_too", private_pem, name="gst")
     store = TrustStore.load(tmp_path)
     store.approve_publisher(public_b64)
     store.save()
     mgr = PluginManager()
     mgr.discover(extra_path=str(tmp_path))
-    assert sum(1 for r in mgr.plugins if r.manifest.name == "example-gst") == 1
-    refusal = next(r for r in mgr.refusals if r.module == "example_gst_too")
+    assert sum(1 for r in mgr.plugins if r.manifest.name == "gst") == 1
+    refusal = next(r for r in mgr.refusals if r.module == "gst_too")
     assert "already loaded" in refusal.reason
 
 

@@ -42,7 +42,15 @@ EXPECTED_GROUPS = {
 
 
 def test_predefined_groups_loaded(client):
-    groups = client.get("/api/v1/groups").json()
+    # pin the default book once more than one exists (the same discipline as
+    # the pack suites — a module earlier in the run may have created one)
+    books = client.get("/api/v1/books").json()
+    headers = (
+        {"X-Book-Id": str(next(b["id"] for b in books if b["slug"] == "default"))}
+        if len(books) > 1
+        else None
+    )
+    groups = client.get("/api/v1/groups", headers=headers).json()
     assert {g["name"] for g in groups} >= EXPECTED_GROUPS
     natures = {g["name"]: g["nature"] for g in groups}
     assert natures["Sales Accounts"] == "income"  # P&L side
