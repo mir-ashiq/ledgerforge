@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -439,6 +440,18 @@ class PluginRegistry:
         self.report_views[key] = factory
 
 
+def split_plugin_path(extra_path: str) -> list[str]:
+    """LF_PLUGIN_PATH entries, split on the platform's path separator.
+
+    ``os.pathsep``, never a hard-coded ``':'``: Windows paths carry a
+    drive-letter colon (``C:\\...\\plugins``) which a ``':'`` split would
+    tear apart — the desktop edition (ADR-021) loads drop-ins from
+    ``%LOCALAPPDATA%\\LedgerForge\\plugins``, so the separator must match
+    the platform.
+    """
+    return [entry for entry in (part.strip() for part in extra_path.split(os.pathsep)) if entry]
+
+
 class PluginManager:
     def __init__(self) -> None:
         self.registry = PluginRegistry()
@@ -564,7 +577,7 @@ class PluginManager:
             except Exception as exc:  # noqa: BLE001 — a bad plugin must not kill boot
                 logger.exception("failed to load plugin %s", ep.name)
                 self.refusals.append(PluginRefusal(module=ep.name, reason=str(exc)))
-        for raw in filter(None, [p.strip() for p in extra_path.split(":")]):
+        for raw in split_plugin_path(extra_path):
             base = Path(raw)
             if not base.is_dir():
                 logger.warning("LF_PLUGIN_PATH entry %s is not a directory", base)

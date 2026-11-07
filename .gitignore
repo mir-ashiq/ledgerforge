@@ -27,3 +27,6 @@ plugins/
 test-results/
 playwright-report/
 blob-report/
+
+# Desktop packaging (ADR-021) — generated on the build runner, never committed
+desktop/version_info.txt

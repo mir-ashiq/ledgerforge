@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     #: Allow voucher dates in the future (beyond tomorrow).
     allow_future_dates: bool = False
 
+    #: Serve a built web UI (a directory with index.html) same-origin at
+    #: ``/`` — the desktop edition's browser window (ADR-021), or any
+    #: single-origin deployment. Empty = API only.
+    static_dir: str = ""
+
     # --- authentication (issue #1) --------------------------------------
     #: ``disabled`` = dev only: anonymous admin, every endpoint open.
     #: ``oidc`` = production: Bearer JWTs verified against the issuer.

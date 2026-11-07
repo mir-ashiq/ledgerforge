@@ -511,6 +511,25 @@ def cmd_scale_out_ensure(args) -> int:
     return 0
 
 
+# ------------------------------------------------------------- desktop (ADR-021)
+
+
+def cmd_desktop(args: argparse.Namespace) -> int:
+    """Delegate to the desktop edition's own CLI."""
+    from .desktop import main as desktop_main
+
+    argv: list[str] = []
+    if args.data_dir:
+        argv += ["--data-dir", str(args.data_dir)]
+    if args.port:
+        argv += ["--port", str(args.port)]
+    if args.no_browser:
+        argv.append("--no-browser")
+    if args.smoke:
+        argv.append("--smoke")
+    return desktop_main(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ledgerforge",
@@ -612,6 +631,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("from_year", type=int)
     p.add_argument("to_year", type=int)
     p.set_defaults(fn=cmd_scale_out_ensure)
+
+    desktop = sub.add_parser(
+        "desktop",
+        help="the zero-config desktop edition: embedded PostgreSQL + web UI on "
+        "127.0.0.1 (ADR-021; needs the 'desktop' extra)",
+    )
+    desktop.add_argument("--data-dir", type=Path, default=None, help="data directory")
+    desktop.add_argument("--port", type=int, default=None, help="loopback port")
+    desktop.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    desktop.add_argument("--smoke", action="store_true", help="boot headless, self-check, exit 0/1")
+    desktop.set_defaults(fn=cmd_desktop)
 
     args = parser.parse_args(argv)
     try:

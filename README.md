@@ -3,6 +3,7 @@
 **Community-driven, keyboard-first business management with an append-only, exact-decimal double-entry engine — inspired by TallyPrime.**
 
 [![CI](https://github.com/mir-ashiq/ledgerforge/actions/workflows/ci.yml/badge.svg)](https://github.com/mir-ashiq/ledgerforge/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mir-ashiq/ledgerforge)](https://github.com/mir-ashiq/ledgerforge/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org)
 [![PostgreSQL 16+](https://img.shields.io/badge/PostgreSQL-16%2B-336791.svg)](https://www.postgresql.org)
@@ -54,6 +55,16 @@ TallyPrime proved that accounting software can be *faster than the accountant*. 
 Decisions are recorded as ADRs in [docs/adr/](docs/adr/).
 
 ## Quickstart
+
+**Windows desktop (zero-config):**
+
+Download `LedgerForge-<version>-win64.zip` from
+[releases](https://github.com/mir-ashiq/ledgerforge/releases/latest), extract,
+and double-click `LedgerForge.exe`. An embedded PostgreSQL, the engine and the
+keyboard-first UI come up on `127.0.0.1` and your browser opens on the
+voucher screen — nothing to install, nothing exposed to the network. Your
+books live in `%LOCALAPPDATA%\LedgerForge`. More:
+[the desktop edition](#the-desktop-edition-a-windows-application-adr-021).
 
 **Docker:**
 
@@ -603,6 +614,45 @@ PLUGIN = PluginManifest(
 Design: [ADR-019](docs/adr/019-sandbox-ui-slots.md),
 [plugin guide](docs/plugin-guide.md).
 
+## The desktop edition: a Windows application (ADR-021)
+
+Everything above assumes an operator: PostgreSQL somewhere, containers,
+ports. The desktop edition is the other promise kept — *download,
+double-click, start typing*:
+
+- **`LedgerForge.exe`** (built per release on a real Windows runner by the
+  [`release-windows`](.github/workflows/release-windows.yml) workflow) boots
+  an **embedded PostgreSQL** (the pgserver portable distribution) into
+  `%LOCALAPPDATA%\LedgerForge\pgdata`, provisions the default book, serves the
+  built web UI **same-origin** on `127.0.0.1:8420`, and opens your browser.
+  The console window is the app — logs visible, `Ctrl+C` to stop, data
+  survives restarts and upgrades.
+- **The engine is not downgraded.** No SQLite fork: the same deferrable
+  Law-1 trigger, the same `NUMERIC(26,8)`, the same partitions — one engine,
+  two deployments.
+- **Loopback-only and single-user by construction**: `LF_AUTH_MODE=disabled`
+  on a port no other machine can reach; the `LF_REQUIRE_AUTH` guard stays
+  armed for network deployments (ADR-020).
+- **The trust gate still gates.** Drop signed community plugins into
+  `%LOCALAPPDATA%\LedgerForge\plugins` — the ADR-016 verify-before-execute
+  gate is unchanged.
+- **Every release self-proves**: the workflow runs `LedgerForge.exe --smoke`
+  (boot → schema → `/health` → web UI) before publishing the zip + SHA-256
+  checksums. A failed smoke test fails the release.
+
+From source (any OS — pgserver ships Linux/macOS binaries too):
+
+```bash
+pip install -e ".[desktop]"
+npm --prefix frontend/web run build
+ledgerforge-desktop            # or: ledgerforge desktop
+ledgerforge-desktop --smoke    # the same self-check the release runs
+```
+
+The launcher lives in `src/ledgerforge/desktop.py`, the packaging in
+[desktop/](desktop/) (PyInstaller spec + build guide), the decision record in
+[ADR-021](docs/adr/021-desktop-edition.md).
+
 ## What's inside
 
 ```
@@ -631,6 +681,9 @@ tests/              laws, hierarchy, immutability, reports, concurrency, plugins
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
 scripts/            benchmarks (bench_hierarchy.py, bench_posting.py,
                     bench_scale_out.py), init_db.sh, regen_baseline.py
+desktop/            the desktop edition's packaging (ADR-021): the PyInstaller
+                    spec, the frozen-app entry point, the quickstart that ships
+                    in the zip — plus release-windows.yml building it per tag
 ```
 
 ## Performance (measured, reproducible)
@@ -701,7 +754,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.16.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.17.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -736,9 +789,13 @@ with `/health` reporting `auth_mode`, tooled curator-key rotation
 (`plugins verify-index` / `rotate-curator`), the browser-level E2E tier
 proving the full keyboard flow in real Chromium (CI job `e2e`), and the
 production runbook — `ops/` backup + restore drills, the hardened
-`docker-compose.prod.yml`, [docs/deployment.md](docs/deployment.md).
-The planned roadmap is fully landed; what
-remains is deliberately conditional (see
+`docker-compose.prod.yml`, [docs/deployment.md](docs/deployment.md) —
+and, beyond the planned roadmap, **the desktop edition (v0.17, ADR-021): a
+Windows application** — `LedgerForge.exe`, an embedded PostgreSQL, the web
+UI same-origin on loopback, released per tag with a self-proving smoke
+gate.
+The planned roadmap is fully landed; the desktop edition followed it, and
+what remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
@@ -786,6 +843,10 @@ remains is deliberately conditional (see
       browser-level E2E of the keyboard flow in CI, `ops/` backup +
       restore drills (Law-1 verified), `docker-compose.prod.yml` and
       [docs/deployment.md](docs/deployment.md)
+- [x] The desktop edition (v0.17, ADR-021): `LedgerForge.exe` — embedded
+      PostgreSQL (pgserver), the web UI same-origin on loopback, data in
+      `%LOCALAPPDATA%\LedgerForge`, the trust gate intact, built and
+      smoke-gated per release on `windows-latest`
 
 ## Contributing
 

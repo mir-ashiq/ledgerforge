@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from . import __version__
@@ -100,6 +102,21 @@ def create_app() -> FastAPI:
         # auth_mode rides along so a production monitor can alert on anything
         # other than "oidc" (docs/deployment.md — monitoring).
         return {"status": "ok", "version": __version__, "auth_mode": settings.auth_mode}
+
+    # --- the same-origin web UI (ADR-021) --------------------------------
+    # When LF_STATIC_DIR points at a built frontend (inside the desktop
+    # bundle, or a source checkout after `npm run build`), serve it at "/".
+    # Registered after the API routes, so the mount only catches what the
+    # engine did not claim — the desktop's browser window then talks to the
+    # API same-origin: no CORS, no dev proxy, no second port.
+    if settings.static_dir:
+        static_root = Path(settings.static_dir)
+        if (static_root / "index.html").is_file():
+            app.mount("/", StaticFiles(directory=static_root, html=True), name="web")
+        else:
+            logging.getLogger("ledgerforge").warning(
+                "LF_STATIC_DIR=%s has no index.html — serving the API only", static_root
+            )
 
     return app
 
