@@ -4,7 +4,12 @@
  * origin is the only origin involved.
  */
 
-import type { GroupOut, LedgerOut, VoucherOut, VoucherPostPayload } from './types';
+import type {
+  GroupOut,
+  LedgerOut,
+  VoucherOut,
+  VoucherPostPayload,
+} from './types';
 
 const BASE = '/api/v1';
 
@@ -53,6 +58,19 @@ async function errorDetail(response: Response): Promise<string> {
   return `Request failed (HTTP ${response.status})`;
 }
 
+async function requestBlob(path: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}${path}`);
+  } catch {
+    throw new ApiError(`Cannot reach the engine at ${BASE} — is it running? (make dev)`, 0);
+  }
+  if (!response.ok) {
+    throw new ApiError(await errorDetail(response), response.status);
+  }
+  return response.blob();
+}
+
 export interface CreateLedgerInput {
   name: string;
   group_name: string;
@@ -65,4 +83,10 @@ export const api = {
     request<LedgerOut>('/ledgers', { method: 'POST', body: JSON.stringify(input) }),
   postVoucher: (payload: VoucherPostPayload) =>
     request<VoucherOut>('/vouchers', { method: 'POST', body: JSON.stringify(payload) }),
+  /** Posted vouchers, newest first (the payslip screen filters payroll runs). */
+  vouchers: (limit = 200) => request<VoucherOut[]>(`/vouchers?limit=${limit}`),
+  /** A voucher as its PDF (ADR-013): payslip for payroll runs with
+   * `employee`, tax invoice for invoices, voucher slip otherwise. */
+  voucherPdf: (voucherId: number, employee: string): Promise<Blob> =>
+    requestBlob(`/vouchers/${voucherId}/pdf?employee=${encodeURIComponent(employee)}`),
 };

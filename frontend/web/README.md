@@ -1,7 +1,7 @@
 # @ledgerforge/web
 
-The voucher-entry screen — LedgerForge's first real screen, built on
-[`@ledgerforge/keyboard-kit`](../keyboard-kit) per [docs/keyboard-ux.md](../../docs/keyboard-ux.md) and **ADR-004**. A full sale posts mouse-free at typing speed.
+The voucher-entry screen and the payslip screen, built on
+[`@ledgerforge/keyboard-kit`](../keyboard-kit) per [docs/keyboard-ux.md](../../docs/keyboard-ux.md) and **ADR-004**/**ADR-013**. A full sale posts mouse-free at typing speed; a payslip prints with `Ctrl+P`.
 
 ## Run it
 
@@ -30,10 +30,12 @@ Or the whole stack containerized: `docker compose up` → http://localhost:5173.
 | `Alt+C` | create the missing ledger here, focus returns to the grid |
 | `Alt+D` | delete the current line |
 | `Alt+N` | new voucher (asks before discarding a dirty draft) |
+| `Alt+P` | payslips — browse payroll runs, print one (ADR-013) |
 | `F2` | change the voucher date |
 | `F4`–`F9` | Contra · Payment · Receipt · Journal · Sales · Purchase |
 | `Ctrl+K` | keyboard reference (live from the keymap) |
-| `Esc` | back — close picker → close dialog → (gateway later) |
+| `Ctrl+P` | print the payslip (on the payslip screen) |
+| `Esc` | back — close picker → close dialog → previous screen |
 
 ## How it holds the financial laws
 
@@ -54,13 +56,17 @@ src/
   voucher/reducer.ts    pure grid state machine (Enter-advance, auto-append…)
   voucher/validate.ts   exact totals + Law-1 pre-post validation
   voucher/pickerFilter.ts   type-ahead ranking
-  api/                  fetch client + DTOs (amounts as strings)
+  payslip/model.ts      the run index: posted vouchers → employees/periods
+  api/                  fetch client + DTOs (amounts as strings, PDF blobs)
   components/           VoucherScreen, VoucherGrid (virtualized rows),
-                        LedgerPicker, create/date dialogs, BalanceHud, …
+                        PayslipScreen, LedgerPicker, create/date dialogs,
+                        BalanceHud, …
 tests/
   money.spec.ts, reducer.spec.ts, pickerFilter.spec.ts   unit tests
   voucherScreen.spec.tsx  acceptance: a full sale posted mouse-free
                           (real key events through the keyboard-kit pipeline)
+  payslipScreen.spec.tsx  acceptance: runs indexed, Ctrl+P prints the PDF,
+                          Esc is back (ADR-013)
 ```
 
 `npm test` · `npm run typecheck` · `npm run build`

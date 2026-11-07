@@ -48,5 +48,46 @@ export interface VoucherOut {
   posted_at: string;
   client_token: string;
   replayed: boolean;
+  /** Business-document payloads (ADR-010/012): invoice, stock, payroll… */
+  meta?: Record<string, unknown> | null;
   entries: { line_no: number; ledger_id: number; ledger_name: string; dc: Dc; amount: string }[];
+}
+
+// ---- payroll documents (ADR-012) -------------------------------------------
+
+export type PayrollComponentKind = 'earning' | 'withheld' | 'employer';
+
+export interface PayrollComponent {
+  name: string;
+  amount: string;
+  kind: PayrollComponentKind;
+  /** Employer components book into this liability ledger. */
+  liability?: string;
+}
+
+export interface PayrollRunEmployee {
+  employee: string;
+  components: PayrollComponent[];
+}
+
+export interface PayrollComputedEmployee {
+  employee: string;
+  gross: string;
+  withheld: string;
+  employer: string;
+  net: string;
+  ytd: { gross: string; withheld: string; employer: string; net: string; runs: number };
+  components: Array<PayrollComponent & { ytd: string }>;
+}
+
+export interface PayrollRunDoc {
+  mode: 'run';
+  period: string;
+  employees: PayrollRunEmployee[];
+  computed?: {
+    period: string;
+    fy: string;
+    employees: PayrollComputedEmployee[];
+    total_net: string;
+  };
 }

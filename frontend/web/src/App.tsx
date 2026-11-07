@@ -1,7 +1,7 @@
 /**
  * Application root: owns the keymap lifecycle (with user-binding persistence),
- * the prefetched masters (ledger + group indexes) and the command palette.
- * The screen itself is VoucherScreen.
+ * the prefetched masters (ledger + group indexes), screen switching and the
+ * command palette. Screens: VoucherScreen (entry) and PayslipScreen (ADR-013).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -9,14 +9,18 @@ import { keymap, useCommand } from '@ledgerforge/keyboard-kit/react';
 import { api } from './api/client';
 import type { GroupOut, LedgerOut } from './api/types';
 import { CommandPalette } from './components/CommandPalette';
-import { localStorageKeymapStore } from './keymapStore';
+import { PayslipScreen } from './components/PayslipScreen';
 import { VoucherScreen } from './components/VoucherScreen';
+import { localStorageKeymapStore } from './keymapStore';
+
+type Screen = 'voucher' | 'payslip';
 
 export default function App() {
   const [ledgers, setLedgers] = useState<LedgerOut[]>([]);
   const [groups, setGroups] = useState<GroupOut[]>([]);
   const [apiState, setApiState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [showPalette, setShowPalette] = useState(false);
+  const [screen, setScreen] = useState<Screen>('voucher');
   const ctxRef = useRef<Record<string, unknown>>({});
   const paletteCtxRef = useRef<Record<string, unknown>>({});
 
@@ -54,17 +58,26 @@ export default function App() {
     { id: 'palette.toggle', title: 'Command palette', run: () => setShowPalette((v) => !v) },
     'Primary+K',
   );
+  // the payslip screen (ADR-013): Alt+P opens, Esc is back
+  useCommand(
+    { id: 'payslip.open', title: 'Payslips — view & print salary slips', run: () => setScreen('payslip') },
+    'Alt+P',
+  );
 
   return (
     <>
-      <VoucherScreen
-        ledgers={ledgers}
-        groups={groups}
-        apiState={apiState}
-        onRetryMasters={() => void loadMasters()}
-        onLedgerCreated={(ledger) => setLedgers((prev) => [...prev, ledger])}
-        ctxRef={ctxRef}
-      />
+      {screen === 'voucher' ? (
+        <VoucherScreen
+          ledgers={ledgers}
+          groups={groups}
+          apiState={apiState}
+          onRetryMasters={() => void loadMasters()}
+          onLedgerCreated={(ledger) => setLedgers((prev) => [...prev, ledger])}
+          ctxRef={ctxRef}
+        />
+      ) : (
+        <PayslipScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      )}
       {showPalette && <CommandPalette onClose={() => setShowPalette(false)} ctxRef={paletteCtxRef} />}
     </>
   );
