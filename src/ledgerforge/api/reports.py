@@ -24,10 +24,13 @@ def get_trial_balance(
     book: BookDep,
     _: ReaderDep,
     as_of: Annotated[date | None, Query()] = None,
+    fast: Annotated[
+        bool, Query(description="ADR-018: source sums from the balance cache (always exact)")
+    ] = False,
 ):
     as_of = as_of or date.today()
-    response = trial_balance(session, book.id, as_of)
-    response["groups"] = group_rollups(session, book.id, as_of)
+    response = trial_balance(session, book.id, as_of, fast=fast)
+    response["groups"] = group_rollups(session, book.id, as_of, fast=fast)
     return response
 
 
@@ -38,8 +41,11 @@ def get_profit_loss(
     _: ReaderDep,
     date_from: Annotated[date, Query(alias="from")],
     date_to: Annotated[date, Query(alias="to")],
+    fast: Annotated[
+        bool, Query(description="ADR-018: S(to) − S(from − 1) from the balance cache")
+    ] = False,
 ):
-    return profit_loss(session, book.id, date_from, date_to)
+    return profit_loss(session, book.id, date_from, date_to, fast=fast)
 
 
 @router.get("/balance-sheet")
@@ -48,9 +54,12 @@ def get_balance_sheet(
     book: BookDep,
     _: ReaderDep,
     as_of: Annotated[date | None, Query()] = None,
+    fast: Annotated[
+        bool, Query(description="ADR-018: source sums from the balance cache (always exact)")
+    ] = False,
 ):
     as_of = as_of or date.today()
-    return balance_sheet(session, book.id, as_of)
+    return balance_sheet(session, book.id, as_of, fast=fast)
 
 
 @router.get("/fy-close")

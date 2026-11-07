@@ -524,13 +524,57 @@ LF_GST_OUTBOX=/var/lib/ledgerforge/irn.jsonl lf-irn-bridge --endpoint https://as
 Design: [ADR-017](docs/adr/017-gst-pack.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Report scale-out: the balance cache & yearly partitions (ADR-018)
+
+Books that grow past a million entries used to have a "known and boring"
+scaling path written down but not built. It is built now, opt-in on both
+axes, and the write path is untouched:
+
+- **The balance cache** (`rpt.balance_cache`) freezes exactly what the
+  period gate proves unpostable — everything below the earliest OPEN period
+  (closed periods are terminal, uncovered dates are refused). A row trigger
+  on `periods` deletes cached rows the moment a new or reopened open period
+  would make their zone writable again, *in the same transaction* — the
+  cache can only ever be slow, never wrong. `GET /reports/trial-balance
+  ?fast=true` (also `profit-loss`, `balance-sheet`) reads it; a cold or
+  stale cache is a full scan, not a wrong number.
+- **`rpt.refresh_balance_cache()`** rebuilds incrementally (the newly
+  frozen delta zone only), is advisory-locked per book, idempotent, and
+  maintains both inclusive sums (TB/Balance Sheet) and FYC-exclusive ones
+  (P&L — a close sweep enters the cached zone when its period closes in
+  turn).
+- **`ops.partition_entries_by_year()`** converts `voucher_entries` to
+  yearly range partitions in one transactional maintenance call: same
+  columns, checks, FKs and triggers (the deferrable Law-1 check stays sound
+  because a voucher's entries share its date and never span partitions),
+  covering index parent-level, BRIN on `voucher_date`, and a
+  `SECURITY DEFINER` trigger on *vouchers* creating missing year partitions
+  on demand — postings never stall at year boundaries and the app role
+  never needs DDL rights. `ops.unpartition_entries()` is the tested mirror;
+  cache rows are shape-agnostic and survive both directions.
+
+The operator surface (partition/unpartition are owner-only by design):
+
+```bash
+ledgerforge scale-out status                # shape, partitions, cache state
+ledgerforge scale-out refresh-cache         # incremental, idempotent
+ledgerforge scale-out partition --headroom 2   # maintenance window
+ledgerforge scale-out ensure 2031 2031      # the year-end ritual
+ledgerforge scale-out unpartition           # the tested revert
+```
+
+Admin API: `GET /api/v1/ops/scale-out`, `POST /api/v1/ops/scale-out/refresh-balance-cache`.
+Reproduce the numbers: `python scripts/bench_scale_out.py`.
+
+Design: [ADR-018](docs/adr/018-report-scale-out.md).
+
 ## What's inside
 
 ```
 db/                 schema.sql · functions.sql · migrations/ — Alembic tree:
                     frozen 0001 baseline + drift guard, 0002 multi-currency,
-                    0003 period locking, 0004 multi-book, 0005 voucher meta
-                    (ADR-006/007/008/009/010).
+                    0003 period locking, 0004 multi-book, 0005 voucher meta,
+                    0006 report scale-out (ADR-006/007/008/009/010/018).
                     The chart-of-accounts seed is code: ledgerforge/seeding.py
                     (one definition for bootstrap and POST /books — ADR-009).
 src/ledgerforge/    engine (posting/reversal/opening) · api (+books) · auth (OIDC
@@ -545,10 +589,12 @@ frontend/           keyboard-kit — framework-agnostic command/keybinding/focus
                     palette, payslip screen and daybook browser (React + Vite)
 tests/              laws, hierarchy, immutability, reports, concurrency, plugins, auth,
                     migrations, multi-currency, period locking, multi-book, invoicing,
-                    inventory, payroll, printing, statutory (PF/ESI/TDS), deep audit
+                    inventory, payroll, printing, statutory (PF/ESI/TDS), scale-out (the
+                    balance cache and the partition round-trip), deep audit
                     (adversarial: races, rounding boundaries, gate bypasses)
 docs/               Phase-1 analysis, ADRs, keyboard-ux plan, plugin guide, db design
-scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.sh, regen_baseline.py
+scripts/            benchmarks (bench_hierarchy.py, bench_posting.py,
+                    bench_scale_out.py), init_db.sh, regen_baseline.py
 ```
 
 ## Performance (measured, reproducible)
@@ -557,6 +603,7 @@ scripts/            benchmarks (bench_hierarchy.py, bench_posting.py), init_db.s
 
 - **Hierarchy rollups:** closure-table and recursive-CTE rollups measure at parity on a 429-group / 3,402-ledger / 120k-entry book (47 ms vs 48 ms for the whole-tree rollup) — the closure model wins on SQL simplicity, integrity, and drill-down queries, not on raw speed. Full discussion: [docs/analysis.md §3.8](docs/analysis.md).
 - **Concurrency:** 8 threads × 60 vouchers → 480/480 posted, strictly gapless numbering, zero deadlocks, ~174 vouchers/s on a single type's counter row, Trial Balance exact to the last sub-cent digit.
+- **Scale-out:** on a 400k-entry book (200k vouchers, 7 fiscal years, 5 closed), the warm balance cache reads a Trial Balance ~1.4× faster than the direct scan on both the plain and the partitioned shape (93ms vs 130ms; 107ms vs 148ms), with fast == slow asserted to the cent and partition pruning on every dated range — the gap widens as the frozen zone grows. `python scripts/bench_scale_out.py`.
 
 ## Authentication
 
@@ -677,7 +724,11 @@ remains is deliberately conditional (see
       HSN rate tables with effective dates, GSTR-1 & HSN-summary statements
       as pack reports, and the e-invoicing bridge — the IRN outbox + the
       out-of-process `lf-irn-bridge` (ADR-017)
-- [ ] Report scale-out (partitioning + BRIN) — only when books pass
+- [x] Report scale-out (v0.14, ADR-018): the balance cache (exact below
+      the open-period horizon, invalidated in-transaction when periods
+      change) with `?fast=true` report reads, and the transactional
+      yearly-partition conversion (`ledgerforge scale-out`) with a tested
+      revert
       millions of entries
 
 ## Contributing

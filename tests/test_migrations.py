@@ -260,13 +260,14 @@ def test_head_revision_is_single_and_parseable():
     from alembic.script import ScriptDirectory
 
     head = lf_migrations.head_revision()
-    assert head == "0005_voucher_meta"
+    assert head == "0006_report_scale_out"
     assert lf_migrations.revisions() == {
         "0001_baseline": None,
         "0002_multi_currency": "0001_baseline",
         "0003_period_locking": "0002_multi_currency",
         "0004_multi_book": "0003_period_locking",
         "0005_voucher_meta": "0004_multi_book",
+        "0006_report_scale_out": "0005_voucher_meta",
     }
     scripts = ScriptDirectory(str(lf_migrations.migrations_dir()))
     assert scripts.get_current_head() == head
@@ -306,13 +307,25 @@ def test_stepwise_upgrade_and_partial_downgrade(scratch_dbs):
 
     _upgrade(dsn)
     with psycopg.connect(dsn) as conn:
-        # at head (0004) the P&L is book-scoped: (BIGINT, DATE, DATE)
-        (has_join,) = conn.execute(
-            "SELECT pg_get_functiondef('rpt.profit_and_loss(BIGINT, DATE, DATE)'::regprocedure)"
+        # at head (0006) the P&L is book-scoped with the ADR-018 fast flag:
+        # (BIGINT, DATE, DATE, BOOLEAN). It delegates its per-ledger sums to
+        # rpt._ledger_sums_upto, which now owns the FYC exclusion.
+        (uses_helper,) = conn.execute(
+            "SELECT pg_get_functiondef("
+            "'rpt.profit_and_loss(BIGINT, DATE, DATE, BOOLEAN)'::regprocedure)"
+            " LIKE '%_ledger_sums_upto%'"
+        ).fetchone()
+        assert uses_helper is True
+        (has_fyc,) = conn.execute(
+            "SELECT pg_get_functiondef("
+            "'rpt._ledger_sums_upto(BIGINT, DATE, BOOLEAN, BOOLEAN)'::regprocedure)"
             " LIKE '%voucher_types%'"
         ).fetchone()
-        assert has_join is True
+        assert has_fyc is True
         assert conn.execute("SELECT to_regclass('periods')").fetchone()[0] is not None
+        # the scale-out objects exist (ADR-018)
+        assert conn.execute("SELECT to_regclass('rpt.balance_cache')").fetchone()[0] is not None
+        assert conn.execute("SELECT to_regnamespace('ops')").fetchone()[0] is not None
 
 
 def test_downgrade_baseline_drops_all(scratch_dbs):

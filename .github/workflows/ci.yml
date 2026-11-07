@@ -65,6 +65,7 @@ jobs:
         run: |
           python scripts/bench_hierarchy.py --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
           python scripts/bench_posting.py --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
+          python scripts/bench_scale_out.py --smoke --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
 
   keyboard-kit:
     runs-on: ubuntu-latest

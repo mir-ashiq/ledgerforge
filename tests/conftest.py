@@ -59,11 +59,15 @@ def sqlalchemy_url(psycopg_dsn: str) -> str:
 @pytest.fixture(scope="module")
 def fresh_db(psycopg_dsn: str) -> str:
     """Full schema reset for modules that assert on global state
-    (numbering sequences, report totals)."""
+    (numbering sequences, report totals). ADR-018 moved some state out of
+    public (rpt.balance_cache references books; ops holds the machinery),
+    so the reset covers every LedgerForge schema."""
     from ledgerforge import bootstrap
 
     with psycopg.connect(psycopg_dsn, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA public CASCADE")
+        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        conn.execute("DROP SCHEMA IF EXISTS rpt CASCADE")
+        conn.execute("DROP SCHEMA IF EXISTS ops CASCADE")
         conn.execute("CREATE SCHEMA public")
     bootstrap.apply_sql_files(psycopg_dsn, REPO_ROOT, echo=False)
     return psycopg_dsn

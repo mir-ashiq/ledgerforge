@@ -283,6 +283,110 @@ def cmd_list(args: argparse.Namespace) -> int:
 # ------------------------------------------------------------------ main
 
 
+# --------------------------------------------------------- scale-out (ADR-018)
+
+
+def _ops_session():
+    """A database session for scale-out operations (LF_DATABASE_URL)."""
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session
+
+    from .settings import get_settings
+
+    engine = create_engine(get_settings().database_url, pool_pre_ping=True)
+    return Session(engine), engine, text
+
+
+def cmd_scale_out_status(args) -> int:
+    session, engine, _text = _ops_session()
+    try:
+        rows = session.execute(
+            _text("SELECT out_name, out_value FROM ops.scale_out_status()")
+        ).all()
+        for name, value in rows:
+            print(f"{name:32s} {value}")
+    finally:
+        session.close()
+        engine.dispose()
+    return 0
+
+
+def cmd_scale_out_refresh(args) -> int:
+    session, engine, _text = _ops_session()
+    try:
+        rows = session.execute(
+            _text("SELECT * FROM rpt.refresh_balance_cache(:b)"),
+            {"b": args.book},
+        ).all()
+        session.commit()
+        for book, ledgers, horizon, action in rows:
+            print(f"book {book}: {action} (rows={ledgers}, horizon={horizon})")
+    finally:
+        session.close()
+        engine.dispose()
+    return 0
+
+
+def _print_steps(rows) -> None:
+    for step, detail in rows:
+        print(f"  [{step}] {detail}")
+
+
+def cmd_scale_out_partition(args) -> int:
+    session, engine, _text = _ops_session()
+    try:
+        rows = session.execute(
+            _text("SELECT * FROM ops.partition_entries_by_year(:h)"),
+            {"h": args.headroom},
+        ).all()
+        session.commit()
+        _print_steps(rows)
+    except Exception as exc:  # noqa: BLE001 — operator-facing report
+        session.rollback()
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+        engine.dispose()
+    return 0
+
+
+def cmd_scale_out_unpartition(args) -> int:
+    session, engine, _text = _ops_session()
+    try:
+        rows = session.execute(_text("SELECT * FROM ops.unpartition_entries()")).all()
+        session.commit()
+        _print_steps(rows)
+    except Exception as exc:  # noqa: BLE001 — operator-facing report
+        session.rollback()
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+        engine.dispose()
+    return 0
+
+
+def cmd_scale_out_ensure(args) -> int:
+    session, engine, _text = _ops_session()
+    try:
+        rows = session.execute(
+            _text("SELECT * FROM ops.ensure_entry_partitions(:f, :t)"),
+            {"f": args.from_year, "t": args.to_year},
+        ).all()
+        session.commit()
+        for year, created in rows:
+            print(f"  {year}: {'created' if created else 'already present'}")
+    except Exception as exc:  # noqa: BLE001 — operator-facing report
+        session.rollback()
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+        engine.dispose()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ledgerforge",
@@ -327,6 +431,41 @@ def main(argv: list[str] | None = None) -> int:
     p = psub.add_parser("list", help="show drop-ins and their trust status")
     p.add_argument("--path", default=str(DEFAULT_DROPIN_DIR), help="drop-in directory")
     p.set_defaults(fn=cmd_list)
+
+    scale = sub.add_parser(
+        "scale-out", help="report scale-out operations (ADR-018): status, cache, partitions"
+    )
+    ssub = scale.add_subparsers(dest="command", required=True)
+
+    p = ssub.add_parser("status", help="entries shape, partitions, cache state")
+    p.set_defaults(fn=cmd_scale_out_status)
+
+    p = ssub.add_parser(
+        "refresh-cache", help="incrementally rebuild the balance cache (idempotent)"
+    )
+    p.add_argument("--book", type=int, default=None, help="one book id (default: every book)")
+    p.set_defaults(fn=cmd_scale_out_refresh)
+
+    p = ssub.add_parser(
+        "partition",
+        help="convert voucher_entries to yearly range partitions (maintenance window; "
+        "runs as the table owner — the connection in LF_DATABASE_URL must own it)",
+    )
+    p.add_argument(
+        "--headroom",
+        type=int,
+        default=2,
+        help="pre-create empty partitions this many years past the current one (default: 2)",
+    )
+    p.set_defaults(fn=cmd_scale_out_partition)
+
+    p = ssub.add_parser("unpartition", help="revert to the plain entries table (tested mirror)")
+    p.set_defaults(fn=cmd_scale_out_unpartition)
+
+    p = ssub.add_parser("ensure", help="create missing yearly partitions for a year range")
+    p.add_argument("from_year", type=int)
+    p.add_argument("to_year", type=int)
+    p.set_defaults(fn=cmd_scale_out_ensure)
 
     args = parser.parse_args(argv)
     try:
