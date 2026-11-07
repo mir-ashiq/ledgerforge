@@ -79,7 +79,8 @@ def main() -> int:
     from ledgerforge.models import Book, Group, Ledger
     from ledgerforge.seeding import DEFAULT_BOOK_SLUG
 
-    engine = create_engine(dsn.replace("postgresql://", "postgresql+psycopg://", 1), pool_pre_ping=True)
+    sqlalchemy_url = dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine = create_engine(sqlalchemy_url, pool_pre_ping=True)
     try:
         with Session(engine) as session:
             book = session.scalar(select(Book).where(Book.slug == DEFAULT_BOOK_SLUG))

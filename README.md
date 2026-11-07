@@ -701,7 +701,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.13.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.16.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -726,7 +726,18 @@ refusal and why (ADR-016) — **and the GST compliance pack (v0.13, issue
 #6): place of supply (CGST+SGST vs IGST), HSN rate tables with effective
 dates, GSTR-1 and HSN-summary statements as pack reports, and the
 e-invoicing bridge — the IRN outbox plus the out-of-process
-`lf-irn-bridge` (ADR-017)**. The planned roadmap is fully landed; what
+`lf-irn-bridge` (ADR-017)** — the report scale-out (v0.14, ADR-018): the
+balance cache and the transactional yearly-partition conversion behind
+`ledgerforge scale-out`, opt-in on both axes — the sandbox UI slots
+(v0.15, ADR-019, plugin API 0.7): plugin dashboards in opaque-origin
+iframes fed through the host's relay, never keyboard scope — and the
+operations hardening (v0.16, ADR-020): the `LF_REQUIRE_AUTH` boot guard
+with `/health` reporting `auth_mode`, tooled curator-key rotation
+(`plugins verify-index` / `rotate-curator`), the browser-level E2E tier
+proving the full keyboard flow in real Chromium (CI job `e2e`), and the
+production runbook — `ops/` backup + restore drills, the hardened
+`docker-compose.prod.yml`, [docs/deployment.md](docs/deployment.md).
+The planned roadmap is fully landed; what
 remains is deliberately conditional (see
 [docs/analysis.md §9](docs/analysis.md)):
 
@@ -769,7 +780,12 @@ remains is deliberately conditional (see
       plugin dashboards rendered in opaque-origin iframes, fed through the
       host's GET-only relay, with slot commands in the host's command
       palette — never keyboard scope
-      millions of entries
+- [x] Operations hardening (v0.16, ADR-020): the `LF_REQUIRE_AUTH`
+      production guard (`/health` reports `auth_mode`), curator key
+      rotation tooled and audited (`verify-index` / `rotate-curator`),
+      browser-level E2E of the keyboard flow in CI, `ops/` backup +
+      restore drills (Law-1 verified), `docker-compose.prod.yml` and
+      [docs/deployment.md](docs/deployment.md)
 
 ## Contributing
 
