@@ -1,6 +1,6 @@
 # Plugin Guide
 
-**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store) and `ledgerforge/contrib/payroll.py` (fiscal-year folds) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, `docs/analysis.md` §5.
+**Runtime:** `ledgerforge.plugins.PluginManager` · **Worked examples:** `ledgerforge/contrib/example_gst.py` (tax transform), `ledgerforge/contrib/invoicing.py` (a complete document pack), `ledgerforge/contrib/inventory.py` (derived state on the document store), `ledgerforge/contrib/payroll.py` (fiscal-year folds) and `ledgerforge/contrib/statutory.py` (a pack report) · **Architecture:** ADR-003, ADR-010, ADR-011, ADR-012, ADR-013, ADR-014, `docs/analysis.md` §5.
 
 ## The two tiers
 
@@ -51,6 +51,7 @@ def notify_warehouse(event): ...  # after commit; exceptions are logged, never b
 - **Validator** `(draft, resolve) -> None` — raise `ValidationError` to veto (HTTP 422). Runs inside the transaction.
 - **Event handler** `(event: DomainEvent) -> None` — receives `voucher.posted`, `master.created`, … after commit. Failures are isolated.
 - **Document-view factory** `(ctx: DocumentContext) -> DocumentView | None` — **plugin API 0.5 (ADR-013):** owns the print layout for `meta[key]` documents. Return a view to claim, `None` to decline (the voucher slip takes over). See [Printing a document](#printing-a-document-api-05-adr-013).
+- **Report factory** `(resolver, params) -> PackReport` — **plugin API 0.6 (ADR-014):** publishes a book-scoped report under a key, served at `GET /api/v1/reports/pack/{key}` as PDF (through the shared layout engine) or CSV. See [Publishing a report](#publishing-a-report-api-06-adr-014).
 
 `Resolver` (inside-transaction helper):
 
@@ -114,6 +115,52 @@ The contract:
 - **`DocumentView`** — data, not geometry: you describe *what* the document says; `reporting.printing` owns pagination, column geometry, alignment and page furniture. One visual language for every pack's documents. Format money with `format_amount` (exact `Decimal`, thousands-separated, never `-0.00`) — never float (Law 3).
 - **Decline with `None`** — the payroll factory declines payouts; unregistered keys fall through the same way.
 - The web app's payslip screen is the reference consumer: `Alt+P` → pick employee and period → `Ctrl+P` prints (`tests/test_printing.py` + `frontend/web/tests/payslipScreen.spec.tsx` pin the whole path).
+
+## Publishing a report (API 0.6, ADR-014)
+
+A document view prints *one voucher*; a report folds *many* — a month of
+payroll runs, a quarter of invoices. Packs publish those under a key and
+the kernel serves them at `GET /api/v1/reports/pack/{key}`:
+
+```python
+from ledgerforge.plugins import PackReport, PluginManifest
+
+PLUGIN = PluginManifest(name="tds-pack", version="0.1.0", api_compat="0.6")
+
+
+def register(registry):
+    registry.register_report("tds", tds_report)
+
+
+def tds_report(resolver, params) -> PackReport:
+    """?month=YYYY-MM is required; anything else the pack validates itself
+    (raise ValidationError for caller errors — the route maps it to 422)."""
+    month = params.get("month", "")
+    if not month:
+        raise ValidationError("tds: pass ?month=YYYY-MM")
+    rows = fold_documents(resolver.prior_documents("invoice"), month)
+    if params.get("format") == "csv":
+        return PackReport(title=f"TDS {month}", filename=f"TDS {month}", csv=to_csv(rows))
+    return PackReport(title=f"TDS {month}", filename=f"TDS {month}", view=tds_view(rows))
+```
+
+The contract:
+
+- **`resolver`** is book-scoped (ADR-009) — the report reads one book's
+  documents; `resolver.prior_documents(key)` is the same read the folds use.
+- **`params`** is the caller's query parameters as a plain `dict[str, str]`;
+  the pack validates them and raises `ValidationError` for caller errors.
+- **`PackReport`** carries either a `DocumentView` (the route renders the
+  PDF — one visual language, pagination owned by the layout engine) or
+  pre-rendered `csv` text (the route serves it as `text/csv`, attachment).
+- One factory per key; a later registration replaces an earlier one.
+  Unknown keys are 404s naming the registered ones.
+
+The reference consumer is the statutory pack
+(`ledgerforge/contrib/statutory.py`): PF and ESI statements folded from
+`payroll.period_wages(resolver, period)` — the same fold the payslips
+replay — with rates, ceilings and wage-component sets as parameters
+(`tests/test_statutory_plugin.py` pins the whole path).
 
 ## Installation
 

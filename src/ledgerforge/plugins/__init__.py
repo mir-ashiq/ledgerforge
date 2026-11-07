@@ -39,6 +39,7 @@ Transformer = Callable[["VoucherDraft", "Resolver"], "VoucherDraft"]
 Validator = Callable[["VoucherDraft", "Resolver"], None]
 EventHandler = Callable[["DomainEvent"], None]
 DocumentViewFactory = Callable[["DocumentContext"], "DocumentView | None"]
+PackReportFactory = Callable[["Resolver", "dict[str, str]"], "PackReport"]
 
 
 def _api_compatible(declared: str) -> bool:
@@ -185,6 +186,23 @@ class DocumentContext:
 
 
 @dataclass(frozen=True)
+class PackReport:
+    """A pack-computed, book-scoped report (API 0.6, ADR-014): either a
+    ``DocumentView`` — rendered to PDF by the shared print-bridge layout
+    engine, the same visual language as every printed document — or
+    pre-rendered ``csv`` text for machine consumption (a statutory
+    portal's upload format). Factories validate their own parameters and
+    raise ``ValidationError`` for caller errors; the kernel stays
+    report-blind exactly as it stays meta-blind."""
+
+    title: str
+    filename: str  # download name hint, sans extension
+    view: DocumentView | None = None
+    csv: str | None = None
+    media_type: str = "text/csv"
+
+
+@dataclass(frozen=True)
 class PriorDocument:
     """One stored document as seen by a plugin (API 0.3, ADR-011): the
     meta payload exactly as persisted, with the provenance a fold needs —
@@ -307,6 +325,7 @@ class PluginRegistry:
         self.validators: list[Validator] = []
         self.handlers: dict[str, list[EventHandler]] = {}
         self.document_views: dict[str, DocumentViewFactory] = {}
+        self.report_views: dict[str, PackReportFactory] = {}
 
     def register_transformer(self, fn: Transformer) -> None:
         self.transformers.append(fn)
@@ -322,6 +341,14 @@ class PluginRegistry:
         ADR-013). One factory per key — a later registration replaces an
         earlier one (last loaded wins), mirroring transformer behavior."""
         self.document_views[key] = factory
+
+    def register_report(self, key: str, factory: PackReportFactory) -> None:
+        """Publish a book-scoped report under ``key`` (API 0.6, ADR-014),
+        served by ``GET /api/v1/reports/pack/{key}`` — as PDF (the shared
+        layout engine) or as the pack's machine format (``PackReport.csv``).
+        One factory per key; a later registration replaces an earlier one,
+        mirroring the other registries."""
+        self.report_views[key] = factory
 
 
 class PluginManager:

@@ -70,6 +70,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 from ..errors import ValidationError
 from ..plugins import (
@@ -86,7 +87,7 @@ from ..reporting.printing import format_amount
 
 logger = logging.getLogger("ledgerforge.plugins.payroll")
 
-PLUGIN = PluginManifest(name="payroll", version="0.2.0", api_compat="0.5")
+PLUGIN = PluginManifest(name="payroll", version="0.3.0", api_compat="0.5")
 
 META_KEY = "payroll"
 
@@ -335,6 +336,78 @@ def payable(resolver: Resolver, employee: str) -> EmployeePayable:
     _fold_fy_start = resolver.fy_start_month
     state = _fold(resolver.prior_documents(META_KEY), employee)
     return EmployeePayable(accrued=state.net, paid=state.paid, payable=state.net - state.paid)
+
+
+@dataclass(frozen=True)
+class EmployeeWages:
+    """One employee's wage detail for one period (ADR-014) — the statutory
+    bridge's input. ``components`` maps ``(name, kind)`` to the amount
+    summed across every run of the period; ``extras`` carries the entry's
+    other fields exactly as posted (``uan``, ``esi_ip``… — the pack stores
+    what the caller sends, so identifiers ride along)."""
+
+    employee: str
+    gross: Decimal
+    components: dict[tuple[str, str], Decimal]
+    extras: dict[str, Any]
+
+
+def period_wages(resolver: Resolver, period: str) -> list[EmployeeWages]:
+    """Every employee's wage detail for one ``YYYY-MM`` period — the same
+    document sequence and the same reversal netting as the YTD fold, so a
+    statutory statement (PF/ESI, ADR-014) always agrees with the payslips
+    and the ledger. Off-cycle duplicates (``policy:allow_duplicate_run``)
+    sum; employees sort by name for a deterministic report; payout
+    documents never appear (they settle, they don't accrue wages)."""
+    _year, _month, period = _parse_period(period)
+    documents = resolver.prior_documents(META_KEY)
+    reversed_ids = {d.reversal_of for d in documents if d.reversal_of is not None}
+    gross: dict[str, Decimal] = {}
+    components: dict[str, dict[tuple[str, str], Decimal]] = {}
+    extras: dict[str, dict[str, Any]] = {}
+
+    for d in documents:
+        if d.reversal_of is not None or d.voucher_id in reversed_ids:
+            continue
+        doc = (d.meta or {}).get(META_KEY)
+        if not isinstance(doc, dict) or doc.get("mode") != "run":
+            continue
+        if str(doc.get("period") or "").strip() != period:
+            continue
+        for entry in doc.get("employees") or []:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("employee") or "").strip()
+            if not name:
+                continue
+            gross.setdefault(name, Decimal("0.00"))
+            components.setdefault(name, {})
+            extras.setdefault(name, {})
+            for comp in entry.get("components") or []:
+                if not isinstance(comp, dict):
+                    continue
+                kind = str(comp.get("kind") or "")
+                try:
+                    amount = _decimal(comp.get("amount"), "amount")
+                except ValidationError:
+                    continue  # a document this pack did not shape — not ours
+                if kind == "earning":
+                    gross[name] += amount
+                key = (str(comp.get("name") or ""), kind)
+                components[name][key] = components[name].get(key, Decimal("0.00")) + amount
+            for field_name, value in entry.items():
+                if field_name not in ("employee", "components"):
+                    extras[name][field_name] = value
+
+    return [
+        EmployeeWages(
+            employee=name,
+            gross=gross[name],
+            components=components[name],
+            extras=extras[name],
+        )
+        for name in sorted(gross)
+    ]
 
 
 # ------------------------------------------------------------- payslip print

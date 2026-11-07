@@ -22,4 +22,9 @@ __version__ = "0.9.0"
 #:       ``PluginRegistry.register_document_view(key, factory)`` — packs own
 #:       their documents' print layouts, the kernel stays meta-blind and
 #:       renders every unclaimed voucher as the voucher slip (ADR-013).
-PLUGIN_API_VERSION = "0.5"
+#: 0.6 — Pack reports: ``PackReport`` and
+#:       ``PluginRegistry.register_report(key, factory)`` — packs publish
+#:       book-scoped reports (PDF through the shared layout engine, or CSV
+#:       for machine consumption) served by ``GET /api/v1/reports/pack/{key}``;
+#:       the first live consumer is the statutory bridge (ADR-014).
+PLUGIN_API_VERSION = "0.6"

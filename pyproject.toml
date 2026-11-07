@@ -52,6 +52,7 @@ example_gst = "ledgerforge.contrib.example_gst"
 invoicing = "ledgerforge.contrib.invoicing"
 inventory = "ledgerforge.contrib.inventory"
 payroll = "ledgerforge.contrib.payroll"
+statutory = "ledgerforge.contrib.statutory"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ledgerforge"]
