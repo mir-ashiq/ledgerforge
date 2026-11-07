@@ -6,6 +6,9 @@
  * index, Alt+C creates a missing ledger mid-flight, F2 changes the date,
  * F4–F9 switch the voucher type, Ctrl+Enter fills the balancing amount and
  * Ctrl+A accepts — an idempotent POST with amounts as strings (Law 3).
+ * Ctrl+P prints the last posted voucher through the same endpoint the
+ * payslip screen uses (ADR-013): any posting voucher — sale, journal,
+ * payment — prints as its document.
  */
 
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
@@ -70,7 +73,13 @@ export function VoucherScreen({
   const [notice, setNotice] = useState<Notice | null>(null);
   const [announce, setAnnounce] = useState('');
   const [lastPosted, setLastPosted] = useState<VoucherOut | null>(null);
+  const [printing, setPrinting] = useState(false);
   const postingRef = useRef(false);
+  const printingRef = useRef(false);
+  // read at keydown/run time — always fresh, never a stale closure
+  const lastPostedRef = useRef<VoucherOut | null>(null);
+  lastPostedRef.current = lastPosted;
+  const printUrlRef = useRef<string | null>(null);
 
   // --- focus scope: this screen is the 'voucherEditor' -----------------------
   // Escape at the top of the stack is consumed for now — a gateway screen
@@ -121,6 +130,14 @@ export function VoucherScreen({
     dialogOpen: dialog !== null,
     posting,
   };
+
+  // the print flow's blob URL is revoked when this screen unmounts
+  useEffect(
+    () => () => {
+      if (printUrlRef.current) URL.revokeObjectURL?.(printUrlRef.current);
+    },
+    [],
+  );
 
   function onFocusCell(row: number, col: CellCol) {
     if (row !== cursor.row || col !== cursor.col) dispatch({ type: 'cursor', row, col });
@@ -260,6 +277,26 @@ export function VoucherScreen({
 
   useCommand(
     {
+      id: 'voucher.print',
+      title: 'Print last posted voucher',
+      run: () => {
+        if (!lastPostedRef.current) {
+          const hint = 'Nothing posted yet — accept a voucher first (Ctrl+A), then Ctrl+P prints it';
+          setNotice({ kind: 'info', text: hint });
+          setAnnounce(hint);
+          return;
+        }
+        void printLastPosted();
+      },
+    },
+    'Primary+P',
+    // same firing window as accept: anywhere in the editor, picker included,
+    // but never while a dialog or the palette owns the interaction
+    (ctx) => editorAnywhere(ctx) && ctx.dialogOpen !== true && paletteClosed(ctx),
+  );
+
+  useCommand(
+    {
       id: 'selection.moveUp',
       title: 'Picker: previous match',
       run: () =>
@@ -338,6 +375,30 @@ export function VoucherScreen({
     }
   }
 
+  async function printLastPosted() {
+    const posted = lastPostedRef.current;
+    if (!posted || printingRef.current) return;
+    printingRef.current = true;
+    setPrinting(true);
+    try {
+      const blob = await api.voucherPdf(posted.id);
+      if (printUrlRef.current) URL.revokeObjectURL?.(printUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      printUrlRef.current = url;
+      const opened = window.open(url, '_blank', 'noopener');
+      if (!opened) {
+        throw new Error('The browser blocked the PDF tab — allow pop-ups for this site and retry');
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Could not fetch the PDF';
+      setNotice({ kind: 'err', text: message });
+      setAnnounce(message);
+    } finally {
+      printingRef.current = false;
+      setPrinting(false);
+    }
+  }
+
   async function createLedgerHere(input: CreateLedgerInput): Promise<void> {
     const target = ledgerCreate;
     const created = await api.createLedger(input);
@@ -385,7 +446,19 @@ export function VoucherScreen({
         <button type="button" className="date-chip" onClick={() => setDialog('date')}>
           {draft.date} <kbd>F2</kbd>
         </button>
-        {lastPosted && <span className="last-posted">Last posted: {lastPosted.voucher_no}</span>}
+        {lastPosted && (
+          <>
+            <span className="last-posted">Last posted: {lastPosted.voucher_no}</span>
+            <button
+              type="button"
+              className="date-chip"
+              onClick={() => void printLastPosted()}
+              disabled={printing}
+            >
+              {printing ? 'Printing…' : `Print ${lastPosted.voucher_no}`} <kbd>Ctrl+P</kbd>
+            </button>
+          </>
+        )}
       </header>
 
       <Banner

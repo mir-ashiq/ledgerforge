@@ -86,7 +86,12 @@ export const api = {
   /** Posted vouchers, newest first (the payslip screen filters payroll runs). */
   vouchers: (limit = 200) => request<VoucherOut[]>(`/vouchers?limit=${limit}`),
   /** A voucher as its PDF (ADR-013): payslip for payroll runs with
-   * `employee`, tax invoice for invoices, voucher slip otherwise. */
-  voucherPdf: (voucherId: number, employee: string): Promise<Blob> =>
-    requestBlob(`/vouchers/${voucherId}/pdf?employee=${encodeURIComponent(employee)}`),
+   * `employee`, tax invoice for invoices, voucher slip otherwise — every
+   * posting voucher prints, whatever carried it. */
+  voucherPdf: (voucherId: number, employee?: string): Promise<Blob> =>
+    requestBlob(
+      employee
+        ? `/vouchers/${voucherId}/pdf?employee=${encodeURIComponent(employee)}`
+        : `/vouchers/${voucherId}/pdf`,
+    ),
 };

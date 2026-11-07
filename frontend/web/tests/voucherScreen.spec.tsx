@@ -7,7 +7,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import App from '../src/App';
 
 const LEDGERS = [
@@ -34,6 +34,7 @@ interface Recorded {
 
 let calls: Recorded[];
 let voucherResponses: Array<{ status: number; body: unknown }>;
+let openSpy: MockInstance<typeof window.open>;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -41,6 +42,14 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     json: async () => body,
   } as Response;
+}
+
+function blobResponse(): Response {
+  return {
+    ok: true,
+    status: 200,
+    blob: async () => new Blob(['%PDF-1.4 (mock)'], { type: 'application/pdf' }),
+  } as unknown as Response;
 }
 
 beforeEach(() => {
@@ -71,8 +80,14 @@ beforeEach(() => {
       if (!next) throw new Error('unexpected voucher POST');
       return jsonResponse(next.body, next.status);
     }
+    if (url.includes('/api/v1/vouchers/') && url.includes('/pdf')) return blobResponse();
     throw new Error(`unmocked ${method} ${url}`);
   }) as typeof fetch;
+
+  // jsdom ships neither; the print flow needs both
+  window.URL.createObjectURL = vi.fn(() => 'blob:mock-print');
+  window.URL.revokeObjectURL = vi.fn();
+  openSpy = vi.spyOn(window, 'open').mockReturnValue({} as Window);
 });
 
 afterEach(() => {
@@ -230,5 +245,80 @@ describe('voucher screen — acceptance (issue #2)', () => {
     expect(await screen.findByRole('alertdialog')).toBeInTheDocument();
     await user.keyboard('{Enter}'); // discard
     await waitFor(() => expect(screen.getByLabelText('Line 1 particulars')).toHaveValue(''));
+  });
+});
+
+async function postASale(user: ReturnType<typeof userEvent.setup>) {
+  voucherResponses.push({
+    status: 201,
+    body: {
+      id: 7,
+      uuid: '9af1c412-6a1f-4b0e-9b76-2c2a5b46d1aa',
+      voucher_no: 'SAL-2026-27-00042',
+      voucher_type: 'SAL',
+      voucher_date: '2026-11-06',
+      narration: null,
+      reversal_of: null,
+      posted_at: '2026-11-06T10:00:00Z',
+      client_token: 'tok',
+      replayed: false,
+      entries: [],
+    },
+  });
+  await user.keyboard('Cash{Enter}100{Enter}{Enter}');
+  await user.keyboard('Local Sales{Enter}{Enter}100{Enter}');
+  await user.keyboard('{Control>}a{/Control}');
+  await screen.findAllByText('Voucher SAL-2026-27-00042 posted');
+}
+
+describe('voucher screen — the print button (every posting voucher printable)', () => {
+  it('posting surfaces a Print chip for that voucher; Ctrl+P opens its PDF', async () => {
+    const { user } = await setup();
+    await postASale(user);
+
+    const chip = screen.getByRole('button', { name: /Print SAL-2026-27-00042/ });
+    expect(chip).toBeInTheDocument();
+
+    await user.keyboard('{Control>}p{/Control}');
+    await waitFor(() => expect(openSpy).toHaveBeenCalled());
+
+    // the same endpoint the payslip screen uses — no employee param here:
+    // a plain sale prints as the voucher slip
+    const pdfCall = calls.find((c) => c.url.includes('/pdf'));
+    expect(pdfCall?.url).toBe('/api/v1/vouchers/7/pdf');
+    expect(window.URL.createObjectURL).toHaveBeenCalled();
+    expect(openSpy).toHaveBeenCalledWith('blob:mock-print', '_blank', 'noopener');
+  });
+
+  it('the Print chip itself fetches and opens the PDF', async () => {
+    const { user } = await setup();
+    await postASale(user);
+
+    await user.click(screen.getByRole('button', { name: /Print SAL-2026-27-00042/ }));
+    await waitFor(() => expect(openSpy).toHaveBeenCalled());
+    expect(calls.find((c) => c.url.includes('/pdf'))?.url).toBe('/api/v1/vouchers/7/pdf');
+  });
+
+  it('Ctrl+P before anything is posted explains instead of printing', async () => {
+    const { user } = await setup();
+    await user.keyboard('{Control>}p{/Control}');
+
+    // the banner and the screen-reader channel both carry it (like the
+    // posted announcement)
+    const announced = await screen.findAllByText(/Nothing posted yet/);
+    expect(announced.length).toBe(2);
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(calls.some((c) => c.url.includes('/pdf'))).toBe(false);
+  });
+
+  it('a blocked PDF tab surfaces a loud error, not silence', async () => {
+    openSpy.mockReset();
+    openSpy.mockReturnValue(null);
+    const { user } = await setup();
+    await postASale(user);
+
+    await user.keyboard('{Control>}p{/Control}');
+    // the banner is the error channel on this screen (role=status, red)
+    expect((await screen.findAllByText(/blocked the PDF tab/)).length).toBeGreaterThan(0);
   });
 });
