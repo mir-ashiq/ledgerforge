@@ -79,7 +79,7 @@ That is exactly what the eleven phases below deliver, in dependency order.
 
 ## 3. The phases
 
-### Phase 1 — v0.19.0 · The completeness pass *(in progress)*
+### Phase 1 — v0.19.0 · The completeness pass *(landed in v0.19.0)*
 
 Close every self-inflicted gap found in the v0.18 audit — no API surface without a UI,
 no documented event unfired, no stale docs. **Nothing new; everything finished.**

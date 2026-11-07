@@ -770,7 +770,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.18.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.19.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -810,14 +810,22 @@ and, beyond the planned roadmap, **the desktop edition (v0.17, ADR-021): a
 Windows application** — and its v0.18 correction, **the native application
 (ADR-022): a real Windows program** — `LedgerForge.exe` opens a native Qt
 window (no browser), the embedded engine runs in a child process, released
-per tag with a self-proving offscreen smoke gate.
+per tag with a self-proving offscreen smoke gate — and **v0.19, the
+completeness pass (Phase 1 of the [roadmap](ROADMAP.md))**: multi-book in
+the web UI (the `Alt+O` Books screen — create, rename, archive, switch,
+with `X-Book-Id` plumbed through the client and the open company named in
+the entry bar), reversal from the daybook (`Ctrl+R`, two-key confirm — Law
+2's correction path, no longer API-only), the periods screen (`Alt+E` —
+lock, unlock, the close preview, the confirmed close), the `master.created`
+event the plugin guide always promised, FX line entry and F4–F9 type keys
+in the native window's voucher form, and `cryptography` as the direct
+dependency the trust gate always imported.
 The planned roadmap is fully landed; the desktop edition followed it. What comes
 next is written down as a plan of record — **[ROADMAP.md](ROADMAP.md): eleven
 phases to v1.0, “everything an Indian SMB's daily accounting needs, on
-LedgerForge, without wishing for TallyPrime”** — starting with Phase 1, the
-completeness pass (multi-book in the web UI, reversal from the daybook, the
-periods screen, the `master.created` event, native-window parity, docs
-hygiene). Each phase tracks as a GitHub milestone with a tracking issue:
+LedgerForge, without wishing for TallyPrime”** — Phase 1 landed in v0.19.0,
+and Phase 2 is bill-wise & outstanding management. Each phase tracks as a
+GitHub milestone with a tracking issue:
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -873,6 +881,10 @@ hygiene). Each phase tracks as a GitHub milestone with a tracking issue:
       the embedded PostgreSQL underneath, day book / masters / reports /
       periods / sandbox screens, offscreen-proven in CI and smoke-gated
       per release
+- [x] The completeness pass (v0.19, Phase 1 of the roadmap): multi-book in
+      the web UI (Books screen, `X-Book-Id`), reversal from the daybook,
+      the periods screen, `master.created`, FX line entry + F4–F9 in the
+      native form, direct `cryptography` dependency, docs honest
 
 ## Contributing
 
