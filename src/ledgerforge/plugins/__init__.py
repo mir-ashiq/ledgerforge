@@ -31,6 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import PLUGIN_API_VERSION
+from ..attendance import AttendanceRow as AttendanceRow
 from ..banking import BankLineRow
 from ..errors import ValidationError
 from ..gst_compliance import PortalLine as PortalLineRow
@@ -599,6 +600,17 @@ class Resolver:
         return _portal_lines(
             self._session, book=self._book, kind=kind, period=period, gstin=gstin
         )
+
+    def attendance_lines(self, period: str) -> list[AttendanceRow]:
+        """The **live** attendance register of one period (plugin API 0.14,
+        ADR-029) — the payroll pack's per-day fold input: the latest
+        batch's rows, raw day counts, payable days deliberately absent
+        (the pack computes those — the kernel stays meaning-blind, the
+        bank_lines division). Book-scoped like every Resolver read:
+        another book's register answers empty."""
+        from ..attendance import live_register
+
+        return live_register(self._session, book=self._book, period=period)
 
     # ------------------------------------------- stock masters (API 0.12)
     def stock_item(self, *, name: str) -> StockItemMaster | None:

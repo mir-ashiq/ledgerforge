@@ -183,9 +183,13 @@ class ApiClient:
     def voucher(self, voucher_id: int) -> Voucher:
         return Voucher.from_json(self._get(f"/api/v1/vouchers/{voucher_id}"))
 
-    def voucher_pdf(self, voucher_id: int) -> tuple[bytes, str]:
-        """The printed voucher (ADR-013) as bytes + the server's filename."""
-        response = self._client.get(f"/api/v1/vouchers/{voucher_id}/pdf")
+    def voucher_pdf(self, voucher_id: int, *, employee: str = "") -> tuple[bytes, str]:
+        """The printed voucher (ADR-013) as bytes + the server's filename —
+        ``employee`` picks the payslip's subject on a multi-employee run."""
+        response = self._client.get(
+            f"/api/v1/vouchers/{voucher_id}/pdf",
+            params={"employee": employee} if employee else None,
+        )
         if response.status_code >= 400:
             raise ApiError(response.status_code, _detail(_safe_json(response), response.text[:300]))
         name = "voucher.pdf"
@@ -259,6 +263,31 @@ class ApiClient:
     def gst_downloads(self) -> list[dict]:
         """Every portal-download receipt, newest first (ADR-028)."""
         return self._get("/api/v1/gst/portal/downloads").get("downloads", [])
+
+    # ------------------------------------------------------------- payroll
+    def attendance_import(
+        self,
+        period: str,
+        entries: list[dict],
+        *,
+        source: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Import one period's attendance register (ADR-029) — validated,
+        idempotent by content fingerprint; ``dry_run`` is the preview."""
+        payload: dict = {"period": period, "entries": entries, "dry_run": dry_run}
+        if source:
+            payload["source"] = source
+        return self._post("/api/v1/payroll/attendance", payload)
+
+    def attendance(self, period: str) -> dict:
+        """The period's live attendance register (ADR-029) — the latest
+        batch's rows, raw day counts."""
+        return self._get("/api/v1/payroll/attendance", period=period)
+
+    def attendance_history(self, period: str) -> dict:
+        """Every register receipt for the period, newest first (ADR-029)."""
+        return self._get("/api/v1/payroll/attendance/history", period=period)
 
     def bank_lines(self, ledger_id: int, status: str = "all") -> dict:
         """The statement line book with live-match state (ADR-026)."""

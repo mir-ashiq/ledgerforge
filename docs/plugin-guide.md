@@ -237,6 +237,37 @@ facts; the pack decides what a row means. Importing is a bookkeeper API
 adapter contract, all-or-nothing, idempotent by fingerprint) — never a
 pack concern.
 
+## Reading the attendance register (API 0.14, ADR-029)
+
+The payroll pack's per-day pay heads derive from the attendance register —
+shop-floor facts the kernel stores (migration `0011`, the same banking
+precedent) and serves to packs through one versioned read:
+
+```python
+def register(registry) -> None:
+    registry.register_transformer(build_document)
+
+
+def build_document(draft, resolver):
+    doc = draft.meta.get("payroll")
+    ...
+    register = {row.employee: row for row in resolver.attendance_lines(period)}
+    row = register.get(employee)
+    days = row.present + row.half / 2 + row.leave_paid  # payable days — the pack's arithmetic
+    ...
+```
+
+`attendance_lines(period)` returns frozen `AttendanceRow` snapshots — the
+**live** register's rows (the latest batch of the period, superseded
+snapshots stay as history), raw day counts, book-scoped like every
+Resolver read. The kernel stays meaning-blind: it stores counts and
+validates them against the calendar; the pack decides what a day is
+worth. Keying the register is a bookkeeper API
+(`POST /api/v1/payroll/attendance`, all-or-nothing, idempotent by
+revision-carrying fingerprint — an unchanged re-entry is a no-op) — never
+a pack concern. The payroll pack's own `payable_days(row)` is the
+reference arithmetic.
+
 ## Cost allocations ride the draft (API 0.10, ADR-025)
 
 Cost-centre splits are **core schema** (migration 0007), not a pack document

@@ -1,3 +1,85 @@
+# LedgerForge 0.26.0 — payroll depth
+
+**Phase 8 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
+the people, given their paperwork.** The attendance register feeds
+per-day pay heads, loans recover themselves from their schedules, the
+relieving letter's numbers are one voucher — and the payslip batch leaves
+the building without the kernel ever opening a socket (ADR-029, extends
+ADR-012).
+
+## What's new in the window
+
+- **The Payroll page** (native, `Alt+7`): the people workbench — key the
+  period's attendance register (a grid, previewed before it lands), issue
+  staff loans (the confirmation quotes the engine's own EMI schedule),
+  settle a relieving employee's dues (encashment, earnings, recoveries,
+  one voucher), and walk every payroll document the book holds with
+  per-employee payslip PDFs one key away.
+- **Attendance registers as facts**: `POST /api/v1/payroll/attendance`
+  keys present / absent / half-day / leave-with-pay per employee per
+  period (a half-day is 0.5; the calendar is the honesty ceiling).
+  Re-entry of the same register is a no-op; a corrected register is a new
+  snapshot — latest-batch-wins, append-only history, the GSTR-2B
+  discipline restated for the shop floor.
+- **Attendance-derived pay**: an earning component may carry `per_day`
+  instead of `amount` — the run derives `per_day × payable days`
+  (present + half × 0.5 + leave-with-pay) from the live register and
+  records the derivation beside the amount. No register, no derivation:
+  a 422, never a guess.
+- **Loans & advances with EMI recovery**: `mode: "loan"` issues the
+  advance against the bank with the exact-Decimal annuity schedule
+  computed into the document (rate 0 = interest-free; the final row
+  absorbs its own rounding so principals sum exactly). The schedule is
+  advisory; recovery is the run's new `recovery` component — it reduces
+  net pay, credits the advance ledger, and can never cross the
+  outstanding fold. A recovery naming its loan adopts the scheduled EMI
+  for the period automatically.
+- **The full & final settlement**: `mode: "settlement"` books leave
+  encashment (days × rate — the operator's facts), extra dues,
+  withholdings and loan recoveries in one voucher, paying direct from
+  the bank or accruing to the payable. After it the employee is
+  **relieved**: runs, loans and further settlements refuse; payouts stay
+  legal — the dues are the whole point. A reversal reopens the
+  relationship.
+- **The payslip outbox**: every run queues one envelope per employee to
+  `LF_PAYROLL_OUTBOX`, and `lf-payslip-bridge` renders the PDF batch
+  through the same layout engine as Ctrl+P — and, only when the operator
+  configures SMTP (`LF_PAYROLL_SMTP_*`), emails each payslip to the
+  address the run entry carried. **Core never sends mail**; the bridge is
+  the only mailer, and a blank address is never guessed.
+
+## What's new underneath
+
+- Migration `0011_payroll_depth` — the fifth core-schema change since
+  0006, the ADR-026 argument restated for the shop floor:
+  `payroll_attendance_batches` + `payroll_attendance_lines`, INSERT-only,
+  append-only, idempotent by revision-carrying fingerprint. Old books
+  upgrade in place (the smoke test proves the migrate path on every
+  build).
+- Plugin API **0.14**: `Resolver.attendance_lines(period)` — the payroll
+  pack's per-day fold input as a versioned, session-free read (the
+  `fy_start_month` precedent). The kernel stays meaning-blind; the pack
+  computes payable days.
+- Loans and settlements are documents on the same `meta.payroll` grammar
+  as runs and payouts — the same lock discipline, the same reversal
+  netting, the same books-are-strangers isolation. The loan and
+  settlement folds reuse the run fold's machinery: a reversed loan
+  restores the outstanding exactly as a reversed run restores YTD.
+- Two pack reports join the register: `payroll-attendance` (the live
+  register with payable days — JSON for the UI, CSV, PDF) and
+  `payroll-loans` (per-employee positions and per-loan schedules), both
+  from the same folds the guards run.
+
+## The plan, on the record
+
+The capability ledger's Payroll row flips to **parity** — landed in
+v0.26.0 (Phase 8). Next: **Phase 9 — data exchange & the Tally migration
+path** (CSV/Excel import with previewable, idempotent transactions, the
+TallyPrime XML import with a verification report, SQL views + personal
+API tokens — ADR-030).
+
+---
+
 # LedgerForge 0.25.0 — GST compliance depth
 
 **Phase 7 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
@@ -138,91 +220,3 @@ staying the moving weighted average ADR-011 promised.
   reversible; docs refreshed (README, ROADMAP, plugin guide, keyboard
   guide, this file).
 
----
-
-# LedgerForge 0.23.0 — the banking pack
-
-**Phase 5 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the bank statement, reconciled.** The books say one thing, the bank says
-another — the reconciliation statement is where the two agree, and where
-every disagreement is priced, exactly. TallyPrime's banking pack has been
-the comparison table's honest gap since v0.18; this release closes it with
-the same rigour the kernel brings to everything else.
-
-## What's new in the window
-
-- **The Banking page** (native) and the **banking screen** on the web
-  (`Alt+G`): import a statement with a preview, walk the line book, match
-  a line to the matchmaker's suggestion with one move (`M`), withdraw a
-  judgement (`U`), read the proof, open the cheque register.
-- **Statement import (CSV + MT940)**: validated, all-or-nothing, with a
-  dry-run preview. Re-importing the same statement is a clean no-op (the
-  content fingerprint is a database `UNIQUE`, not a check-then-insert
-  race); a later statement's genuine repeat of an identical transaction
-  lands beside the first. MT940's own opening/closing balances become the
-  proof's foldable anchor.
-- **Suggestions never commit.** The matchmaker is a pure function —
-  amount-exact, date-windowed, reference-fuzzy (cheque number, voucher
-  number, narration overlap), ranked. Only the explicit match writes; a
-  manual match may even disagree on amount, and the statement prices the
-  difference as its own row instead of hiding it.
-- **The reconciliation statement is a proof**: book − statement =
-  unmatched-book − unmatched-statement + pair differences (with the
-  statement's own opening as a baseline row), exact decimals, asserted on
-  every render — the accountant's anchor is the figure on the statement,
-  or the fold from the imported opening when you leave it blank.
-
-## What's new underneath
-
-- **Migration 0008 (ADR-026)** — the second core-schema change since the
-  scale-out, deliberately: statement facts need database identity, and the
-  proof aggregates them exactly. `bank_statement_batches`/`_lines` are
-  append-only (the Law-2 trigger family); `bank_line_matches` is the
-  kernel's **first deliberately mutable table** — match/un-match is
-  revisable judgement, not financial history. UPDATE-only, DELETE never,
-  provenance columns always; the boundary is stated as policy.
-- **The cheque register is a fold, not a status column** (the order
-  philosophy): declarations ride vouchers (`meta.banking.cheque` — number,
-  bank ledger, PDC maturity), validated to move their own bank account
-  with per-ledger number uniqueness. *Issued* when posted, *presented*
-  when an imported line references the number (precise digit-runs —
-  448812 never matches 4488123), *cleared* when that line is matched.
-- **The gateway seam (plugin API 0.11)**: `register_webhook(key, handler)`
-  claims `POST /api/v1/hooks/{key}` — the banking pack's
-  `bank-statement-gateway` accepts the generic gateway JSON, and a
-  per-bank connected-banking adapter is a drop-in behind the ADR-016 trust
-  gate that translates its bank's payload. The kernel never learns a
-  bank's name (ADR-026 D3); bank credentials belong to the adapter or the
-  proxy in front of the route, never to core. After-commit events
-  (`bank.statement.imported`, `bank.line.matched`, `bank.line.unmatched`)
-  fire for bridges, and `Resolver.bank_lines` is the sanctioned fold read.
-- **What this release does not do, on the record**: no per-bank
-  connected-banking adapters in tree (drop-ins only, trust-gated); no
-  FX-account reconciliation (statements must be in the book's base
-  currency — the `amount_fx` fold is the recorded follow-up); no N:1
-  match groups; no auto-match-on-import (suggestions are computed on
-  request, never applied — the roadmap's law, kept structural).
-
-## The plan, on the record
-
-Eleven phases to v1.0 — **"everything an Indian SMB's daily accounting
-needs, on LedgerForge, without wishing for TallyPrime"** — tracked as
-[ROADMAP.md](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md)
-with one GitHub milestone per phase. Phase 1 (the completeness pass) landed
-in v0.19.0, Phase 2 (bill-wise & outstanding) in v0.20.0, Phase 3 (order
-processing) in v0.21.0, Phase 4 (cost centres & categories) in v0.22.0,
-Phase 5 (the banking pack) in this release; Phase 6 is **inventory depth**
-(batches, serials, expiry, godowns, re-order levels, manufacturing).
-
-## What's underneath (unchanged, and that's the point)
-
-- Embedded PostgreSQL, append-only history, exact decimals — every law
-  enforced at the application and database layers. The native window is an
-  API client: zero business logic in the GUI, one engine for web, Docker
-  and desktop.
-- Your data stays where it was: `%LOCALAPPDATA%\LedgerForge` (or your
-  `--data-dir`). v0.22 books open in v0.23 after a one-time automatic
-  migration (0008 — three new tables only; the migrate path the smoke test
-  proves on every build).
-- The engine runs in its own process (ADR-022): the window cannot crash
-  your books, and the books cannot crash the window.

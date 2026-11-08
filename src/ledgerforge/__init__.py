@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.25.0"
+__version__ = "0.26.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -63,4 +63,10 @@ __version__ = "0.25.0"
 #:       GST pack’s reconciliation fold input, the ``bank_lines``
 #:       precedent of 0.11) — so the pack’s ITC comparison reads
 #:       stored facts through the versioned API, never the session.
-PLUGIN_API_VERSION = "0.13"
+#: 0.14 — the attendance read (ADR-029):
+#:       ``Resolver.attendance_lines(period)`` (the live register’s rows —
+#:       raw day counts of one work month, the payroll pack’s per-day
+#:       fold input, the ``fy_start_month`` precedent of 0.4) — so the
+#:       pack computes payable days through the versioned API, never
+#:       the session, and the kernel stays meaning-blind.
+PLUGIN_API_VERSION = "0.14"

@@ -29,6 +29,7 @@ from .masters import MastersPage
 from .models import Book
 from .order_dialog import NewOrderDialog
 from .orders import OrdersPage
+from .payroll import PayrollPage
 from .periods import PeriodsPage
 from .reports import ReportsPage
 from .sandbox import SandboxPage
@@ -41,7 +42,8 @@ from .widgets import app_icon, error_detail
 #: get their own home between the masters they name and the reports they
 #: feed. Inventory follows Banking (ADR-027): the stock depth's masters,
 #: positions and recipes. GST follows Inventory (ADR-028): the compliance
-#: workbench. Alt+1..9 follow the list.
+#: workbench. Payroll follows GST (ADR-029): the people workbench. Alt+1..9
+#: and Alt+0 (the tenth) follow the list.
 PAGES = [
     ("daybook", "Day Book"),
     ("masters", "Masters"),
@@ -49,6 +51,7 @@ PAGES = [
     ("banking", "Banking"),
     ("inventory", "Inventory"),
     ("gst", "GST"),
+    ("payroll", "Payroll"),
     ("reports", "Reports"),
     ("periods", "Periods"),
     ("sandbox", "Sandbox"),
@@ -74,6 +77,7 @@ class MainWindow(QMainWindow):
         self.banking = BankingPage(client)
         self.inventory = InventoryPage(client)
         self.gst = GstPage(client)
+        self.payroll = PayrollPage(client)
         self.reports = ReportsPage(client)
         self.periods = PeriodsPage(client)
         self.sandbox = SandboxPage(client)
@@ -84,6 +88,7 @@ class MainWindow(QMainWindow):
             self.banking,
             self.inventory,
             self.gst,
+            self.payroll,
             self.reports,
             self.periods,
             self.sandbox,
@@ -156,7 +161,8 @@ class MainWindow(QMainWindow):
         navigate = self.menuBar().addMenu("&Navigate")
         for index, (_key, label) in enumerate(PAGES):
             action = QAction(f"&{index + 1}  {label}", self)
-            action.setShortcut(QKeySequence(f"Alt+{index + 1}"))
+            # the tenth page takes Alt+0 — the keyboard's own wrap-around
+            action.setShortcut(QKeySequence(f"Alt+{(index + 1) % 10}"))
             action.triggered.connect(lambda _checked=False, row=index: self._goto(row))
             navigate.addAction(action)
 

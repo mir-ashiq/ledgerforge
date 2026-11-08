@@ -316,12 +316,12 @@ def test_duplicate_manifest_name_refused(tmp_path, publisher):
 
 
 def test_too_new_api_dropin_refused(tmp_path, publisher):
-    """A properly signed plugin from the future (plugin API 0.14, one past
-    the current 0.13 of ADR-028) is refused at boot exactly like an
+    """A properly signed plugin from the future (plugin API 0.15, one past
+    the current 0.14 of ADR-029) is refused at boot exactly like an
     entry-point would be."""
     private_pem, public_b64 = publisher
-    _write_plugin(tmp_path, "zeta", name="zeta-pack", api="0.14")
-    _sign_into(tmp_path, "zeta", private_pem, name="zeta-pack", api="0.14")
+    _write_plugin(tmp_path, "zeta", name="zeta-pack", api="0.15")
+    _sign_into(tmp_path, "zeta", private_pem, name="zeta-pack", api="0.15")
     store = TrustStore.load(tmp_path)
     store.approve_publisher(public_b64)
     store.save()
@@ -528,14 +528,14 @@ def test_cli_install_rejects_too_new_api(tmp_path, publisher):
     private_pem, public_b64 = publisher
     src_dir = tmp_path / "src"
     src_dir.mkdir()
-    _write_plugin(src_dir, "future_pack", name="future-pack", api="0.14")
+    _write_plugin(src_dir, "future_pack", name="future-pack", api="0.15")
     index = _mini_index(
         src_dir,
         "future_pack",
         private_pem=private_pem,
         public_b64=public_b64,
         name="future-pack",
-        api="0.14",
+        api="0.15",
     )
     with pytest.raises(SystemExit, match="plugin API"):
         cli(

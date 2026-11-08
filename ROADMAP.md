@@ -76,7 +76,7 @@ subscriptions for updates and remote services.
 | Cost centres | ✔ | ✔ (ADR-025) | **parity** — landed in v0.22.0 (Phase 4) |
 | Banking, BRS, cheques | ✔ (incl. connected banking) | ✔ (ADR-026) | **parity** — landed in v0.23.0 (Phase 5); per-bank connected-banking APIs stay plugin-side by design (D3) |
 | GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox, 2A/2B recon, 3B, 9, notes, multi-GSTIN, e-way outbox (ADR-028) | **parity** — landed in v0.25.0 (Phase 7); reverse-charge and set-off stay honestly blank, portal adapters stay plugin-side (D3) |
-| Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS | **partial** (Phase 8) |
+| Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS, attendance-derived pay, loans with EMI recovery, F&F, payslip distribution (ADR-029) | **parity** — landed in v0.26.0 (Phase 8); a leave *balance* (accrual policy) stays the operator's fact, SMTP stays bridge-side by design (D3) |
 | Bill-wise & outstanding, ageing, interest | ✔ | ✔ (ADR-023) | **parity** — landed in v0.20.0 (Phase 2) |
 | Data exchange | ✔ Excel/CSV/TDL/XML | JSON REST API only | **gap** (Phase 9 — incl. the Tally migration path) |
 | Extensibility | TDL (proprietary) | Python packs, signed index, sandbox slots | **LedgerForge leads** |
@@ -84,11 +84,11 @@ subscriptions for updates and remote services.
 | Price | ₹22,500+ per seat | AGPL-3.0, free forever | **LedgerForge leads** |
 
 The honest summary: **the accounting core is at parity** — bill-wise, orders, cost
-centres, banking, inventory and GST compliance depth all landed (v0.20–v0.25). What
-remains toward v1.0 is payroll depth (attendance, loans, F&F), the data-exchange
-path (imports and the Tally migration), distribution hardening (signing,
-auto-update), and the v1.0 parity release itself (Phases 8–11). That is exactly
-what the remaining phases below deliver, in dependency order.
+centres, banking, inventory, GST compliance depth and payroll depth all landed
+(v0.20–v0.26). What remains toward v1.0 is the data-exchange path (imports and
+the Tally migration), distribution hardening (signing, auto-update), and the
+v1.0 parity release itself (Phases 9–11). That is exactly what the remaining
+phases below deliver, in dependency order.
 
 ---
 
@@ -192,14 +192,23 @@ database, not in `meta`.
 - Credit/debit note returns handling and multi-GSTIN (several registrations in one book,
   place-of-supply already decided per voucher).
 
-### Phase 8 — v0.26.0 · Payroll depth *(ADR-029, extends ADR-012)*
+### Phase 8 — v0.26.0 · Payroll depth *(ADR-029, extends ADR-012 — landed in v0.26.0)*
 
-- Attendance & leave documents (present/absent/half-day/leave-with-pay per employee per
-  period) feeding attendance-derived earning components.
-- Loans & advances: issue voucher, EMI schedule, automatic recovery component in runs,
-  outstanding balance as a fold.
-- Full & final settlement (leave encashment, dues, recoveries — one settlement voucher).
-- Payslip distribution seam (email/PDF batch through a plugin; core never sends mail).
+- Attendance & leave registers as the fifth fact table (migration 0011, the
+  GSTR-2B discipline restated for the shop floor): idempotent by fingerprint,
+  latest-snapshot-wins, calendar-guarded counts.
+- Attendance-derived earning components: `per_day` × payable days of the live
+  register (plugin API 0.14, `Resolver.attendance_lines`) — the derivation
+  rides the stored document; no register, no derivation.
+- Loans & advances: issue voucher with the exact-Decimal annuity EMI schedule
+  (advisory — recovery is a per-run fact), the `recovery` component kind with
+  the outstanding fold's ceiling (named loans adopt their scheduled EMI), and
+  `loan_position()` + the `payroll-loans` report as the fold's window.
+- Full & final settlement (leave encashment, dues, recoveries — one voucher;
+  the relieved gate with reversal-reopen; payouts stay legal).
+- Payslip distribution seam: the `LF_PAYROLL_OUTBOX` JSONL +
+  `lf-payslip-bridge` (PDF batch through the same layout engine; SMTP only
+  when the operator configures it — core never sends mail).
 
 ### Phase 9 — v0.27.0 · Data exchange & the Tally migration path *(ADR-030)*
 
@@ -251,4 +260,4 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-08, at the close of Phase 7.*
+code. Last revisited: 2026-11-08, at the close of Phase 8.*

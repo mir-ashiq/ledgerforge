@@ -1341,6 +1341,72 @@ CREATE TRIGGER trg_gst_lines_check
     FOR EACH ROW EXECUTE FUNCTION trg_gst_lines_check();
 
 -- ----------------------------------------------------------------------------
+-- Attendance registers (0011/ADR-029) — the payroll depth's fact tables, the
+-- ADR-026 argument restated for the shop floor: present/absent/half-day/
+-- leave-with-pay counts are observations about the world, not double-entry
+-- movements (Law 1 forbids inventing a voucher to carry them), and the books
+-- must remember them exactly. A batch is one period's register; a corrected
+-- register is a new batch (append-only history, Law 2) and the fold reads
+-- the period's latest batch only — the 2B latest-snapshot discipline. Day
+-- counts are NUMERIC(6,1): a half-day is 0.5, exact. The kernel stores and
+-- validates; payable days are the payroll pack's arithmetic (ADR-029: the
+-- kernel stays meaning-blind). Books are strangers (ADR-009): book-scoped.
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS payroll_attendance_batches (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    book_id      BIGINT NOT NULL REFERENCES books(id),
+    period       TEXT NOT NULL CHECK (period ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
+    source       TEXT,
+    line_count   INTEGER NOT NULL DEFAULT 0,
+    imported_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS payroll_attendance_lines (
+    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    book_id         BIGINT NOT NULL REFERENCES books(id),
+    batch_id        BIGINT NOT NULL,
+    employee        TEXT NOT NULL,
+    days_present    NUMERIC(6, 1) NOT NULL DEFAULT 0 CHECK (days_present >= 0),
+    days_absent     NUMERIC(6, 1) NOT NULL DEFAULT 0 CHECK (days_absent >= 0),
+    days_half       NUMERIC(6, 1) NOT NULL DEFAULT 0 CHECK (days_half >= 0),
+    days_leave_paid NUMERIC(6, 1) NOT NULL DEFAULT 0 CHECK (days_leave_paid >= 0),
+    note            TEXT,
+    fingerprint     TEXT NOT NULL,
+    imported_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_attendance_lines_fingerprint UNIQUE (book_id, fingerprint),
+    CONSTRAINT fk_attendance_lines_batch FOREIGN KEY (batch_id)
+        REFERENCES payroll_attendance_batches (id) ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_attendance_lines_batch ON payroll_attendance_lines (batch_id);
+CREATE INDEX IF NOT EXISTS idx_attendance_lines_period
+    ON payroll_attendance_batches (book_id, period, id);
+
+-- Batch/line scoping at the only write path the fact tables have (INSERT —
+-- they are append-only): a line must ride its own batch's book — the
+-- composite discipline the bank and portal lines follow.
+CREATE OR REPLACE FUNCTION trg_attendance_lines_check() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_batch RECORD;
+BEGIN
+    SELECT book_id INTO v_batch FROM payroll_attendance_batches WHERE id = NEW.batch_id;
+    IF v_batch IS NULL THEN
+        RAISE EXCEPTION 'Attendance line references unknown register batch %', NEW.batch_id;
+    END IF;
+    IF v_batch.book_id <> NEW.book_id THEN
+        RAISE EXCEPTION 'Attendance line must ride its own batch''s book (batch % is book %; the line claims %)',
+            NEW.batch_id, v_batch.book_id, NEW.book_id;
+    END IF;
+    RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_attendance_lines_check ON payroll_attendance_lines;
+CREATE TRIGGER trg_attendance_lines_check
+    BEFORE INSERT ON payroll_attendance_lines
+    FOR EACH ROW EXECUTE FUNCTION trg_attendance_lines_check();
+
+-- ----------------------------------------------------------------------------
 -- Law 2 defense in depth: financial history is append-only at the trigger
 -- level and at the privilege level.
 -- ----------------------------------------------------------------------------
@@ -1411,6 +1477,21 @@ CREATE TRIGGER trg_gst_lines_immutable
     BEFORE UPDATE OR DELETE ON gst_download_lines
     FOR EACH ROW EXECUTE FUNCTION trg_forbid_mutation();
 
+-- Attendance registers are history the moment they land (ADR-029), the
+-- bank-statement and portal-row discipline: a day count a payroll run
+-- already derived pay from is never edited — a corrected register is a new
+-- import, and the fingerprint makes the re-import idempotent. The batches
+-- (register receipts) are history with them.
+DROP TRIGGER IF EXISTS trg_attendance_batches_immutable ON payroll_attendance_batches;
+CREATE TRIGGER trg_attendance_batches_immutable
+    BEFORE UPDATE OR DELETE ON payroll_attendance_batches
+    FOR EACH ROW EXECUTE FUNCTION trg_forbid_mutation();
+
+DROP TRIGGER IF EXISTS trg_attendance_lines_immutable ON payroll_attendance_lines;
+CREATE TRIGGER trg_attendance_lines_immutable
+    BEFORE UPDATE OR DELETE ON payroll_attendance_lines
+    FOR EACH ROW EXECUTE FUNCTION trg_forbid_mutation();
+
 -- ----------------------------------------------------------------------------
 -- Application role: least privilege. Even a compromised application cannot
 -- update or delete financial history.
@@ -1467,4 +1548,10 @@ GRANT INSERT ON gst_downloads, gst_download_lines TO ledgerforge_app;
 GRANT SELECT ON gst_downloads, gst_download_lines TO ledgerforge_app;
 GRANT USAGE ON SEQUENCE gst_downloads_id_seq, gst_download_lines_id_seq
     TO ledgerforge_app;
+-- Attendance registers (0011/ADR-029): shop-floor facts, the same banking
+-- discipline — INSERT only, append-only, never mutable.
+GRANT INSERT ON payroll_attendance_batches, payroll_attendance_lines TO ledgerforge_app;
+GRANT SELECT ON payroll_attendance_batches, payroll_attendance_lines TO ledgerforge_app;
+GRANT USAGE ON SEQUENCE payroll_attendance_batches_id_seq,
+    payroll_attendance_lines_id_seq TO ledgerforge_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ledgerforge_app;

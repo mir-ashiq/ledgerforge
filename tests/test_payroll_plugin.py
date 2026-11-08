@@ -408,7 +408,9 @@ def test_run_validations(client, fresh_db):
                 "period": PERIOD,
                 "employees": [employee_entry("A", [comp("X", "10.00", "withheld")])],
             },
-            "withheld exceeds gross",
+            # ADR-029 widened the guard's wording: recoveries reduce net pay
+            # exactly like withholdings, so the message names both now.
+            "recoveries exceed gross",
         ),
     ]
     for doc, expected in cases:

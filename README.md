@@ -376,16 +376,49 @@ exact to the cent.
   `lf-ewb-bridge` ships it to your adapter — the IRN discipline, applied
   to movement.
 
-## Payroll (roadmap §9, ADR-012)
+## Payroll (roadmap §9, ADR-012 + the depth, ADR-029)
 
-The third business pack — the second in a row with **zero schema change**,
-and the last planned roadmap feature. Salaries are documents like invoices
-and stock: a **run** accrues a period's payroll (one voucher, the
-TallyPrime payroll journal shape), a **payout** settles it. The derived
-state is a deterministic fold over posted documents, never stored:
-**year-to-date windows by the book's fiscal year** (plugin API 0.4 grew
-the one fact that needs: `Resolver.fy_start_month`), while **payable is
-an all-time balance** — an accumulator windows, a balance never expires.
+The third business pack — salaries are documents like invoices and stock:
+a **run** accrues a period's payroll (one voucher, the TallyPrime payroll
+journal shape), a **payout** settles it. The derived state is a
+deterministic fold over posted documents, never stored: **year-to-date
+windows by the book's fiscal year** (plugin API 0.4 grew the one fact
+that needs: `Resolver.fy_start_month`), while **payable is an all-time
+balance** — an accumulator windows, a balance never expires.
+
+Phase 8 (ADR-029) deepened it to TallyPrime's answer for the shop floor:
+
+- **Attendance registers as facts** — `POST /api/v1/payroll/attendance`
+  keys one period's register (present / absent / half-day / leave-with-pay
+  per employee; a half-day is 0.5, the calendar is the honesty ceiling).
+  Idempotent by content fingerprint; a corrected register is a new
+  snapshot (latest-batch-wins, append-only history — the GSTR-2B
+  discipline restated for the shop floor). An earning component may carry
+  `per_day` instead of `amount`: the run derives it — `per_day × payable
+  days` of the live register (plugin API 0.14:
+  `Resolver.attendance_lines`) — and records the derivation beside the
+  amount. No register, no derivation: a 422, never a guess.
+- **Loans & advances** — `mode: "loan"` issues Dr the employee's advance
+  (`"{employee} Advance"` under *Loans & Advances (Asset)*) / Cr the bank,
+  with the exact-Decimal annuity EMI schedule computed into the document
+  (rate 0 = interest-free; the final row absorbs its own rounding). The
+  schedule is advisory: recovery is the run's new `recovery` component
+  kind — it reduces net pay and credits the advance ledger, guarded by
+  the outstanding fold (named loans adopt their scheduled EMI
+  automatically). `loan_position()` replays the fold;
+  `payroll-loans` renders it (JSON/CSV/PDF).
+- **The full & final settlement** — `mode: "settlement"` books leave
+  encashment (`days × per_day`), dues, withholdings and recoveries in one
+  voucher, paying direct from the bank or accruing to the payable. After
+  it the employee is **relieved**: runs, loans and further settlements
+  refuse (`policy:allow_post_settlement` for the genuinely-late
+  correction); payouts stay legal. A reversal reopens the relationship.
+- **The payslip outbox** — every run appends one
+  `lf-payroll-payslip/1` envelope per employee to `LF_PAYROLL_OUTBOX`;
+  `lf-payslip-bridge` renders the PDF batch through the same layout
+  engine as Ctrl+P and, only when the operator configures SMTP
+  (`LF_PAYROLL_SMTP_*`), emails each payslip to the address the run entry
+  carried. **Core never sends mail** — the bridge is the only mailer.
 
 ```bash
 # October payroll: earnings, withholdings and the employer's contribution
@@ -406,6 +439,18 @@ curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/jso
 #   Cr Asha Verma 68200 (Provisions — net pay)
 #   computed: gross 70000 / withheld 1800 / net 68200 + fiscal-year YTD
 
+# Attendance-derived pay: per_day instead of amount
+#   {"name": "Basic Salary", "kind": "earning", "per_day": "1500.00"}
+#   → amount = 1500 × payable days of the period's live register
+
+# A staff loan and its automatic recovery
+# meta: {"payroll": {"mode": "loan", "employee": "Asha Verma",
+#                    "principal": "100000.00", "rate": "9.0",
+#                    "months": 20, "bank": "HDFC Bank"}}
+# …then, in the next run's components:
+#   {"name": "Loan Recovery", "kind": "recovery", "loan": "JV-0042"}
+#   → adopts that loan's scheduled EMI for the period
+
 # Settle it
 # meta: {"payroll": {"mode": "payout", "employee": "Asha Verma",
 #                    "amount": "68200.00", "bank": "HDFC Bank"}}
@@ -413,14 +458,18 @@ curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/jso
 
 One run per employee per period (advisory-lock-serialized, so concurrent
 duplicates cannot both post; policy-overridable for off-cycle
-corrections). Reversals net to zero on YTD and payable. `ytd()` and
-`payable()` replay the folds for any later consumer. Guards (all 422):
-malformed periods, duplicate employees/components, withheld exceeding
-gross, employer contributions without a liability, periods that have not
-started, mode conflicts with the other packs, FX lines, and employee
-names that would silently reuse an unrelated ledger.
+corrections). Reversals net to zero on YTD, payable and the loan
+outstanding. `ytd()`, `payable()`, `loan_position()` and `is_settled()`
+replay the folds for any later consumer. Guards (all 422): malformed
+periods, duplicate employees/components, withheld and recoveries
+exceeding gross, employer contributions without a liability, recoveries
+crossing the loan outstanding, attendance-derived components without
+their register, periods that have not started, mode conflicts with the
+other packs, FX lines, and employee names that would silently reuse an
+unrelated ledger.
 
 Design: [ADR-012](docs/adr/012-payroll-pack.md),
+[ADR-029](docs/adr/029-payroll-depth.md),
 [plugin guide](docs/plugin-guide.md).
 
 ## Bill-wise & outstanding management (roadmap Phase 2, ADR-023)

@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Identity,
+    Numeric,
     SmallInteger,
     Text,
     text,
@@ -474,5 +475,49 @@ class GstDownloadLine(Base):
     sgst: Mapped[Decimal] = mapped_column(default=Decimal(0))
     pos: Mapped[str | None]
     itc_available: Mapped[bool] = mapped_column(default=True)
+    fingerprint: Mapped[str] = mapped_column(Text)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class AttendanceBatch(Base):
+    """One attendance register's receipt (ADR-029, migration 0011): the
+    ``YYYY-MM`` work month it covers, a source label, the line count. A
+    corrected register imports as a new batch (append-only, Law 2) and the
+    fold reads the period's latest batch only — the 2B latest-snapshot
+    discipline, restated for the shop floor."""
+
+    __tablename__ = "payroll_attendance_batches"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    period: Mapped[str] = mapped_column(Text)
+    source: Mapped[str | None]
+    line_count: Mapped[int] = mapped_column(default=0)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class AttendanceLine(Base):
+    """One employee's day counts in one attendance register (ADR-029,
+    migration 0011): present, absent, half-day, leave-with-pay — counts,
+    not money (``NUMERIC(6,1)``: a half-day is 0.5, exact). The kernel
+    stores and validates; **payable days are the payroll pack's
+    arithmetic** (``present + half × 0.5 + leave_paid``) — the kernel stays
+    meaning-blind, the bank_lines division. ``fingerprint`` carries the
+    register's revision so an unchanged re-entry is a no-op and a corrected
+    register re-states whole. Append-only, trigger-guarded."""
+
+    __tablename__ = "payroll_attendance_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("payroll_attendance_batches.id", ondelete="RESTRICT")
+    )
+    employee: Mapped[str] = mapped_column(Text)
+    days_present: Mapped[Decimal] = mapped_column(Numeric(6, 1), default=Decimal(0))
+    days_absent: Mapped[Decimal] = mapped_column(Numeric(6, 1), default=Decimal(0))
+    days_half: Mapped[Decimal] = mapped_column(Numeric(6, 1), default=Decimal(0))
+    days_leave_paid: Mapped[Decimal] = mapped_column(Numeric(6, 1), default=Decimal(0))
+    note: Mapped[str | None]
     fingerprint: Mapped[str] = mapped_column(Text)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
