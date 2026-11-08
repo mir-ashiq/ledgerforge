@@ -14,6 +14,7 @@ exits 0 only if every step proved out.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -96,9 +97,12 @@ def _serve_engine(data_dir: str, port: int, stop_event) -> None:
     """
     import multiprocessing
 
+    from .crashes import enable_engine_faults
+
     data = Path(data_dir)
     data.mkdir(parents=True, exist_ok=True)
     log = data / "engine.log"
+    enable_engine_faults(data)  # fatal signals dump beside the GUI's reports
     try:
         dsn = boot_database(data)
         ensure_schema(dsn, quiet=True)
@@ -204,6 +208,8 @@ def run_app(data_dir: Path | None = None, port: int | None = None) -> int:
     from PySide6.QtCore import QLockFile, QTimer
     from PySide6.QtWidgets import QMessageBox
 
+    from ..updating import pending_update
+    from .crashes import autosend_enabled, endpoint_from_env, install_handlers, send_pending
     from .main_window import MainWindow
 
     data = data_dir or default_data_dir()
@@ -222,6 +228,20 @@ def run_app(data_dir: Path | None = None, port: int | None = None) -> int:
             "(the LedgerForge icon).",
         )
         return 0
+
+    # ADR-031: crashes are captured always (locally), and sent only when
+    # the operator configured an endpoint AND this machine opted in.
+    restore_crash_handlers = install_handlers(data)
+    if endpoint_from_env() and autosend_enabled():
+        send_pending(data, endpoint_from_env())
+
+    staged = pending_update(data)
+    if staged is not None and not getattr(sys, "frozen", False):
+        print(
+            f"LedgerForge: update {staged['to']} is staged, but a source run never "
+            "self-modifies — the frozen app applies it on relaunch.",
+            file=sys.stderr,
+        )
 
     splash = _BootWindow(app)
 
@@ -273,6 +293,7 @@ def run_app(data_dir: Path | None = None, port: int | None = None) -> int:
     signal.signal(signal.SIGINT, signal.SIG_DFL)  # Ctrl+C in a console still quits
     code = app.exec()
     lock.unlock()
+    restore_crash_handlers()
     return code
 
 
@@ -314,7 +335,14 @@ def smoke(data_dir: Path | None = None, port: int | None = None) -> int:
     window = MainWindow(client, str(data))
     window.show()
 
-    remaining = {"day book", "trial balance", "gstr1 pack", "export seam"}
+    remaining = {
+        "day book",
+        "trial balance",
+        "gstr1 pack",
+        "export seam",
+        "update gate",
+        "crash gate",
+    }
     state = {"failed": False}
 
     def fail(stage: str, error: object) -> None:
@@ -383,12 +411,83 @@ def smoke(data_dir: Path | None = None, port: int | None = None) -> int:
             lambda e: fail("export seam", e),
         )
 
+    def _update_gate():
+        # ADR-031's fail-closed law, proven on the shipped bytes: a
+        # tampered manifest is refused, an unsigned one is refused, and a
+        # fresh data directory has nothing staged. The updater never
+        # installs what it cannot verify.
+        def done(result):
+            refused_unsigned, refused_tampered, staged = result
+            print(
+                f"update gate: unsigned refused={refused_unsigned}, "
+                f"tampered refused={refused_tampered}, staged={staged}"
+            )
+            if not (refused_unsigned and refused_tampered and staged is None):
+                fail(
+                    "update gate",
+                    ValueError(
+                        f"unsigned={refused_unsigned} tampered={refused_tampered} "
+                        f"staged={staged} — the gate must refuse both and stage nothing"
+                    ),
+                )
+                return
+            landed("update gate")
+
+        def work():
+            from .. import updating
+
+            manifest = {
+                "product": updating.PRODUCT,
+                "version": "999.0.0",
+                "platforms": {"windows-x64": {"url": "https://x/y.zip", "sha256": "00", "size": 1}},
+            }
+            raw = updating.canonical_bytes(manifest)
+            try:
+                updating.verify_manifest(raw, "not-a-signature")
+                refused_unsigned = False
+            except updating.UpdateError:
+                refused_unsigned = True
+            tampered = json.loads(raw)
+            tampered["version"] = "998.0.0"
+            try:
+                updating.verify_manifest(updating.canonical_bytes(tampered), "AAAA")
+                refused_tampered = False
+            except updating.UpdateError:
+                refused_tampered = True
+            return refused_unsigned, refused_tampered, updating.pending_update(data)
+
+        run_task(work, done, lambda e: fail("update gate", e))
+
+    def _crash_gate():
+        # ADR-031's capture-always pledge, proven: a report lands in the
+        # data directory, readable, allowlisted, never containing books.
+        def done(result):
+            path, keys = result
+            print(f"crash gate: report {path.name}, keys {sorted(keys)}")
+            from .crashes import REPORT_KEYS
+
+            if set(keys) - set(REPORT_KEYS):
+                fail("crash gate", ValueError(f"report carries unknown keys: {keys}"))
+                return
+            landed("crash gate")
+
+        def work():
+            from .crashes import capture
+
+            path = capture("smoke-proof", ValueError("the smoke gate's own proof"), None, data)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return path, set(payload)
+
+        run_task(work, done, lambda e: fail("crash gate", e))
+
     # a hard ceiling so a hung engine still fails the gate instead of the job
     QTimer.singleShot(120_000, lambda: fail("overall", TimeoutError("two minutes, no completion")))
     QTimer.singleShot(100, _daybook)
     QTimer.singleShot(150, _tb)
     QTimer.singleShot(200, _gstr1)
     QTimer.singleShot(250, _export)
+    QTimer.singleShot(300, _update_gate)
+    QTimer.singleShot(350, _crash_gate)
 
     code = app.exec()
     window.close()
@@ -417,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ledgerforge-native",
         description=(
-            "LedgerForge Native — the Windows desktop application (ADR-022): "
+            "LedgerForge Native — the desktop application (ADR-022): "
             "a Qt window over the embedded engine. No browser, no web server "
             "to visit — the window is the product."
         ),
@@ -430,7 +529,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--smoke", action="store_true", help="headless self-check for CI: exit 0/1, no window"
     )
+    parser.add_argument(
+        "--apply-update",
+        type=Path,
+        default=None,
+        metavar="INSTALL_DIR",
+        help="apply the staged update (if any) to INSTALL_DIR and exit — "
+        "the update-on-relaunch path (ADR-031), for updaters and tests",
+    )
     args = parser.parse_args(argv)
+    if args.apply_update is not None:
+        from ..updating import apply_pending
+
+        applied = apply_pending(args.data_dir or default_data_dir(), args.apply_update)
+        print(f"applied update: {applied}" if applied else "no staged update")
+        return 0
     if args.smoke:
         return smoke(args.data_dir, args.port)
+
+    # ADR-031 — update-on-relaunch: BEFORE Qt and before the engine child,
+    # a frozen app applies the staged update to its own install directory
+    # (a source run refuses to self-modify; run_app explains). A failed
+    # verification starts the current version — the updater's failure mode
+    # is "no update", never "broken app".
+    if getattr(sys, "frozen", False):
+        from ..updating import STAGING_DIRNAME, UpdateError, apply_pending
+
+        data = args.data_dir or default_data_dir()
+        try:
+            applied = apply_pending(data)
+        except UpdateError as exc:
+            print(
+                f"LedgerForge: the staged update failed verification ({exc}) — "
+                "starting the current version.",
+                file=sys.stderr,
+            )
+            import shutil
+
+            shutil.rmtree(Path(data) / STAGING_DIRNAME, ignore_errors=True)
+        else:
+            if applied:
+                print(f"LedgerForge: update {applied} applied — starting.")
     return run_app(args.data_dir, args.port)

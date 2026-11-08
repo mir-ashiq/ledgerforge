@@ -1,6 +1,8 @@
-"""Generate the LedgerForge application icon (desktop/ledgerforge.ico).
+"""Generate the LedgerForge application icon, every platform's format.
 
-Run:  python scripts/make_icon.py
+Run:  python scripts/make_icon.py            # the .ico (Windows)
+      python scripts/make_icon.py --icns     # + the .icns (macOS)
+      python scripts/make_icon.py --png      # + the .png (Linux desktop)
 
 Draws the glyph with Pillow — a stylized ledger book with an LF spine — and
 writes a multi-resolution .ico (16–256 px) that the PyInstaller bundle and the
@@ -10,6 +12,7 @@ same input, same bytes, so releases diff cleanly.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -59,6 +62,16 @@ def main() -> None:
         append_images=[draw_glyph(s) for s in sizes[:-1]],
     )
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes, sizes {sizes})")
+
+    if "--icns" in sys.argv:  # the macOS bundle's icon
+        icns = OUT.with_suffix(".icns")
+        draw_glyph(512).save(icns, format="ICNS")
+        print(f"wrote {icns} ({icns.stat().st_size} bytes)")
+
+    if "--png" in sys.argv:  # the Linux desktop file's icon
+        png = OUT.with_suffix(".png")
+        draw_glyph(256).save(png, format="PNG")
+        print(f"wrote {png} ({png.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

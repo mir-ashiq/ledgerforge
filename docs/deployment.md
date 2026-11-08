@@ -171,6 +171,18 @@ above until a real requirements-driven case lands (ADR-020).
 5. After a financial-year close, refresh the balance cache
    (`ledgerforge scale-out refresh-cache`).
 
+The **native application** upgrades itself (ADR-031): each release
+publishes `update_manifest.json` with its detached Ed25519 signature
+(`update_manifest.sig`), the SHA-256 of every per-platform package, and
+file-level deltas from the previous release. The app verifies the
+manifest against the release key pinned in its own bytes before anything
+else (fail closed), downloads the delta when its version has one, verifies
+every staged byte, and applies on the next relaunch — an interrupted apply
+is repaired by the following boot. Operators mirroring releases internally
+set `LF_UPDATE_URL`; privacy-sensitive deployments set `LF_UPDATE_CHECKS=0`
+and upgrade by replacing the folder. `scripts/make_update_manifest.py` and
+`scripts/make_delta.py` regenerate the artifacts for a private mirror.
+
 ## 8. Where the depth lives
 
 | Topic | Document |
@@ -180,4 +192,5 @@ above until a real requirements-driven case lands (ADR-020).
 | Period locking (audit windows) | ADR-008 |
 | Report scale-out (partitions, cache) | ADR-018, `ledgerforge scale-out --help` |
 | Plugins: trust, install, rotation | [`docs/plugin-guide.md`](plugin-guide.md), ADR-016, [`community/plugins/README.md`](../community/plugins/README.md) |
+| Desktop updates, signing, crash reporting | ADR-031, [`desktop/`](../desktop/) |
 | The product decisions, numbered | [`docs/adr/`](adr/) |

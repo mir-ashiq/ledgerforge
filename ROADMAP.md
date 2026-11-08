@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.25.0** |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.28.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -80,15 +80,14 @@ subscriptions for updates and remote services.
 | Bill-wise & outstanding, ageing, interest | ✔ | ✔ (ADR-023) | **parity** — landed in v0.20.0 (Phase 2) |
 | Data exchange | ✔ Excel/CSV/TDL/XML | CSV/XLSX import (masters, openings, vouchers, stock, bank) & export on every surface, TallyPrime XML migration with a verification report, SQL views + ODBC, personal API tokens (ADR-030) | **parity** — landed in v0.27.0 (Phase 9); TDL (Tally's proprietary language) stays out by design — Python packs are the answer (D4) |
 | Extensibility | TDL (proprietary) | Python packs, signed index, sandbox slots | **LedgerForge leads** |
-| Deployment | Windows LAN (Silver/Gold) | Native Windows app, web container, REST API, CLI | **LedgerForge leads** on openness; **behind** on signing/auto-update (Phase 10) |
+| Deployment | Windows LAN (Silver/Gold) | Native Windows app, web container, REST API, CLI | **parity** — landed in v0.28.0 (Phase 10): signed self-verifying updates with deltas, code-signing gates armed in the workflow, macOS + Linux packages, opt-in crash reporting (ADR-031); a paid signing certificate still buys the last SmartScreen mile |
 | Price | ₹22,500+ per seat | AGPL-3.0, free forever | **LedgerForge leads** |
 
 The honest summary: **the accounting core is at parity** — bill-wise, orders, cost
 centres, banking, inventory, GST compliance depth, payroll depth and data
-exchange all landed (v0.20–v0.27). What remains toward v1.0 is distribution
-hardening (signing, auto-update), and the v1.0 parity release itself
-(Phases 10–11). That is exactly what the remaining
-phases below deliver, in dependency order.
+exchange all landed (v0.20–v0.27), and distribution hardening landed in
+v0.28. What remains toward v1.0 is the parity release itself
+(Phase 11). That is exactly what the remaining phase below delivers.
 
 ---
 
@@ -223,13 +222,20 @@ The adoption lever: **you can move off TallyPrime onto LedgerForge**.
 - Read-only SQL views + ODBC for analysts; personal API tokens for integrations
   (long-lived, scoped, revocable — the desktop's non-OIDC answer).
 
-### Phase 10 — v0.28.0 · Distribution hardening *(ADR-031, pays the ADR-021 debt)*
+### Phase 10 — v0.28.0 · Distribution hardening *(ADR-031, landed in v0.28.0 — pays the ADR-021 debt)*
 
 - **Windows code signing** (the recorded follow-up; Azure Trusted Signing or a hardware
   certificate in the release workflow) — the SmartScreen warning dies.
 - **macOS and Linux native packages** of the same Qt shell.
 - **Auto-update**: signed update manifest, delta-aware downloader, update-on-relaunch.
 - Opt-in crash reporting (no telemetry by default — it stays a pledge, not a setting).
+
+All four shipped: the workflow signs the moment the secrets exist; macOS
+(arm64 `.app`) and Linux (x64 tar.gz) packages build from the same spec,
+smoke-gated like Windows; the Ed25519-signed `update_manifest.json` +
+file-level deltas drive update-on-relaunch (fail closed, verified staging,
+idempotent apply); crashes are captured locally always and sent nowhere
+unless chosen (ADR-031).
 
 ### Phase 11 — v1.0.0 · The parity release
 
@@ -260,4 +266,4 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-08, at the close of Phase 8.*
+code. Last revisited: 2026-11-09, at the close of Phase 10.*

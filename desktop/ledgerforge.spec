@@ -1,14 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec — LedgerForge Native, Windows x64 (ADR-022).
+"""PyInstaller spec — LedgerForge Native, three platforms (ADR-022/031).
 
-Build from the repository root, on Windows:
+Build from the repository root, on the target platform:
 
     pyinstaller desktop/ledgerforge.spec --noconfirm
 
-Output: ``dist/LedgerForge/LedgerForge.exe`` (onedir — the folder IS the
-application; ship it zipped). ``.github/workflows/release-windows.yml`` runs
-exactly this on ``windows-latest`` for every ``v*`` tag, smoke-tests the exe
-offscreen (``--smoke``), and publishes the zip as a GitHub Release.
+Output: ``dist/LedgerForge`` (onedir — the folder IS the application).
+``.github/workflows/release-native.yml`` runs exactly this on Windows x64,
+macOS arm64 and Linux x64 for every ``v*`` tag, smoke-tests the shipped
+artifact offscreen (``--smoke``), and publishes the packages as a GitHub
+Release with a signed update manifest.
 
 What this is: the NATIVE application — a Qt window (GUI subsystem, no
 console), the engine in a spawn child process, an app icon, nothing else.
@@ -28,15 +29,25 @@ What rides along, and why:
 - PySide6 — the window. PyInstaller's PySide6 hooks bundle the Qt plugins
   (platforms — windows AND offscreen for ``--smoke`` —, styles, image
   formats) and the DLLs; ``shiboken6`` rides along automatically;
-- the icon — taskbar, title bar, and the exe's resource (version_info
-  carries the properties; both generated, never hand-edited).
+- the icon — taskbar, title bar, and (per platform) the exe's resource or
+  the .app bundle's icns; both generated from ``ledgerforge.__version__``
+  and the glyph, never hand-edited.
+
+Platform branches: the Windows exe carries the version resource (generated
+from ``ledgerforge.__version__`` by ``scripts/make_version_info.py``) and
+the .ico; macOS wraps the onedir in a .app bundle (BUNDLE) with the .icns
+and a proper Info.plist; Linux ships the plain onedir (the .desktop file
+and PNG ride beside it in the tarball).
 """
 
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
+IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
 
 pg_datas, pg_binaries, pg_hiddenimports = collect_all("pgserver")
 
@@ -45,17 +56,23 @@ datas = [
     (os.path.join(ROOT, "db", "schema.sql"), "ledgerforge/sql"),
     (os.path.join(ROOT, "db", "functions.sql"), "ledgerforge/sql"),
     (os.path.join(ROOT, "db", "migrations"), "ledgerforge/sql/migrations"),
-    # the application icon: the window finds it under _MEIPASS at runtime
+    # the application icon(s): the window finds them under _MEIPASS at runtime
     (os.path.join(SPECPATH, "ledgerforge.ico"), "desktop"),
     # dist metadata: entry_points(group="ledgerforge.plugins") at runtime
     *copy_metadata("ledgerforge"),
 ] + pg_datas
 
+if IS_MACOS:
+    datas.append((os.path.join(SPECPATH, "ledgerforge.icns"), "desktop"))
+
 hiddenimports = [
     # entry-point plugins are imported by name at runtime — invisible to trace
+    "ledgerforge.contrib.banking",
+    "ledgerforge.contrib.bills",
     "ledgerforge.contrib.gst",
     "ledgerforge.contrib.invoicing",
     "ledgerforge.contrib.inventory",
+    "ledgerforge.contrib.orders",
     "ledgerforge.contrib.payroll",
     "ledgerforge.contrib.statutory",
     "ledgerforge.contrib.example_slot",
@@ -78,9 +95,10 @@ hiddenimports = [
 ] + pg_hiddenimports
 
 # Generated from ledgerforge.__version__ by scripts/make_version_info.py —
-# the .exe properties track the package, never hand-edited.
+# the .exe properties track the package, never hand-edited (Windows only).
 VERSION_FILE = os.path.join(SPECPATH, "version_info.txt")
 ICON_FILE = os.path.join(SPECPATH, "ledgerforge.ico")
+ICNS_FILE = os.path.join(SPECPATH, "ledgerforge.icns")
 
 a = Analysis(
     [os.path.join(SPECPATH, "run_native.py")],
@@ -108,7 +126,7 @@ exe = EXE(
     upx=False,
     console=False,  # GUI subsystem: no console window, ever
     icon=ICON_FILE if os.path.exists(ICON_FILE) else None,
-    version=VERSION_FILE if os.path.exists(VERSION_FILE) else None,
+    version=VERSION_FILE if IS_WINDOWS and os.path.exists(VERSION_FILE) else None,
 )
 
 coll = COLLECT(
@@ -119,3 +137,22 @@ coll = COLLECT(
     upx=False,
     name="LedgerForge",
 )
+
+if IS_MACOS:
+    # the .app bundle: what macOS users double-click. The Info.plist carries
+    # the honest metadata; the icns comes from the same glyph as every
+    # other platform's icon.
+    bundle = BUNDLE(
+        coll,
+        name="LedgerForge.app",
+        icon=ICNS_FILE if os.path.exists(ICNS_FILE) else None,
+        bundle_identifier="org.ledgerforge.LedgerForge",
+        info_plist={
+            "CFBundleName": "LedgerForge",
+            "CFBundleDisplayName": "LedgerForge",
+            "CFBundleShortVersionString": os.environ.get("LF_BUNDLE_VERSION", "0.0.0"),
+            "CFBundleVersion": os.environ.get("LF_BUNDLE_VERSION", "0.0.0"),
+            "NSHighResolutionCapable": True,
+            "LSApplicationCategoryType": "public.app-category.finance",
+        },
+    )

@@ -2,7 +2,7 @@ LedgerForge Native — QUICKSTART
 ===============================
 
 WHAT THIS IS
-  LedgerForge as a real Windows program. Double-click LedgerForge.exe: a
+  LedgerForge as a real desktop program. Double-click LedgerForge.exe: a
   native window opens — its own menus, its own tables, its own file
   dialogs. No browser, no website, no console window. Behind the window an
   embedded engine (PostgreSQL + the LedgerForge core) runs invisibly on
@@ -11,9 +11,11 @@ WHAT THIS IS
 
 FIRST RUN
   1. Double-click LedgerForge.exe.
-     Windows SmartScreen may warn about unsigned binaries — "More info" ->
-     "Run anyway". The zip's SHA-256 is published as checksums.txt in the
-     release for verification.
+     If the binary is unsigned in this release, Windows SmartScreen may
+     warn — "More info" -> "Run anyway". The zip's SHA-256 is published as
+     checksums.txt in the release for verification, and every update the
+     app installs is verified against the release key pinned inside the
+     app (Ed25519; its fingerprint is in Help > About LedgerForge).
   2. A small splash says "Starting the embedded engine…". The first run
      prepares the database (about a minute); later starts are faster.
   3. The main window opens on the Day Book. Post your first voucher:
@@ -25,24 +27,47 @@ FIRST RUN
      the selected voucher from the day book; F5 refreshes; Alt+1..6 jump
      between pages; Ctrl+Q quits.
 
+UPDATES (they verify themselves)
+  On each start the app fetches the release's signed update manifest and
+  checks it against the pinned release key — a manifest that does not
+  verify is ignored, always. A newer release downloads quietly (a
+  file-level delta where possible — only changed files move), is checked
+  byte-for-byte against the manifest, and applies itself the NEXT time
+  you start the app, never while you work. The status bar says so, and
+  Help > Check for Updates… (Ctrl+U) re-runs the check on demand. Set
+  LF_UPDATE_CHECKS=0 in the environment to disable automatic checks, or
+  LF_UPDATE_URL to fetch from your own mirror.
+
+CRASH REPORTS (they stay yours)
+  If anything crashes, a plain-JSON report lands in
+  %LOCALAPPDATA%\LedgerForge\crashes — readable, yours, kept. Nothing is
+  ever sent anywhere unless you send it: Help > Crash reports… shows
+  what exists and (only if your administrator configured a collector)
+  offers a Send button. The reports carry version, platform and the
+  traceback — never your books.
+
 THE PAGES
-  Day Book   your vouchers: date/type filters, search, double-click to view
-             (Save as PDF is in the voucher window)
-  Masters    the chart of accounts: ledgers and groups, New Ledger…,
-             plus the cost trees — Cost Centres and Cost Categories (New
-             Cost Centre… / New Cost Category…; every centre answers to
-             exactly one category)
-  Orders     the order documents: quotations, sales orders, delivery notes,
-             purchase orders, goods receipt notes — each on its own
-             numbering series, each printing as its commercial document;
-             Pending Orders opens the sales/purchase position report
-  Reports    Trial Balance, Profit & Loss, Balance Sheet, FY-close preview,
-             the GSTR-1 pack, bills receivable/payable with ageing, the
-             party ledger statement, interest on overdue bills, pending
-             orders (sales / purchase), and the cost-centre break-up trio:
-             centre summary, one centre ledger-wise, category rollup
-  Periods    financial years: lock, unlock, close preview, close
-  Sandbox    plugin dashboards registered by installed plugins (ADR-019)
+  Day Book        your vouchers: date/type filters, search, double-click to
+                  view (Save as PDF is in the voucher window)
+  Masters         the chart of accounts: ledgers and groups, New Ledger…,
+                  plus the cost trees — Cost Centres and Cost Categories
+  Orders          quotations, sales orders, delivery notes, purchase
+                  orders, goods receipt notes — each on its own numbering
+                  series, each printing as its commercial document;
+                  Pending Orders opens the sales/purchase position report
+  Banking         statements, the reconciliation proof, the cheque register
+  Inventory       stock items, positions by godown, batches/serials,
+                  price lists, BOMs and manufacturing
+  GST             GSTR-1/3B/9, the 2A/2B ITC reconciliation, e-way bills
+  Payroll         runs, payslips, attendance, loans
+  Data Exchange   CSV/Excel imports with preview, the TallyPrime XML
+                  migration with its verification report, exports
+  Reports         Trial Balance, Profit & Loss, Balance Sheet, FY-close
+                  preview, GSTR-1 pack, bills receivable/payable with
+                  ageing, the party ledger statement, interest on overdue
+                  bills, pending orders, cost-centre break-ups
+  Periods         financial years: lock, unlock, close preview, close
+  Sandbox         plugin dashboards registered by installed plugins
 
 COMMANDS
   LedgerForge.exe                      normal start
@@ -53,10 +78,17 @@ COMMANDS
 DATA, BACKUPS, MOVING MACHINES
   Everything lives in the data directory (default %LOCALAPPDATA%\LedgerForge):
   pgdata\ is the embedded database, plugins\ is where signed community
-  plugins drop in, engine.log is the engine child's log. Copy the whole
-  folder to move machines; copy it somewhere safe for a backup. The engine
-  underneath is append-only and exact-decimal double-entry bookkeeping —
-  see the documentation linked below.
+  plugins drop in, crashes\ holds crash reports, engine.log is the engine
+  child's log. Copy the whole folder to move machines; copy it somewhere
+  safe for a backup. The engine underneath is append-only and
+  exact-decimal double-entry bookkeeping — see the documentation linked
+  below.
+
+OTHER PLATFORMS
+  The same native application ships as LedgerForge-<version>-macos-arm64.zip
+  (double-click the .app inside) and LedgerForge-<version>-linux-x64.tar.gz
+  (extract, run LedgerForge/LedgerForge; a .desktop file rides along), from
+  the same releases page.
 
 LICENSE / SOURCE
   LedgerForge is free software under AGPL-3.0. The complete source code for

@@ -12,6 +12,11 @@ from datetime import date
 import psycopg
 import pytest
 
+# The suite never phones the network (ADR-031): the native window's boot
+# update check is off unless a test turns it on explicitly with its own
+# file:// manifest. The release workflow's smoke gate runs the real check.
+os.environ.setdefault("LF_UPDATE_CHECKS", "0")
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 TEST_DBNAME = "lf_test"
 TODAY = date.today().isoformat()

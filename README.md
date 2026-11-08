@@ -978,23 +978,24 @@ PLUGIN = PluginManifest(
 Design: [ADR-019](docs/adr/019-sandbox-ui-slots.md),
 [plugin guide](docs/plugin-guide.md).
 
-## The native application: a real Windows program (ADR-022)
+## The native application: a real desktop program (ADR-022)
 
 Everything above assumes an operator: PostgreSQL somewhere, containers,
 ports. The native application is the other promise kept — *download,
 double-click, a window opens, start typing*:
 
-- **`LedgerForge.exe`** (built per release on a real Windows runner by the
-  [`release-windows`](.github/workflows/release-windows.yml) workflow) opens
-  a **native Qt window**: Day Book, Masters, Reports (Trial Balance, P&L,
+- **`LedgerForge.exe`** (built per release on real runners by the
+  [`release-native`](.github/workflows/release-native.yml) workflow) opens
+  a **native Qt window**: Day Book, Masters, Orders, Banking, Inventory,
+  GST, Payroll, Data Exchange, Reports (Trial Balance, P&L,
   Balance Sheet, GSTR-1 pack with statutory PDF export), Periods, Sandbox —
   native menus and file dialogs, a taskbar icon, no console. **No browser
   is launched; no web UI ships.** The engine — an **embedded PostgreSQL**
   (the pgserver portable distribution) plus the FastAPI core — runs in a
   **child process** (ADR-022: Qt and libpq do not share an address space
   gracefully), loopback only, stopped when the window closes. Data lives in
-  `%LOCALAPPDATA%\LedgerForge` and survives restarts, upgrades, and the
-  v0.17 → v0.18 transition unchanged.
+  `%LOCALAPPDATA%\LedgerForge` and survives restarts and upgrades
+  unchanged.
 - **Keyboard-first survives the platform change**: `Ctrl+N` posts a voucher
   from anywhere, `F5` refreshes, `Enter` opens, `Alt+1..5` navigates — the
   entry form's balance gate unlocks the Post button only when debits equal
@@ -1011,8 +1012,46 @@ double-click, a window opens, start typing*:
   gate is unchanged, and their dashboards appear in the Sandbox page.
 - **Every release self-proves**: the workflow runs `LedgerForge.exe --smoke`
   offscreen (boot → schema → `/health` → the native window → day book +
-  trial balance + GSTR-1) before publishing the zip + SHA-256 checksums. A
-  failed smoke test fails the release.
+  trial balance + GSTR-1 + the update gate + the crash gate) before
+  publishing the package + SHA-256 checksums. A failed smoke test fails
+  the release.
+
+## Distribution hardening: signed updates, three platforms, crashes that stay yours (v0.28, ADR-031)
+
+The native application ships on **three platforms** from one spec —
+Windows x64, macOS arm64 (the `.app`), Linux x64 (a tar.gz with the
+`.desktop` file) — each smoke-gated exactly like Windows. But the real
+change is the trust story:
+
+- **Updates verify themselves.** Every release publishes
+  `update_manifest.json` + its detached Ed25519 signature (the ADR-016
+  discipline, aimed at the application itself). The app pins the release
+  key's public half in its own bytes and refuses any manifest it cannot
+  verify — **fail closed**. The updater then prefers a **file-level delta**
+  (only changed files move — a typical release is a fraction of the full
+  download), verifies every staged byte's SHA-256 against the signed
+  manifest, and applies on the **next relaunch**, never while you work. A
+  power cut mid-apply repairs itself on the following boot. The status bar
+  says what happened; `Help > Check for Updates…` (Ctrl+U) re-runs it; the
+  About box shows the pinned key's fingerprint
+  (`C189:C1B9:CBCB:3C73`). `LF_UPDATE_CHECKS=0` disables the boot check;
+  `LF_UPDATE_URL` points elsewhere (an enterprise mirror, say).
+- **Code signing where a certificate exists.** The release workflow signs
+  the Windows exe with Azure Trusted Signing and the macOS app with a
+  Developer ID + notarization the moment the repository carries those
+  secrets — until then the artifacts are unsigned but *always* checksummed
+  and inside the signed manifest, and the release notes say so plainly.
+- **Opt-in crash reporting, as a pledge.** Crashes are **always captured
+  locally** — `<data>/crashes/`, plain JSON, readable, yours — and
+  **nothing is ever sent anywhere** unless an operator configures
+  `LF_CRASH_ENDPOINT` and you choose to send (`Help > Crash reports…`, or
+  the explicit `LF_CRASH_REPORTING=1` opt-in). The payload is an allowlist
+  (version, platform, traceback, engine-log tail) — never book data. No
+  collector ships in the distribution; no telemetry exists to enable.
+
+Design: [ADR-031](docs/adr/031-distribution-hardening.md); the protocol
+lives in `src/ledgerforge/updating.py`, the window wiring in
+`src/ledgerforge/nativeapp/updater.py` and `crashes.py`.
 
 From source (any OS — pgserver ships Linux/macOS binaries too):
 
@@ -1134,7 +1173,15 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.27.0 — everything below, plus the payroll depth
+v0.28.0 — everything below, plus **distribution hardening (v0.28,
+ADR-031: the signed update manifest with file-level deltas and
+update-on-relaunch, code-signing gates for Windows and macOS in the
+release workflow, macOS + Linux native packages of the same Qt shell,
+and opt-in crash reporting — captured locally always, sent nowhere
+unless chosen)** — the accounting core is at parity; what remains to
+v1.0 is the parity release itself (Phases 10–11).
+
+v0.27.0 — the payroll depth
 (v0.26, ADR-029: attendance registers as facts, loans with EMI
 recovery, the full & final settlement, payslip distribution) and
 **data exchange & the Tally migration path (v0.27, ADR-030: CSV/XLSX

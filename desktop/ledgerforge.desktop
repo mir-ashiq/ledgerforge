@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LedgerForge
+GenericName=Accounting
+Comment=Keyboard-first, double-entry bookkeeping with an embedded engine
+Exec=LedgerForge
+Icon=ledgerforge
+Terminal=false
+Categories=Office;Finance;
+Keywords=accounting;ledger;tally;gst;bookkeeping;finance;
+StartupWMClass=LedgerForge

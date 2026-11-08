@@ -1,0 +1,307 @@
+name: release-native
+
+# The native application's release pipeline (ADR-022/031): every v* tag
+# builds LedgerForge on THREE platforms — a real Windows program, a real
+# macOS .app, a real Linux folder — proves each SHIPPED artifact with
+# --smoke (offscreen: engine child -> embedded PostgreSQL -> schema ->
+# /health -> the native window), and one publish job signs what can be
+# signed, packages, builds file-level deltas against the previous release,
+# writes + signs the update manifest (Ed25519, the LF_UPDATE_SIGNING_KEY
+# secret), and publishes the GitHub Release. A failed smoke fails the
+# release — the artifacts are proven, not assumed.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+          - os: macos-latest # arm64 (Apple silicon)
+            platform: macos-arm64
+          - os: ubuntu-22.04 # the oldest glibc GitHub hosts — binary reach
+            platform: linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Qt system libraries (Linux, offscreen)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+
+      - name: Install engine + window + packaging
+        run: pip install -e ".[gui,dev]" pyinstaller
+
+      # ------------------------------------------------------- platform prep
+      - name: Windows version resource (from ledgerforge.__version__)
+        if: matrix.os == 'windows-latest'
+        run: python scripts/make_version_info.py | Out-File -Encoding ascii desktop/version_info.txt
+
+      - name: macOS bundle version + icon
+        if: matrix.os == 'macos-latest'
+        run: |
+          echo "LF_BUNDLE_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          python scripts/make_icon.py --icns
+
+      - name: Linux icon (the .desktop file's companion)
+        if: matrix.os == 'ubuntu-22.04'
+        run: python scripts/make_icon.py --png
+
+      - name: Build LedgerForge (the native window)
+        run: pyinstaller desktop/ledgerforge.spec --noconfirm
+
+      # ------------------------------------------------------------- signing
+      # Windows: Azure Trusted Signing when the repository carries the
+      # credentials — the SmartScreen warning dies the day this is armed.
+      # Without secrets the exe ships unsigned: checksummed, inside the
+      # signed update manifest, and honestly labeled in the release notes.
+      - name: Code-sign the Windows exe (Azure Trusted Signing)
+        if: matrix.os == 'windows-latest' && secrets.AZURE_TENANT_ID != ''
+        uses: Microsoft/trusted-signing-action@v0
+        with:
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+          files: dist/LedgerForge/LedgerForge.exe
+          timeout: 15
+
+      # macOS: sign + notarize when the certificate exists. The keychain is
+      # materialized from the MACOS_SIGNING_CERT_P12/MACOS_SIGNING_PASSWORD
+      # secrets; notarytool credentials via the standard environment.
+      - name: Codesign + notarize the .app (when credentials exist)
+        if: matrix.os == 'macos-latest' && secrets.MACOS_SIGNING_CERT_P12 != ''
+        env:
+          MACOS_SIGNING_CERT_P12: ${{ secrets.MACOS_SIGNING_CERT_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/sign-macos.sh dist/LedgerForge.app
+
+      # --------------------------------------------------------------- smoke
+      # The exe is a GUI-subsystem binary: PowerShell does not wait on those,
+      # so Start-Process -Wait carries the exit code, and the smoke's stdout
+      # is redirected to a file (GUI apps detach from the console).
+      # The default data dir (%LOCALAPPDATA%\LedgerForge) is deliberate: it
+      # is precisely what an end user gets, and the runner's D:-drive
+      # RUNNER_TEMP carries ACLs that initdb cannot reset.
+      - name: Smoke test the shipped exe (Windows, offscreen, default data dir)
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 10
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $proc = Start-Process -FilePath ".\dist\LedgerForge\LedgerForge.exe" `
+            -ArgumentList "--smoke" -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput smoke-out.log -RedirectStandardError smoke-err.log
+          Get-Content smoke-out.log
+          Get-Content smoke-err.log -ErrorAction SilentlyContinue
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::LedgerForge.exe --smoke exited with $($proc.ExitCode)"
+            exit 1
+          }
+
+      - name: Smoke test the shipped .app (macOS, offscreen)
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 10
+        run: |
+          export QT_QPA_PLATFORM=offscreen
+          ./dist/LedgerForge.app/Contents/MacOS/LedgerForge --smoke
+
+      - name: Smoke test the shipped folder (Linux, offscreen)
+        if: matrix.os == 'ubuntu-22.04'
+        timeout-minutes: 10
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: dist/LedgerForge/LedgerForge --smoke
+
+      # ------------------------------------------------------------ packaging
+      - name: Package (Windows zip)
+        if: matrix.os == 'windows-latest'
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Copy-Item desktop/QUICKSTART.txt dist/LedgerForge/
+          Compress-Archive -Path dist/LedgerForge -DestinationPath "LedgerForge-$tag-win64.zip"
+          "LedgerForge-$tag-win64.zip" | Out-File -Encoding ascii artifact-name.txt
+
+      - name: Package (macOS zip of the .app)
+        if: matrix.os == 'macos-latest'
+        run: |
+          tag="${{ github.ref_name }}"
+          # one root only (LedgerForge.app) — the updater's full-package
+          # staging requires exactly that shape
+          ditto -c -k --keepParent dist/LedgerForge.app "LedgerForge-$tag-macos-arm64.zip"
+          echo "LedgerForge-$tag-macos-arm64.zip" > artifact-name.txt
+
+      - name: Package (Linux tar.gz)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          tag="${{ github.ref_name }}"
+          cp desktop/QUICKSTART.txt dist/LedgerForge/
+          cp desktop/ledgerforge.desktop desktop/ledgerforge.png dist/LedgerForge/
+          tar -czf "LedgerForge-$tag-linux-x64.tar.gz" -C dist LedgerForge
+          echo "LedgerForge-$tag-linux-x64.tar.gz" > artifact-name.txt
+
+      - name: Checksum
+        shell: bash
+        run: |
+          name=$(cat artifact-name.txt | tr -d '\r\n')
+          sha256sum "$name" > "$name.sha256"
+          cat "$name.sha256"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.platform }}
+          path: |
+            LedgerForge-${{ github.ref_name }}-*
+            *.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the delta step walks the tag history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the engine (scripts import ledgerforge)
+        run: pip install -e .
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: package-*
+          merge-multiple: true
+
+      - name: File-level deltas against the previous release
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -1 || true)
+          echo "previous release: ${PREV_TAG:-none}"
+          DELTA_ARGS=""
+          if [ -n "${PREV_TAG:-}" ]; then
+            PREV_VERSION="${PREV_TAG#v}"
+            mkdir -p old-rel new-rel
+            for PLATFORM in windows-x64 macos-arm64 linux-x64; do
+              case "$PLATFORM" in
+                windows-x64) PATTERN='LedgerForge-*-win64.zip' ;;
+                macos-arm64) PATTERN='LedgerForge-*-macos-arm64.zip' ;;
+                linux-x64)   PATTERN='LedgerForge-*-linux-x64.tar.gz' ;;
+              esac
+              gh release download "$PREV_TAG" --pattern "$PATTERN" --dir old-rel || true
+              OLD_FILE=$(ls old-rel/$PATTERN 2>/dev/null | head -1 || true)
+              NEW_FILE=$(ls artifacts/$PATTERN 2>/dev/null | head -1 || true)
+              if [ -n "$OLD_FILE" ] && [ -n "$NEW_FILE" ]; then
+                rm -rf old-tree new-tree && mkdir -p old-tree new-tree
+                case "$NEW_FILE" in
+                  *.tar.gz)
+                    tar -xzf "$OLD_FILE" -C old-tree
+                    tar -xzf "$NEW_FILE" -C new-tree
+                    ;;
+                  *)
+                    unzip -q "$OLD_FILE" -d old-tree
+                    unzip -q "$NEW_FILE" -d new-tree
+                    ;;
+                esac
+                # macOS zips carry the .app bundle as their tree root; both
+                # sides share whatever root the package has, so find it
+                OLD_ROOT=$(find old-tree -mindepth 1 -maxdepth 2 -type d -name 'LedgerForge*' | head -1)
+                NEW_ROOT=$(find new-tree -mindepth 1 -maxdepth 2 -type d -name 'LedgerForge*' | head -1)
+                if [ -n "$OLD_ROOT" ] && [ -n "$NEW_ROOT" ]; then
+                  python scripts/make_delta.py \
+                    --old-dir "$OLD_ROOT" --new-dir "$NEW_ROOT" \
+                    --from "$PREV_VERSION" --to "$VERSION" \
+                    --out "LedgerForge-${PREV_VERSION}-to-${VERSION}-${PLATFORM}-delta.zip"
+                  DELTA_ARGS="$DELTA_ARGS --delta ${PLATFORM}=${PREV_VERSION}=LedgerForge-${PREV_VERSION}-to-${VERSION}-${PLATFORM}-delta.zip"
+                fi
+              fi
+            done
+          fi
+          echo "DELTA_ARGS=$DELTA_ARGS" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Write + sign the update manifest
+        if: secrets.LF_UPDATE_SIGNING_KEY != ''
+        env:
+          LF_UPDATE_SIGNING_KEY: ${{ secrets.LF_UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          printf '%s' "$LF_UPDATE_SIGNING_KEY" > release-key.pem
+          python scripts/make_update_manifest.py \
+            --tag "$TAG" --version "$VERSION" \
+            --artifact "windows-x64=$(ls artifacts/LedgerForge-*-win64.zip)" \
+            --artifact "macos-arm64=$(ls artifacts/LedgerForge-*-macos-arm64.zip)" \
+            --artifact "linux-x64=$(ls artifacts/LedgerForge-*-linux-x64.tar.gz)" \
+            ${{ env.DELTA_ARGS }} \
+            --key release-key.pem \
+            --out update_manifest.json
+          shred -u release-key.pem || rm -f release-key.pem
+
+      - name: Write the update manifest (unsigned — no signing key configured)
+        if: secrets.LF_UPDATE_SIGNING_KEY == ''
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          python scripts/make_update_manifest.py \
+            --tag "$TAG" --version "$VERSION" \
+            --artifact "windows-x64=$(ls artifacts/LedgerForge-*-win64.zip)" \
+            --artifact "macos-arm64=$(ls artifacts/LedgerForge-*-macos-arm64.zip)" \
+            --artifact "linux-x64=$(ls artifacts/LedgerForge-*-linux-x64.tar.gz)" \
+            ${{ env.DELTA_ARGS }} \
+            --out update_manifest.json
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # the title is the release notes' own H1 ("# LedgerForge 0.28.0 — the
+        # distribution hardening") — one source of truth, correct every phase
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          title="LedgerForge ${TAG} — $(sed -n '1s/^# LedgerForge [0-9.]* — //p' desktop/RELEASE_NOTES.md)"
+          cat artifacts/*.sha256 > checksums.txt
+          cat checksums.txt
+          assets=(artifacts/LedgerForge-*-win64.zip artifacts/LedgerForge-*-macos-arm64.zip \
+                  artifacts/LedgerForge-*-linux-x64.tar.gz LedgerForge-*-delta.zip \
+                  update_manifest.json checksums.txt)
+          if [ -f update_manifest.sig ]; then assets+=(update_manifest.sig); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            gh release create "$TAG" "${assets[@]}" \
+              --title "$title" --notes-file desktop/RELEASE_NOTES.md
+          fi

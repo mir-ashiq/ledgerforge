@@ -35,6 +35,7 @@ from .periods import PeriodsPage
 from .reports import ReportsPage
 from .sandbox import SandboxPage
 from .tasks import run
+from .updater import UpdateController
 from .voucher_dialog import NewVoucherDialog, VoucherViewDialog
 from .widgets import app_icon, error_detail
 
@@ -135,6 +136,15 @@ class MainWindow(QMainWindow):
         self.engine_status = self.status_bar
         self.status_bar.showMessage("engine starting…")
 
+        # ADR-031: the updater's words live on the right of the status bar —
+        # permanent, quiet, never over the engine's own state
+        from PySide6.QtWidgets import QLabel
+
+        self.update_label = QLabel("")
+        self.status_bar.addPermanentWidget(self.update_label)
+        self._updater = UpdateController(self._data_dir, on_status=self.update_label.setText)
+        self._updater.check_on_boot()
+
         self._load_books()
         self.daybook.reload()
         self.masters.reload()
@@ -178,19 +188,117 @@ class MainWindow(QMainWindow):
             navigate.addAction(action)
 
         help_menu = self.menuBar().addMenu("&Help")
+        check_updates = QAction("Check for &Updates…", self)
+        check_updates.setShortcut(QKeySequence("Ctrl+U"))
+        check_updates.triggered.connect(self._check_updates)
+        help_menu.addAction(check_updates)
+
+        crash_reports = QAction("Crash &reports…", self)
+        crash_reports.triggered.connect(self._crash_reports)
+        help_menu.addAction(crash_reports)
+
+        help_menu.addSeparator()
         about = QAction("&About LedgerForge", self)
         about.triggered.connect(self._about)
         help_menu.addAction(about)
 
+    def _check_updates(self) -> None:
+        """The manual check (ADR-031): fetch, verify, download, stage —
+        and say so in the status bar. Never a dialog over the books."""
+
+        self.update_label.setText("checking…")
+        self._updater.check()
+
+    def _crash_reports(self) -> None:
+        """The crash pledge, visible (ADR-031): reports are local, plain
+        JSON, yours; sending is chosen, never defaulted."""
+
+        from PySide6.QtWidgets import QDialogButtonBox
+
+        from .crashes import crash_dir, endpoint_from_env
+
+        reports = sorted(crash_dir(self._data_dir).glob("crash-*.json"))
+        endpoint = endpoint_from_env()
+        if not reports:
+            QMessageBox.information(
+                self,
+                "Crash reports",
+                "No crash reports — nothing has crashed.\n\n"
+                "The pledge, for the record: crashes are always captured "
+                "locally (this folder, plain JSON), and nothing is ever "
+                "sent anywhere unless you choose to send it.",
+            )
+            return
+        unsent = [r for r in reports if not r.with_suffix(".json.sent").exists()]
+        body = (
+            f"{len(reports)} crash report(s) in\n{crash_dir(self._data_dir)}\n\n"
+            "They are plain JSON on your disk — open the folder to read "
+            "them. LedgerForge sends nothing by default."
+        )
+        if endpoint and unsent:
+            body += (
+                f"\n\nThis machine has a collector configured ({endpoint}) — "
+                "Send posts the reports to it."
+            )
+            box = QMessageBox(
+                QMessageBox.Icon.Information,
+                "Crash reports",
+                body,
+                QDialogButtonBox.StandardButton.Open
+                | QDialogButtonBox.StandardButton.Ok
+                | QDialogButtonBox.StandardButton.Apply,
+                self,
+            )
+            box.button(QDialogButtonBox.StandardButton.Apply).setText("Send")
+            box.button(QDialogButtonBox.StandardButton.Open).setText("Open folder")
+            box.exec()
+            if box.clickedButton() is box.button(QDialogButtonBox.StandardButton.Apply):
+                from .crashes import send_pending
+
+                sent = send_pending(self._data_dir, endpoint)
+                self.status_bar.showMessage(f"sent {sent} crash report(s)")
+            elif box.clickedButton() is box.button(QDialogButtonBox.StandardButton.Open):
+                self._open_crash_folder()
+        else:
+            box = QMessageBox(
+                QMessageBox.Icon.Information,
+                "Crash reports",
+                body,
+                QDialogButtonBox.StandardButton.Open | QDialogButtonBox.StandardButton.Ok,
+                self,
+            )
+            box.button(QDialogButtonBox.StandardButton.Open).setText("Open folder")
+            box.exec()
+            if box.clickedButton() is box.button(QDialogButtonBox.StandardButton.Open):
+                self._open_crash_folder()
+
+    def _open_crash_folder(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from .crashes import crash_dir
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(crash_dir(self._data_dir))))
+
     def _about(self) -> None:
         from .. import __version__
+        from ..updating import KEY_FINGERPRINT, pending_update
 
+        staged = pending_update(self._data_dir)
+        update_line = (
+            f"Update {staged['to']} staged — applies on restart"
+            if staged
+            else "Updates verify against the pinned release key"
+        )
         QMessageBox.about(
             self,
             "About LedgerForge",
             f"<b>LedgerForge {__version__}</b><br>"
             "The native desktop edition — keyboard-first, double-entry "
             "bookkeeping with an embedded engine.<br><br>"
+            f"{update_line} (Ed25519 {KEY_FINGERPRINT})<br>"
+            "Crash reports stay on your machine by default — nothing is "
+            "sent unless you send it.<br><br>"
             f"Data directory: <code>{self._data_dir}</code><br>"
             'AGPL-3.0 — <a href="https://github.com/mir-ashiq/ledgerforge">github.com/mir-ashiq/ledgerforge</a>',
         )
