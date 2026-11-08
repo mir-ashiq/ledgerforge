@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.22.0** |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.23.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -23,7 +23,8 @@ is fully landed:
 - **Engine**: exact-decimal append-only double-entry posting, gapless numbering, reversal,
   opening balances, period lock/FY close, multi-currency with FX snapshots, multi-book,
   OIDC auth, the balance cache and yearly entry partitions for scale-out reporting, cost
-  centres & categories with their allocation store (ADR-025, v0.22).
+  centres & categories with their allocation store (ADR-025, v0.22), bank statement
+  facts with the match annotation and the reconciliation proof (ADR-026, v0.23).
 - **Packs**: invoicing, inventory (weighted-average, four movements), payroll (runs, YTD,
   payslips), statutory (PF/ESI/TDS), GST (place of supply, HSN rate tables, GSTR-1/HSN
   statements, the IRN outbox + bridge), bills (bill-wise, outstanding, ageing, interest —
@@ -32,11 +33,12 @@ is fully landed:
 - **Surfaces**: keyboard-first web UI (command palette, rebindable Tally keymap, sandboxed
   plugin slots), native Windows application (ADR-022: a Qt window over an embedded
   PostgreSQL — no browser; the Orders page and document pickers joined in v0.21, the
-  cost split dialog and masters tabs in v0.22), CLI,
+  cost split dialog and masters tabs in v0.22, the Banking page and web banking screen
+  in v0.23), CLI,
   REST API, dependency-free PDF printing.
 - **Trust**: signed community plugin distribution with the curator index, Ed25519
   signatures, operator acknowledgement.
-- **Ops**: CI on real PostgreSQL (403 backend tests + 99 web tests + Playwright E2E),
+- **Ops**: CI on real PostgreSQL (469 backend tests + 131 web tests + Playwright E2E),
   backup/restore drills, production compose, deployment runbook.
 
 ## 2. The benchmark: TallyPrime today
@@ -66,7 +68,7 @@ subscriptions for updates and remote services.
 | Inventory | ✔ batches/serial/expiry/godowns/re-order/mfg | weighted-average qty/value only | **gap** (Phase 6) |
 | Orders (quote/SO/PO/GRN) | ✔ | ✔ (ADR-024) | **parity** — landed in v0.21.0 (Phase 3) |
 | Cost centres | ✔ | ✔ (ADR-025) | **parity** — landed in v0.22.0 (Phase 4) |
-| Banking, BRS, cheques | ✔ (incl. connected banking) | ✖ | **gap** (Phase 5; per-bank APIs deliberately out) |
+| Banking, BRS, cheques | ✔ (incl. connected banking) | ✔ (ADR-026) | **parity** — landed in v0.23.0 (Phase 5); per-bank connected-banking APIs stay plugin-side by design (D3) |
 | GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox | **partial** (Phase 7) |
 | Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS | **partial** (Phase 8) |
 | Bill-wise & outstanding, ageing, interest | ✔ | ✔ (ADR-023) | **parity** — landed in v0.20.0 (Phase 2) |
@@ -148,7 +150,7 @@ database, not in `meta`.
 - Cost-centre break-up reports: centre summaries, ledger-wise within centre, category
   rollups — through the same closure-table machinery as group rollups.
 
-### Phase 5 — v0.23.0 · The banking pack *(ADR-026)*
+### Phase 5 — v0.23.0 · The banking pack *(ADR-026, landed in v0.23.0)*
 
 - **Bank reconciliation**: bank statement import (CSV and MT940), a matching engine
   (amount-exact, date-window, reference-fuzzy; suggestions never auto-commit), manual
@@ -241,4 +243,4 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-08, at the close of Phase 3.*
+code. Last revisited: 2026-11-08, at the close of Phase 5.*

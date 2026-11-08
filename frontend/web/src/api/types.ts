@@ -340,3 +340,174 @@ export interface BillsDoc {
   refs: BillRef[];
   default_interest?: { annual: string; grace_days?: number };
 }
+
+// ---- banking: statements, matches, the proof (ADR-026, Phase 5) -----------
+/** GET /banking/ledgers — the pickers' feed (balance is Cr-positive). */
+export interface BankLedgerOut {
+  id: number;
+  name: string;
+  balance: string;
+}
+
+/** POST /banking/{id}/statements — the receipt the UIs show and the
+ * bank.statement.imported event carries. */
+export interface BankImportReceipt {
+  ledger_id: number;
+  ledger_name: string;
+  format: 'csv' | 'mt940';
+  source: string | null;
+  parsed: number;
+  informational: number;
+  new: number;
+  duplicates: number;
+  currency: string;
+  opening_balance: string | null;
+  closing_balance: string | null;
+  dry_run: boolean;
+  batch_id?: number;
+}
+
+/** The live (or last) match of one statement line. */
+export interface BankMatchInfo {
+  voucher_id: number;
+  voucher_no: string;
+  voucher_date: string;
+  entry_id: number;
+  matched_at: string;
+  matched_by: string | null;
+  unmatched_at: string | null;
+  live: boolean;
+}
+
+/** One imported statement line — amounts are strings (Law 3). */
+export interface BankLine {
+  id: number;
+  batch_id: number;
+  value_date: string;
+  dc: 'D' | 'C';
+  amount: string;
+  reference: string | null;
+  narrative: string | null;
+  cheque_no: string | null;
+  match: BankMatchInfo | null;
+}
+
+/** GET /banking/{id}/lines */
+export interface BankLineBook {
+  ledger_id: number;
+  ledger_name: string;
+  status: string;
+  lines: BankLine[];
+}
+
+/** One bank-ledger entry with its live-match state. */
+export interface BankEntry {
+  entry_id: number;
+  voucher_id: number;
+  voucher_no: string;
+  voucher_date: string;
+  dc: 'D' | 'C';
+  amount: string;
+  narration: string | null;
+  matched: boolean;
+}
+
+/** GET /banking/{id}/entries */
+export interface BankEntryBook {
+  ledger_id: number;
+  ledger_name: string;
+  status: string;
+  entries: BankEntry[];
+}
+
+/** One ranked candidate of the matchmaker (computed, never committed). */
+export interface BankSuggestion {
+  entry_id: number;
+  voucher_id: number;
+  voucher_no: string;
+  voucher_date: string;
+  dc: 'D' | 'C';
+  amount: string;
+  narration: string | null;
+  score: number;
+  reasons: string[];
+}
+
+/** GET /banking/{id}/suggestions */
+export interface BankSuggestions {
+  ledger_id: number;
+  window_days: number;
+  lines: {
+    statement_line_id: number;
+    value_date: string;
+    dc: 'D' | 'C';
+    amount: string;
+    reference: string | null;
+    narrative: string | null;
+    cheque_no: string | null;
+    suggestions: BankSuggestion[];
+  }[];
+}
+
+/** POST /banking/{id}/matches */
+export interface BankMatchResult {
+  statement_line_id: number;
+  voucher_id: number;
+  voucher_no: string;
+  entry_id: number;
+  voucher_date: string;
+  matched_by: string | null;
+}
+
+/** One row of the proof — an unmatched item, a pair difference, or one of
+ * the statement-side baselines (the opening, the unexplained mass). */
+export interface BankReconRow {
+  kind: string;
+  label: string;
+  date: string;
+  amount: string;
+  effect: string;
+  reference: string | null;
+  narration: string | null;
+}
+
+/** GET /banking/{id}/reconciliation — the proof, exact strings. */
+export interface BankReconciliation {
+  ledger_id: number;
+  ledger_name: string;
+  as_of: string;
+  book_balance: string;
+  statement_balance: string;
+  statement_balance_source: string;
+  reconciled_balance: string;
+  unmatched_statement_total: string;
+  unmatched_book_total: string;
+  pair_difference_total: string;
+  rows: BankReconRow[];
+  proof: { lhs: string; rhs: string; ok: boolean };
+}
+
+/** One cheque of the register — the derived lifecycle. */
+export interface BankChequeRow {
+  bank_ledger: string;
+  no: string;
+  voucher_no: string;
+  voucher_date: string;
+  issued_on: string;
+  matures_on: string | null;
+  amount: string | null;
+  status: 'issued' | 'presented' | 'cleared';
+  presented_on: string | null;
+  cleared_by: string | null;
+  pdc: boolean;
+  matured_as_of: boolean;
+}
+
+/** GET /reports/pack/banking-cheques?format=json */
+export interface BankChequeRegister {
+  as_of: string;
+  ledger: string | null;
+  status: string | null;
+  counts: { issued: number; presented: number; cleared: number };
+  rows: BankChequeRow[];
+}

@@ -162,6 +162,14 @@ def pack_report(
     stem = _safe_stem(report.filename)
     if report.data is not None and request.query_params.get("format") == "json":
         return report.data  # plugin API 0.8 (ADR-023) — the UI surface
+    if request.query_params.get("format") == "csv" and report.csv is not None:
+        # the machine format the docstring always promised, honoured even
+        # when a print view exists (ADR-026: the reconciliation CSV)
+        return Response(
+            content=report.csv,
+            media_type=report.media_type,
+            headers={"Content-Disposition": f'attachment; filename="{stem}.csv"'},
+        )
     if report.view is not None:
         return Response(
             content=render_view(report.view),

@@ -4,13 +4,15 @@
  * remembered across launches, switchable from the Books screen), screen
  * switching and the command palette. Screens: VoucherScreen (entry),
  * PayslipScreen (ADR-013), DaybookScreen (ADR-015), PluginsScreen (ADR-016),
- * SlotsScreen (ADR-019), BooksScreen and PeriodsScreen (Phase 1).
+ * SlotsScreen (ADR-019), BooksScreen and PeriodsScreen (Phase 1),
+ * BankingScreen (Phase 5 / ADR-026).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { keymap, useCommand } from '@ledgerforge/keyboard-kit/react';
 import { api, setActiveBook } from './api/client';
 import type { BookOut, GroupOut, LedgerOut } from './api/types';
+import { BankingScreen } from './components/BankingScreen';
 import { BooksScreen } from './components/BooksScreen';
 import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
@@ -30,7 +32,8 @@ type Screen =
   | 'slots'
   | 'books'
   | 'periods'
-  | 'outstandings';
+  | 'outstandings'
+  | 'banking';
 
 /** Where the remembered book id lives between launches. */
 const ACTIVE_BOOK_KEY = 'lf.activeBook';
@@ -163,6 +166,16 @@ export default function App() {
     },
     'Alt+I',
   );
+  // the banking screen (Phase 5 / ADR-026): Alt+G opens (gold — Alt+B
+  // has belonged to the daybook since ADR-015), Esc is back
+  useCommand(
+    {
+      id: 'banking.open',
+      title: 'Banking — statements, reconciliation & cheques',
+      run: () => setScreen('banking'),
+    },
+    'Alt+G',
+  );
 
   return (
     <>
@@ -193,6 +206,8 @@ export default function App() {
         <PeriodsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : screen === 'outstandings' ? (
         <OutstandingsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : screen === 'banking' ? (
+        <BankingScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : (
         <SlotsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}

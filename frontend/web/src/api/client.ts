@@ -5,6 +5,14 @@
  */
 
 import type {
+  BankChequeRegister,
+  BankEntryBook,
+  BankImportReceipt,
+  BankLedgerOut,
+  BankLineBook,
+  BankMatchResult,
+  BankReconciliation,
+  BankSuggestions,
   BookCreateInput,
   BookOut,
   BookSeededOut,
@@ -218,5 +226,52 @@ export const api = {
     if (party) params.set('party', party);
     const key = side === 'dr' ? 'bills-receivable' : 'bills-payable';
     return request<OutstandingReport>(`/reports/pack/${key}?${params.toString()}`);
+  },
+
+  // ---- banking: statements, matches, the proof (ADR-026) ------------------
+  /** Every bank-account ledger of the book with its balance — the banking
+   *  screen's picker feed. */
+  bankLedgers: async (): Promise<BankLedgerOut[]> =>
+    (await request<{ ledgers: BankLedgerOut[] }>('/banking/ledgers')).ledgers,
+  /** Import a statement (CSV/MT940) — validated, idempotent; dryRun is the
+   *  preview (the receipt is the answer either way). */
+  bankImport: (
+    ledgerId: number,
+    input: { format: 'csv' | 'mt940'; text: string; dry_run?: boolean; source?: string; opening_balance?: string },
+  ) => request<BankImportReceipt>(`/banking/${ledgerId}/statements`, { method: 'POST', body: JSON.stringify(input) }),
+  /** The statement line book with live-match state. */
+  bankLines: (ledgerId: number, status: 'all' | 'unmatched' | 'matched' = 'all') =>
+    request<BankLineBook>(`/banking/${ledgerId}/lines?status=${status}`),
+  /** The bank ledger's own entries — the manual matchmaker's discovery
+   *  surface (amounts may disagree; the proof prices the difference). */
+  bankEntries: (ledgerId: number, status: 'all' | 'unmatched' | 'matched' = 'all') =>
+    request<BankEntryBook>(`/banking/${ledgerId}/entries?status=${status}`),
+  /** The matchmaker's ranked candidates — computed, never committed. */
+  bankSuggestions: (ledgerId: number, window = 7) =>
+    request<BankSuggestions>(`/banking/${ledgerId}/suggestions?window=${window}`),
+  /** Record the judgement: this line is that entry (the only commit). */
+  bankMatch: (
+    ledgerId: number,
+    target: { statement_line_id: number; entry_id: number; voucher_id: number; voucher_date: string },
+  ) => request<BankMatchResult>(`/banking/${ledgerId}/matches`, { method: 'POST', body: JSON.stringify(target) }),
+  /** Withdraw a match — the row stays, unmatched_at says when. */
+  bankUnmatch: (statementLineId: number) =>
+    request<{ statement_line_id: number; unmatched: boolean }>(
+      `/banking/matches/${statementLineId}`,
+      { method: 'DELETE' },
+    ),
+  /** Book vs bank with the proof — the anchor is the figure on the
+   *  statement, or the fold when omitted. */
+  bankReconciliation: (ledgerId: number, asOf: string, statementBalance?: string) => {
+    const params = new URLSearchParams({ as_of: asOf });
+    if (statementBalance) params.set('statement_balance', statementBalance);
+    return request<BankReconciliation>(`/banking/${ledgerId}/reconciliation?${params.toString()}`);
+  },
+  /** The cheque register fold (the banking pack report). */
+  bankCheques: (asOf: string, ledger?: string, status?: string) => {
+    const params = new URLSearchParams({ as_of: asOf, format: 'json' });
+    if (ledger) params.set('ledger', ledger);
+    if (status) params.set('status', status);
+    return request<BankChequeRegister>(`/reports/pack/banking-cheques?${params.toString()}`);
   },
 };

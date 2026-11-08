@@ -272,3 +272,77 @@ class CostAllocation(Base):
     amount: Mapped[Decimal]
     voucher_date: Mapped[date] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class BankStatementBatch(Base):
+    """One statement import's receipt (ADR-026, migration 0008): the format,
+    the source label, and the opening/closing balance the statement itself
+    carried (MT940 :60F:/:62F:; CSV callers may supply them). The anchor the
+    reconciliation fold uses when the accountant does not hand it the as-of
+    statement balance. Append-only — a receipt is history the moment the
+    import lands."""
+
+    __tablename__ = "bank_statement_batches"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id", ondelete="RESTRICT"))
+    format: Mapped[str] = mapped_column(Text, CheckConstraint("format IN ('csv', 'mt940')"))
+    source: Mapped[str | None]
+    currency: Mapped[str | None] = mapped_column(CHAR(3))
+    opening_balance: Mapped[Decimal | None]
+    closing_balance: Mapped[Decimal | None]
+    line_count: Mapped[int] = mapped_column(default=0)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class BankStatementLine(Base):
+    """One imported bank-statement fact (ADR-026, migration 0008). ``dc`` is
+    the side the books would post: C = money into the bank (statement
+    credit), D = money out (statement debit) — so a matched pair is
+    side-equal by nature. ``fingerprint`` is the content identity
+    (date, direction, amount, reference, narrative, occurrence-within-batch):
+    UNIQUE (book_id, fingerprint) makes re-importing the same statement a
+    clean no-op while two genuinely identical transactions (occurrence 0, 1,
+    …) both survive. Append-only, trigger-guarded."""
+
+    __tablename__ = "bank_statement_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    ledger_id: Mapped[int] = mapped_column(ForeignKey("ledgers.id", ondelete="RESTRICT"))
+    batch_id: Mapped[int] = mapped_column(
+        ForeignKey("bank_statement_batches.id", ondelete="RESTRICT")
+    )
+    value_date: Mapped[date] = mapped_column(Date)
+    dc: Mapped[str] = mapped_column(Text, CheckConstraint("dc IN ('D', 'C')"))
+    amount: Mapped[Decimal]
+    reference: Mapped[str | None]
+    narrative: Mapped[str | None]
+    cheque_no: Mapped[str | None]
+    fingerprint: Mapped[str] = mapped_column(Text)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class BankLineMatch(Base):
+    """The reconciliation annotation (ADR-026, migration 0008) — the
+    kernel's first deliberately mutable table, and the stated boundary of
+    Law 2: financial history is append-only; *which line matches which
+    entry* is revisable judgement. One row per statement line ever: un-match
+    sets ``unmatched_at``, re-match rewrites the target. The entry is
+    referenced by validated id (the BEFORE INSERT/UPDATE trigger proves its
+    voucher, date, book and ledger on both ``voucher_entries`` shapes), so
+    the ADR-018 partition swap never touches this table. DELETE never."""
+
+    __tablename__ = "bank_line_matches"
+
+    statement_line_id: Mapped[int] = mapped_column(
+        ForeignKey("bank_statement_lines.id", ondelete="RESTRICT"), primary_key=True
+    )
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    voucher_id: Mapped[int] = mapped_column(ForeignKey("vouchers.id", ondelete="RESTRICT"))
+    entry_id: Mapped[int]
+    voucher_date: Mapped[date] = mapped_column(Date)
+    matched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    matched_by: Mapped[str | None]
+    unmatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

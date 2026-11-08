@@ -31,6 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import PLUGIN_API_VERSION
+from ..banking import BankLineRow
 from ..errors import ValidationError
 from ..models import Book, Group, Ledger, Voucher, VoucherEntry, VoucherType
 from .trust import (
@@ -51,6 +52,14 @@ Validator = Callable[["VoucherDraft", "Resolver"], None]
 EventHandler = Callable[["DomainEvent"], None]
 DocumentViewFactory = Callable[["DocumentContext"], "DocumentView | None"]
 PackReportFactory = Callable[["Resolver", "dict[str, str]"], "PackReport"]
+#: An inbound HTTP hook a pack claims (plugin API 0.11, ADR-026): served at
+#: ``POST /api/v1/hooks/{key}`` — book-scoped by the standard header,
+#: bookkeeper role (webhooks write) — the handler runs in the request
+#: transaction with a book-scoped ``Resolver`` and returns the JSON body of
+#: the response. The banking gateway seam: a per-bank adapter is a drop-in
+#: that claims its own key and translates its bank's payload; the kernel
+#: never learns a bank's name (ADR-026 D3).
+WebhookHandler = Callable[["Resolver", dict[str, Any]], "dict[str, Any]"]
 
 
 def _api_compatible(declared: str) -> bool:
@@ -346,11 +355,31 @@ class Resolver:
     """Inside-transaction helper passed to hooks: look up (or safely
     create) masters without breaking the posting transaction. Every lookup
     and creation is scoped to the book being posted into (ADR-009): a plugin
-    can never resolve — or mint — a master of another book."""
+    can never resolve — or mint — a master of another book.
+
+    Plugin API 0.11 (ADR-026): the ``session`` and ``book`` properties are
+    the **webhook handler's** handles — a hook claimed through
+    ``register_webhook`` runs in a host request transaction and may call
+    kernel services with them (the gateway statement import does).
+    Transformers and validators never need them: they already run inside
+    the posting transaction, and the engine re-proves the financial laws
+    after every hook."""
 
     def __init__(self, session: Session, book: Book) -> None:
         self._session = session
         self._book = book
+
+    @property
+    def session(self) -> Session:
+        """The transaction-scoped session this resolver wraps (plugin API
+        0.11) — the webhook handler's write handle."""
+        return self._session
+
+    @property
+    def book(self) -> Book:
+        """The book every lookup and creation is scoped to (plugin API
+        0.11) — webhook handlers pass it to kernel services."""
+        return self._book
 
     def ledger(self, *, id: int | None = None, name: str | None = None) -> Ledger | None:
         stmt = select(Ledger).where(Ledger.book_id == self._book.id)
@@ -513,6 +542,17 @@ class Resolver:
             select(func.pg_advisory_xact_lock(func.hashtextextended(f"{self._book.id}:{name}", 0)))
         )
 
+    def bank_lines(self, ledger_id: int) -> list[BankLineRow]:
+        """Every imported bank-statement line of one ledger with its live
+        (or last) match state (plugin API 0.11, ADR-026) — the banking
+        pack's fold input: the cheque register derives *presented* from
+        lines and *cleared* from live matches, and the reconciliation
+        report reads the same rows the UIs list. Book-scoped like every
+        Resolver read: another book's ledger answers empty."""
+        from ..banking import bank_lines as _bank_lines
+
+        return _bank_lines(self._session, book=self._book, ledger_id=ledger_id)
+
 
 class PluginRegistry:
     """The only sanctioned integration surface (semver: PLUGIN_API_VERSION)."""
@@ -523,6 +563,11 @@ class PluginRegistry:
         self.handlers: dict[str, list[EventHandler]] = {}
         self.document_views: dict[str, DocumentViewFactory] = {}
         self.report_views: dict[str, PackReportFactory] = {}
+        #: Inbound HTTP hooks, plugin API 0.11 (ADR-026): key -> handler,
+        #: served by ``POST /api/v1/hooks/{key}``. One handler per key; a
+        #: later registration replaces an earlier one, mirroring the
+        #: document/report registries.
+        self.webhooks: dict[str, WebhookHandler] = {}
 
     def register_transformer(self, fn: Transformer) -> None:
         self.transformers.append(fn)
@@ -546,6 +591,15 @@ class PluginRegistry:
         One factory per key; a later registration replaces an earlier one,
         mirroring the other registries."""
         self.report_views[key] = factory
+
+    def register_webhook(self, key: str, handler: WebhookHandler) -> None:
+        """Claim the inbound hook ``key`` (API 0.11, ADR-026): requests to
+        ``POST /api/v1/hooks/{key}`` run ``handler(resolver, payload)`` in
+        the request transaction (book-scoped, bookkeeper role) and return
+        its dict. One handler per key — last loaded wins, the registries'
+        rule. Webhooks WRITE (the gateway statement import does); a
+        read-only integration should register a report instead."""
+        self.webhooks[key] = handler
 
 
 def split_plugin_path(extra_path: str) -> list[str]:

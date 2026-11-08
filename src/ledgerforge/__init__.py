@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.22.0"
+__version__ = "0.23.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -45,4 +45,9 @@ __version__ = "0.22.0"
 #:       cost-centre splits ride voucher lines through every transformer —
 #:       Σallocation = amount is re-proven after each hook, and transformers
 #:       that split lines must split the allocations with them (ADR-025).
-PLUGIN_API_VERSION = "0.10"
+#: 0.11 — ``PluginRegistry.register_webhook(key, handler)`` (inbound hooks at
+#:       ``POST /api/v1/hooks/{key}``, the banking gateway seam) and
+#:       ``Resolver.bank_lines(ledger_id)`` (imported statement lines with
+#:       their live match state — the banking pack's fold input, the
+#:       ``fy_start_month`` precedent of 0.4) (ADR-026).
+PLUGIN_API_VERSION = "0.11"

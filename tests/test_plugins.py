@@ -215,7 +215,7 @@ def test_api_compat_is_a_floor():
     ]
 
     try:
-        mgr.load_module(_plugin("from-the-future", "0.11"))
+        mgr.load_module(_plugin("from-the-future", "0.12"))
         raise AssertionError("should have refused to load")
     except RuntimeError as exc:
         assert "plugin API" in str(exc)

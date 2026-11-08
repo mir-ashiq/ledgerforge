@@ -84,6 +84,10 @@ class ApiClient:
         response = self._client.post(path, json=payload or {}, params=params)
         return self._unwrap(response)
 
+    def _delete(self, path: str, **params: Any) -> Any:
+        response = self._client.delete(path, params=params)
+        return self._unwrap(response)
+
     @staticmethod
     def _unwrap(response: httpx.Response) -> Any:
         if response.status_code >= 400:
@@ -214,6 +218,63 @@ class ApiClient:
         query = dict(params)
         query["format"] = "json"
         return self._get(f"/api/v1/reports/pack/{key}", **query)
+
+    # -------------------------------------------------------------- banking
+    def bank_ledgers(self) -> list[dict]:
+        """Every bank-account ledger of the book with its balance — the
+        banking pickers' feed (ADR-026)."""
+        return self._get("/api/v1/banking/ledgers")["ledgers"]
+
+    def bank_import(
+        self,
+        ledger_id: int,
+        fmt: str,
+        text: str,
+        *,
+        dry_run: bool = False,
+        source: str | None = None,
+        opening_balance: str | None = None,
+    ) -> dict:
+        """Import a statement (CSV/MT940) — validated, idempotent;
+        ``dry_run`` is the preview (ADR-026)."""
+        payload: dict = {"format": fmt, "text": text, "dry_run": dry_run}
+        if source:
+            payload["source"] = source
+        if opening_balance:
+            payload["opening_balance"] = opening_balance
+        return self._post(f"/api/v1/banking/{ledger_id}/statements", payload)
+
+    def bank_lines(self, ledger_id: int, status: str = "all") -> dict:
+        """The statement line book with live-match state (ADR-026)."""
+        return self._get(f"/api/v1/banking/{ledger_id}/lines", status=status)
+
+    def bank_entries(self, ledger_id: int, status: str = "all") -> dict:
+        """The bank ledger's own entries with live-match state — the manual
+        matchmaker's discovery surface (ADR-026)."""
+        return self._get(f"/api/v1/banking/{ledger_id}/entries", status=status)
+
+    def bank_suggestions(self, ledger_id: int, window: int = 7) -> dict:
+        """The matchmaker's ranked candidates — computed, never committed
+        (the roadmap's law, ADR-026)."""
+        return self._get(f"/api/v1/banking/{ledger_id}/suggestions", window=window)
+
+    def bank_match(self, ledger_id: int, target: dict) -> dict:
+        """Record the reconciliation judgement: this line is that entry."""
+        return self._post(f"/api/v1/banking/{ledger_id}/matches", target)
+
+    def bank_unmatch(self, statement_line_id: int) -> dict:
+        """Withdraw a match — the row stays, ``unmatched_at`` says when."""
+        return self._delete(f"/api/v1/banking/matches/{statement_line_id}")
+
+    def bank_reconciliation(
+        self, ledger_id: int, as_of: date, statement_balance: str | None = None
+    ) -> dict:
+        """Book vs bank with the proof (ADR-026): the anchor is the figure
+        on the statement, or the fold when omitted."""
+        query: dict = {"as_of": as_of.isoformat()}
+        if statement_balance:
+            query["statement_balance"] = statement_balance
+        return self._get(f"/api/v1/banking/{ledger_id}/reconciliation", **query)
 
     # -------------------------------------------------------------- reports
     def trial_balance(self, as_of: date | None = None) -> dict:

@@ -487,6 +487,55 @@ the `meta` store cannot promise. Migration `0007`:
 Design: [ADR-025](docs/adr/025-cost-centres.md),
 [plugin guide](docs/plugin-guide.md).
 
+
+## Banking: reconciliation, cheques & the gateway seam (v0.23, ADR-026)
+
+The books say one thing, the bank says another; the reconciliation statement
+is where the two agree — and where every disagreement is priced, exactly.
+The roadmap's **second core-schema change** (migration `0008`), for the same
+reason as the first: imported statement facts need database identity
+(idempotent re-import is a `UNIQUE` verdict, not a check-then-insert race)
+and the proof aggregates them with exact-decimal rigour.
+
+- **Statement import (CSV + MT940)** — validated, all-or-nothing, with a
+  `dry_run` preview; the content fingerprint (the statement's own identity +
+  each line's facts + occurrence) makes re-importing the same statement a
+  clean no-op while a later statement's genuine repeats land beside the
+  first. MT940's `:60F:/:62F:` balances become the proof's foldable anchor.
+- **The matchmaker never commits** — suggestions are a pure function:
+  amount-exact (+50), a date window, reference-fuzzy evidence (cheque
+  number, voucher number, narration overlap), ranked. Only the explicit
+  match writes, and a manual match may disagree on amount — the proof
+  carries the difference as its own row, honestly priced.
+- **The match annotation is the kernel's one deliberately mutable table**
+  — match/un-match is revisable judgement, not financial history (Law 2
+  guards the statement facts; `bank_line_matches` is UPDATE-only, DELETE
+  never, provenance columns always). Un-match and re-match at will.
+- **The reconciliation statement is a proof** — `book − statement =
+  unmatched-book − unmatched-statement + pair differences` (with the
+  statement's own opening as a baseline row), exact Decimals, asserted
+  every time. The reconciled balance rides along.
+- **The cheque register is a fold** — declarations ride vouchers
+  (`meta.banking.cheque`: number, bank ledger, PDC maturity), validated to
+  ride a voucher that moves their own bank account with per-ledger number
+  uniqueness (advisory-locked). *Issued* when posted, *presented* when an
+  imported line references the number (precise digit-runs — 448812 never
+  matches 4488123), *cleared* when that line is matched.
+- **The gateway seam (plugin API 0.11)** — `register_webhook(key, handler)`
+  claims `POST /api/v1/hooks/{key}` (book-scoped, bookkeeper role): the
+  banking pack's `bank-statement-gateway` accepts the generic gateway JSON
+  in-process; a per-bank adapter is a drop-in behind the ADR-016 trust
+  gate, and the kernel never learns a bank's name. After-commit events
+  (`bank.statement.imported`, `bank.line.matched`, `bank.line.unmatched`)
+  fire for bridges; `Resolver.bank_lines` is the sanctioned fold read.
+- **Both surfaces**: the web Banking screen (`Alt+G` — import with preview,
+  the line book, `M` match / `U` un-match, the proof, the register) and the
+  native Banking page (import dialog, suggestions pane, one-click match,
+  the proof dialog, the register).
+
+Design: [ADR-026](docs/adr/026-banking-pack.md),
+[plugin guide](docs/plugin-guide.md).
+
 ## Print bridge: payslips & tax invoices as PDF (ADR-013)
 
 Every posted voucher prints. `GET /api/v1/vouchers/{id}/pdf` offers the
@@ -918,7 +967,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.22.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.23.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -1066,6 +1115,25 @@ phase tracks as a GitHub milestone with a tracking issue:
       through the closure machinery (centre summary + Unallocated,
       ledger-wise within centre, category rollup), and the split dialogs in
       both UIs (Alt+K / Ctrl+K, plugin API 0.10)
+- [x] Cost centres & cost categories (v0.22, Phase 4, ADR-025): the first
+      core-schema change since the scale-out — cost_centres/cost_categories
+      trees with closures (migration 0007), cost_allocations with the
+      database-enforced conservation law (fully allocated or unallocated,
+      never partly — the deferrable Law-1 discipline), the break-up reports
+      through the closure machinery (centre summary + Unallocated,
+      ledger-wise within centre, category rollup), and the split dialogs in
+      both UIs (Alt+K / Ctrl+K, plugin API 0.10)
+- [x] The banking pack (v0.23, Phase 5, ADR-026): the second core-schema
+      change (migration 0008) — bank statement batches/lines with
+      content-fingerprint idempotency, the match annotation as the kernel's
+      one deliberately mutable table (UPDATE-only, DELETE never), the
+      matchmaker as a pure function (suggestions never commit), the
+      reconciliation proof (book − statement = the unmatched nets + pair
+      differences + the statement baselines, exact), the cheque register
+      fold (issued → presented → cleared, PDC maturity), the gateway
+      webhook seam + after-commit events (plugin API 0.11:
+      register_webhook, Resolver.bank_lines), and both surfaces (web Alt+G
+      + the native Banking page)
 - [x] Bill-wise & outstanding management (v0.20, Phase 2, ADR-023):
       bill references as the fourth plugin pack (zero schema change) with
       the conservation law (bills + on-account == the party's ledger

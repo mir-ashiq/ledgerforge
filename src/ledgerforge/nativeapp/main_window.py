@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .banking import BankingPage
 from .client import ApiClient
 from .daybook import DayBookPage
 from .masters import MastersPage
@@ -41,6 +42,7 @@ PAGES = [
     ("daybook", "Day Book"),
     ("masters", "Masters"),
     ("orders", "Orders"),
+    ("banking", "Banking"),
     ("reports", "Reports"),
     ("periods", "Periods"),
     ("sandbox", "Sandbox"),
@@ -63,6 +65,7 @@ class MainWindow(QMainWindow):
         self.daybook = DayBookPage(client)
         self.masters = MastersPage(client)
         self.orders = OrdersPage(client)
+        self.banking = BankingPage(client)
         self.reports = ReportsPage(client)
         self.periods = PeriodsPage(client)
         self.sandbox = SandboxPage(client)
@@ -70,6 +73,7 @@ class MainWindow(QMainWindow):
             self.daybook,
             self.masters,
             self.orders,
+            self.banking,
             self.reports,
             self.periods,
             self.sandbox,

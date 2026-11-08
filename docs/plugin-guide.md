@@ -137,6 +137,44 @@ document consumes no number. The design contract is
 [ADR-024](adr/024-order-processing.md); the worked pack is
 `ledgerforge/contrib/orders.py`.
 
+## Claiming an inbound webhook (API 0.11, ADR-026)
+
+```python
+def register(registry):
+    registry.register_webhook("my-bank-gateway", handle_gateway)
+
+
+def handle_gateway(resolver, payload):
+    # resolver.session / resolver.book are the documented handles a
+    # webhook writes through; ordinary hooks (transformers, validators)
+    # never need them — they already run inside the posting transaction
+    receipt = import_statement(
+        resolver.session,
+        book=resolver.book,
+        ledger=...,
+        fmt=payload["format"],
+        text=payload["text"],
+    )
+    return receipt
+```
+
+``POST /api/v1/hooks/{key}`` runs the handler with a book-scoped
+`Resolver` in the request's transaction and returns its dict as the
+response — book-scoped by the standard `X-Book-Id` header, **bookkeeper
+role** (webhooks write). One handler per key; a later registration
+replaces an earlier one, the registries' rule. The banking pack claims
+`bank-statement-gateway` (the generic gateway JSON — any connected
+banking bridge can POST it); a per-bank adapter translates its bank's
+payload and claims its own key — the kernel never learns a bank's name
+(ADR-026 D3). Bank credentials belong to the adapter or a proxy in
+front of the route, never to core.
+
+API 0.11 also adds `Resolver.bank_lines(ledger_id)` — every imported
+statement line of a bank ledger with its live-match state, the banking
+pack's fold input (the `fy_start_month` precedent: a domain read a
+pack needs). Bank events fire after commit like `voucher.posted`:
+`bank.statement.imported`, `bank.line.matched`, `bank.line.unmatched`.
+
 ## Cost allocations ride the draft (API 0.10, ADR-025)
 
 Cost-centre splits are **core schema** (migration 0007), not a pack document
