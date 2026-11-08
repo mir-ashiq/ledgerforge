@@ -293,6 +293,66 @@ items that would silently reuse an unrelated ledger.
 Design: [ADR-011](docs/adr/011-inventory-pack.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Inventory depth: batches, serials, expiry, godowns, re-order & manufacturing (v0.24, ADR-027)
+
+Phase 6 grows the pack from quantities-and-averages to the depth
+TallyPrime users call real inventory — **valuation stays the moving
+weighted average**; everything below is a quantity sub-ledger of the same
+position, replayed by the same fold:
+
+- **Batches & expiry** on every stock line: the first receipt fixes a
+  batch's expiry (later receipts agree or name a new batch); issues name
+  their batch or take **FEFO** — the earliest-expiry batches first, ties
+  by batch name, the allocation recorded in the document's `computed`.
+  The expiry-ageing report buckets every dated batch (expired, ≤30, ≤60,
+  ≤90, >90 days) with quantity and value-at-average.
+- **Serial numbers** are identity: one per unit, duplicates a 422, issues
+  must name serials that are in stock *at that godown, in that batch*.
+- **Godowns are a first-class dimension** — a location key on movements
+  and positions, not another ledger: `(item, godown) → qty` in the fold,
+  and an issue cannot take what the location does not hold (the ADR-011
+  limitation, closed). Transfers carry `godown → to_godown` alongside
+  their value pair.
+- **Stock-item masters** (migration `0009_stock_depth`, the ADR-025
+  discipline): tracking modes (TallyPrime's "maintain in batches /
+  serial numbers" toggles — enforced when declared, optional otherwise),
+  re-order levels with the **shortfall report**, and per-party
+  date-effective **price lists** whose effective rate is annotated on
+  sales (suggestions never commit — the selling rate stays the
+  operator's).
+- **The manufacturing journal** (`movement: "manufacture"`): consumes
+  components at their moving averages, adds the operator's charge legs
+  (wages, power, freight — anything outside Stock-in-Hand), and produces
+  the output at the rolled-up cost — `output value = Σ components +
+  Σ charges`, one exact amount, no rounding residue. A named **BOM**
+  validates the recipe (exact component set, quantities covering the
+  per-output shares); without one, the explicit journal stands alone.
+  Reversal nets the whole journal — components restored, output gone.
+
+```bash
+# Produce 2 Desks from 6 Planks and 40 Screws + 450 of wages
+curl -s -X POST localhost:8000/api/v1/vouchers -H 'Content-Type: application/json' -d '{
+  "voucher_type": "JV", "voucher_date": "2026-11-08",
+  "entries": [{"ledger_name": "Cash", "dc": "D", "amount": "0.01"}],
+  "meta": {"stock": {"movement": "manufacture",
+    "components": [{"item": "Planks", "qty": "6"}, {"item": "Screws", "qty": "40"}],
+    "output": {"item": "Desks", "qty": "2", "batch": "DSK-1"},
+    "charges": [{"ledger": "Production Wages", "amount": "450.00"}]}}
+}'
+# → Dr Desks 1090.00 · Cr Planks 600.00 · Cr Screws 40.00 · Cr Production Wages 450.00
+```
+
+Five pack reports over the same fold (PDF, CSV and JSON — one truth,
+every surface): `stock-position` (the depth browser), `stock-godown`,
+`stock-batch`, `stock-expiry`, `stock-shortfall`. The native Inventory
+page (`Alt+7`) and the web screen (`Alt+V`) browse them all. Every stock
+document prints as the physical document it is — receipt, issue note,
+stock transfer, physical count, manufacturing journal.
+
+Design: [ADR-027](docs/adr/027-inventory-depth.md) (extends
+[ADR-011](docs/adr/011-inventory-pack.md)),
+[plugin guide](docs/plugin-guide.md).
+
 ## Payroll (roadmap §9, ADR-012)
 
 The third business pack — the second in a row with **zero schema change**,
@@ -967,7 +1027,7 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.23.0 — the accounting kernel, the voucher-entry screen, the command palette
+v0.24.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,
 period locking with the financial-year close, multi-book (v0.5), invoicing
 as the first plugin pack (v0.6), inventory as the second — zero schema
@@ -1039,8 +1099,10 @@ What comes next is written down as a plan of record —
 **[ROADMAP.md](ROADMAP.md): eleven phases to v1.0, “everything an Indian
 SMB's daily accounting needs, on LedgerForge, without wishing for
 TallyPrime”** — Phase 1 landed in v0.19.0, Phase 2 (bill-wise &
-outstanding) in v0.20.0, and Phase 3 (order processing) in v0.21.0. Each
-phase tracks as a GitHub milestone with a tracking issue:
+outstanding) in v0.20.0, Phase 3 (order processing) in v0.21.0, Phase 4
+(cost centres) in v0.22.0, Phase 5 (the banking pack) in v0.23.0, and
+Phase 6 (inventory depth) in v0.24.0. Each phase tracks as a GitHub
+milestone with a tracking issue:
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
 - [x] Command palette + user key-rebinding persistence (keyboard-ux §8 phase 3)
@@ -1100,40 +1162,6 @@ phase tracks as a GitHub milestone with a tracking issue:
       the web UI (Books screen, `X-Book-Id`), reversal from the daybook,
       the periods screen, `master.created`, FX line entry + F4–F9 in the
       native form, direct `cryptography` dependency, docs honest
-- [x] Order processing (v0.21, Phase 3, ADR-024): quotation, sales
-      order, delivery note, purchase order and GRN as the fifth plugin
-      pack (zero schema change) — their own numbering series (plugin API
-      0.9: `ensure_voucher_type`), the zero-net memorandum trace (orders
-      never move the trial balance), the position fold with cap guards,
-      the order→invoice settle annotation, pending-orders reports both
-      sides, and the native Orders page + document pickers
-- [x] Cost centres & cost categories (v0.22, Phase 4, ADR-025): the first
-      core-schema change since the scale-out — cost_centres/cost_categories
-      trees with closures (migration 0007), cost_allocations with the
-      database-enforced conservation law (fully allocated or unallocated,
-      never partly — the deferrable Law-1 discipline), the break-up reports
-      through the closure machinery (centre summary + Unallocated,
-      ledger-wise within centre, category rollup), and the split dialogs in
-      both UIs (Alt+K / Ctrl+K, plugin API 0.10)
-- [x] Cost centres & cost categories (v0.22, Phase 4, ADR-025): the first
-      core-schema change since the scale-out — cost_centres/cost_categories
-      trees with closures (migration 0007), cost_allocations with the
-      database-enforced conservation law (fully allocated or unallocated,
-      never partly — the deferrable Law-1 discipline), the break-up reports
-      through the closure machinery (centre summary + Unallocated,
-      ledger-wise within centre, category rollup), and the split dialogs in
-      both UIs (Alt+K / Ctrl+K, plugin API 0.10)
-- [x] The banking pack (v0.23, Phase 5, ADR-026): the second core-schema
-      change (migration 0008) — bank statement batches/lines with
-      content-fingerprint idempotency, the match annotation as the kernel's
-      one deliberately mutable table (UPDATE-only, DELETE never), the
-      matchmaker as a pure function (suggestions never commit), the
-      reconciliation proof (book − statement = the unmatched nets + pair
-      differences + the statement baselines, exact), the cheque register
-      fold (issued → presented → cleared, PDC maturity), the gateway
-      webhook seam + after-commit events (plugin API 0.11:
-      register_webhook, Resolver.bank_lines), and both surfaces (web Alt+G
-      + the native Banking page)
 - [x] Bill-wise & outstanding management (v0.20, Phase 2, ADR-023):
       bill references as the fourth plugin pack (zero schema change) with
       the conservation law (bills + on-account == the party's ledger
@@ -1157,6 +1185,24 @@ phase tracks as a GitHub milestone with a tracking issue:
       through the closure machinery (centre summary + Unallocated,
       ledger-wise within centre, category rollup), and the split dialogs in
       both UIs (Alt+K / Ctrl+K, plugin API 0.10)
+- [x] The banking pack (v0.23, Phase 5, ADR-026): the second core-schema
+      change (migration 0008) — bank statement batches/lines with
+      content-fingerprint idempotency, the match annotation as the kernel's
+      one deliberately mutable table (UPDATE-only, DELETE never), the
+      matchmaker as a pure function (suggestions never commit), the
+      reconciliation proof (book − statement = the unmatched nets + pair
+      differences + the statement baselines, exact), the cheque register
+      fold (issued → presented → cleared, PDC maturity), the gateway
+      webhook seam + after-commit events (plugin API 0.11:
+      register_webhook, Resolver.bank_lines), and both surfaces (web Alt+G
+      + the native Banking page)
+- [x] The inventory depth (v0.24, Phase 6, ADR-027): batches, serials
+  and expiry with FEFO, godowns as a first-class dimension, re-order
+  levels with the shortfall report, per-party date-effective price
+  lists, and the manufacturing journal with its BOM-validated cost
+  rollup — the depth stays in the document fold (ADR-011's extension);
+  the masters get migration `0009_stock_depth` (plugin API 0.12: the
+  stock-master reads on the Resolver).
 
 ## Contributing
 

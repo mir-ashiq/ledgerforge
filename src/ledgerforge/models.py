@@ -346,3 +346,83 @@ class BankLineMatch(Base):
     matched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
     matched_by: Mapped[str | None]
     unmatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class StockItem(Base):
+    """A named stock item's master row (ADR-027, migration 0009): the
+    tracking modes (TallyPrime's "maintain in batches / serial numbers"
+    toggles) and the re-order levels the shortfall report folds against.
+    Movements keep naming items freely (ADR-011's string-item freedom) —
+    a master is depth opted into, not a gate to post; when one exists its
+    tracking modes are enforced. Revisable like every master; DELETE is
+    the database's own refusal while BOMs or prices reference it."""
+
+    __tablename__ = "stock_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    name: Mapped[str] = mapped_column(Text)  # unique per book
+    unit: Mapped[str | None]
+    track_batches: Mapped[bool] = mapped_column(default=False)
+    track_serials: Mapped[bool] = mapped_column(default=False)
+    reorder_level: Mapped[Decimal | None]
+    reorder_quantity: Mapped[Decimal | None]
+    notes: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class StockPrice(Base):
+    """One date-effective price-list row (ADR-027, migration 0009):
+    ``party_ledger_id`` NULL is the list price for everyone; a
+    party-specific row beats the generic one at the same date. The
+    effective price for (item, party, date) is the latest
+    ``effective_from <= date`` — one indexed predicate, never a fold.
+    Suggestions never commit: the pack annotates the rate, the operator
+    types the selling price (the matchmaker's law)."""
+
+    __tablename__ = "stock_prices"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    item_id: Mapped[int] = mapped_column(ForeignKey("stock_items.id", ondelete="CASCADE"))
+    party_ledger_id: Mapped[int | None] = mapped_column(
+        ForeignKey("ledgers.id", ondelete="RESTRICT")
+    )
+    effective_from: Mapped[date] = mapped_column(Date)
+    rate: Mapped[Decimal]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class StockBom(Base):
+    """A bill of materials (ADR-027, migration 0009): one output item and
+    a per-run output quantity, its lines naming component items with a
+    quantity per output unit. The manufacturing journal's recipe —
+    validated when named, ignored when the journal stands alone."""
+
+    __tablename__ = "stock_boms"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    name: Mapped[str] = mapped_column(Text)  # unique per book
+    output_item_id: Mapped[int] = mapped_column(ForeignKey("stock_items.id", ondelete="RESTRICT"))
+    output_qty: Mapped[Decimal]
+    notes: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class StockBomLine(Base):
+    """One BOM component (ADR-027, migration 0009): the item and the
+    quantity consumed per output unit. UNIQUE with its BOM; the composite
+    FK keeps the component an item of the same book."""
+
+    __tablename__ = "stock_bom_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    bom_id: Mapped[int] = mapped_column(ForeignKey("stock_boms.id", ondelete="CASCADE"))
+    component_item_id: Mapped[int] = mapped_column(
+        ForeignKey("stock_items.id", ondelete="RESTRICT")
+    )
+    qty_per_output: Mapped[Decimal]

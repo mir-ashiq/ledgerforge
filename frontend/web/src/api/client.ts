@@ -31,6 +31,9 @@ import type {
   PluginsOut,
   ReversalPayload,
   SlotsOut,
+  StockBom,
+  StockItemMaster,
+  StockPriceRow,
   VoucherOut,
   VoucherPostPayload,
 } from './types';
@@ -226,6 +229,73 @@ export const api = {
     if (party) params.set('party', party);
     const key = side === 'dr' ? 'bills-receivable' : 'bills-payable';
     return request<OutstandingReport>(`/reports/pack/${key}?${params.toString()}`);
+  },
+
+  // ---- inventory: stock masters + the depth folds (ADR-027) --------------
+  /** Every stock-item master of the book, name order. */
+  inventoryItems: (): Promise<StockItemMaster[]> => request('/inventory/items'),
+
+  /** Create a stock-item master (tracking modes, re-order levels). */
+  inventoryCreateItem: (input: Partial<StockItemMaster>) =>
+    request<StockItemMaster>('/inventory/items', { method: 'POST', body: JSON.stringify(input) }),
+
+  /** Revise a master (partial — unmentioned fields stand). */
+  inventoryUpdateItem: (id: number, input: Partial<StockItemMaster>) =>
+    request<StockItemMaster>(`/inventory/items/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+
+  /** Delete a master (prices cascade; BOM references refuse). */
+  inventoryDeleteItem: (id: number) =>
+    request<{ deleted: boolean }>(`/inventory/items/${id}`, { method: 'DELETE' }),
+
+  /** Price rows of the book — optionally one item's. */
+  inventoryPrices: (itemId?: number): Promise<StockPriceRow[]> =>
+    request(`/inventory/prices${itemId != null ? `?item_id=${itemId}` : ''}`),
+
+  /** One date-effective price row (party null = the list price). */
+  inventoryCreatePrice: (input: {
+    item_id: number;
+    party_ledger_id?: number | null;
+    effective_from: string;
+    rate: string;
+  }) =>
+    request<StockPriceRow>('/inventory/prices', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  inventoryDeletePrice: (id: number) =>
+    request<{ deleted: boolean }>(`/inventory/prices/${id}`, { method: 'DELETE' }),
+
+  /** Every BOM of the book with its components. */
+  inventoryBoms: (): Promise<StockBom[]> => request('/inventory/boms'),
+
+  inventoryCreateBom: (input: {
+    name: string;
+    output_item_id: number;
+    output_qty: string;
+    components: { component_item_id: number; qty_per_output: string }[];
+  }) =>
+    request<StockBom>('/inventory/boms', { method: 'POST', body: JSON.stringify(input) }),
+
+  inventoryDeleteBom: (id: number) =>
+    request<{ deleted: boolean }>(`/inventory/boms/${id}`, { method: 'DELETE' }),
+
+  /** The effective price for (item, party, date) — null is the honest
+   * "no suggestion" (the matchmaker's law: suggestions never commit). */
+  inventoryEffectivePrice: (itemId: number, partyLedgerId?: number, on?: string) => {
+    const params = new URLSearchParams({ item_id: String(itemId) });
+    if (partyLedgerId != null) params.set('party_ledger_id', String(partyLedgerId));
+    if (on) params.set('on', on);
+    return request<{ rate: string | null }>(`/inventory/prices/effective?${params.toString()}`);
+  },
+
+  /** A stock pack report's JSON fold — the same rows the PDF renders. */
+  stockPack: <T>(key: string, params: Record<string, string> = {}): Promise<T> => {
+    const query = new URLSearchParams({ ...params, format: 'json' });
+    return request(`/reports/pack/${key}?${query.toString()}`);
   },
 
   // ---- banking: statements, matches, the proof (ADR-026) ------------------

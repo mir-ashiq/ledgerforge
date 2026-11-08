@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.23.0"
+__version__ = "0.24.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -50,4 +50,11 @@ __version__ = "0.23.0"
 #:       ``Resolver.bank_lines(ledger_id)`` (imported statement lines with
 #:       their live match state — the banking pack's fold input, the
 #:       ``fy_start_month`` precedent of 0.4) (ADR-026).
-PLUGIN_API_VERSION = "0.11"
+#: 0.12 — the stock-master reads (ADR-027): ``Resolver.stock_item(name)``,
+#:       ``Resolver.stock_items()``, ``Resolver.stock_bom(name)`` (frozen
+#:       ``StockItemMaster`` / ``StockBomMaster`` snapshots) and
+#:       ``Resolver.stock_price(item, party, on)`` (the date-effective
+#:       price-list lookup) — the ledger/group discipline applied to stock
+#:       masters, so the inventory pack can enforce tracking modes and
+#:       validate recipes without ever touching the session.
+PLUGIN_API_VERSION = "0.12"

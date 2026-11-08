@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.23.0** |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.24.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -25,16 +25,18 @@ is fully landed:
   OIDC auth, the balance cache and yearly entry partitions for scale-out reporting, cost
   centres & categories with their allocation store (ADR-025, v0.22), bank statement
   facts with the match annotation and the reconciliation proof (ADR-026, v0.23).
-- **Packs**: invoicing, inventory (weighted-average, four movements), payroll (runs, YTD,
-  payslips), statutory (PF/ESI/TDS), GST (place of supply, HSN rate tables, GSTR-1/HSN
-  statements, the IRN outbox + bridge), bills (bill-wise, outstanding, ageing, interest —
-  ADR-023, v0.20), orders (quotation/SO/DN/PO/GRN, position fold, pending reports —
-  ADR-024, v0.21).
+- **Packs**: invoicing, payroll (runs, YTD, payslips), statutory (PF/ESI/TDS), GST
+  (place of supply, HSN rate tables, GSTR-1/HSN statements, the IRN outbox + bridge),
+  bills (bill-wise, outstanding, ageing, interest — ADR-023, v0.20), orders
+  (quotation/SO/DN/PO/GRN, position fold, pending reports — ADR-024, v0.21), banking
+  (statements, reconciliation proof, cheques — ADR-026, v0.23), inventory (ADR-011's
+  weighted-average fold, grown to depth in v0.24: batches/serials/expiry with FEFO,
+  godowns, re-order + shortfall, price lists, the manufacturing journal — ADR-027).
 - **Surfaces**: keyboard-first web UI (command palette, rebindable Tally keymap, sandboxed
   plugin slots), native Windows application (ADR-022: a Qt window over an embedded
   PostgreSQL — no browser; the Orders page and document pickers joined in v0.21, the
   cost split dialog and masters tabs in v0.22, the Banking page and web banking screen
-  in v0.23), CLI,
+  in v0.23, the Inventory page and web stock screen in v0.24), CLI,
   REST API, dependency-free PDF printing.
 - **Trust**: signed community plugin distribution with the curator index, Ed25519
   signatures, operator acknowledgement.
@@ -65,7 +67,7 @@ subscriptions for updates and remote services.
 | Multi-currency | ✔ | ✔ (ADR-007, entry-level snapshots) | parity |
 | Keyboard-first UX | ✔ (its identity) | ✔ (ADR-004, rebindable keymap, palette) | parity in the web app; the native window is narrower (Phase 1) |
 | Invoicing | ✔ | ✔ (ADR-010) | parity for the invoice itself; bill-wise tracking landed in **v0.20** (ADR-023) |
-| Inventory | ✔ batches/serial/expiry/godowns/re-order/mfg | weighted-average qty/value only | **gap** (Phase 6) |
+| Inventory | ✔ batches/serial/expiry/godowns/re-order/mfg | ✔ (ADR-027: batches/serials/expiry with FEFO, godowns, re-order + shortfall, price lists, manufacturing) | **parity** — landed in v0.24.0 (Phase 6); valuation stays weighted-average by design |
 | Orders (quote/SO/PO/GRN) | ✔ | ✔ (ADR-024) | **parity** — landed in v0.21.0 (Phase 3) |
 | Cost centres | ✔ | ✔ (ADR-025) | **parity** — landed in v0.22.0 (Phase 4) |
 | Banking, BRS, cheques | ✔ (incl. connected banking) | ✔ (ADR-026) | **parity** — landed in v0.23.0 (Phase 5); per-bank connected-banking APIs stay plugin-side by design (D3) |
@@ -77,10 +79,11 @@ subscriptions for updates and remote services.
 | Deployment | Windows LAN (Silver/Gold) | Native Windows app, web container, REST API, CLI | **LedgerForge leads** on openness; **behind** on signing/auto-update (Phase 10) |
 | Price | ₹22,500+ per seat | AGPL-3.0, free forever | **LedgerForge leads** |
 
-The honest summary: **the engine is at or past parity; the product is not.** What remains
-is accounting-core depth (bill-wise, cost centres), business-workflow breadth (orders,
-banking), compliance depth (GST returns), and distribution polish (signing, auto-update).
-That is exactly what the eleven phases below deliver, in dependency order.
+The honest summary: **the accounting core is at parity** — bill-wise, orders, cost
+centres, banking and inventory depth all landed (v0.20–v0.24). What remains is compliance
+depth (GST returns, payroll depth), the data-exchange path (imports and the Tally
+migration), and distribution polish (signing, auto-update). That is exactly what the
+remaining phases below deliver, in dependency order.
 
 ---
 
@@ -161,7 +164,7 @@ database, not in `meta`.
 - The connected-banking APIs (per-bank) stay out of core by design (D3); a webhook event
   seam lets gateway integrations deliver statements through a plugin.
 
-### Phase 6 — v0.24.0 · Inventory depth *(ADR-027, extends ADR-011)*
+### Phase 6 — v0.24.0 · Inventory depth *(ADR-027, extends ADR-011 — landed in v0.24.0)*
 
 - Batch, serial and expiry tracking on stock documents (batch-wise in/out/transfer/
   recount; expiry-ageing report; FEFO suggestion on out-movements — valuation stays

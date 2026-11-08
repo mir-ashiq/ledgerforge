@@ -175,6 +175,39 @@ pack's fold input (the `fy_start_month` precedent: a domain read a
 pack needs). Bank events fire after commit like `voucher.posted`:
 `bank.statement.imported`, `bank.line.matched`, `bank.line.unmatched`.
 
+## Reading the stock masters (API 0.12, ADR-027)
+
+Phase 6 promoted inventory to depth: batches, serials, expiry, godowns,
+re-order levels, price lists and BOMs. The **movements** stay documents
+(`meta.stock`, ADR-011 — the pack's fold); the **masters** are kernel
+schema (migration `0009_stock_depth`), and a pack reads them through four
+Resolver handles — the `ledger`/`group` discipline applied to stock, so
+packs never touch the session for them:
+
+```python
+master = resolver.stock_item(name="Amoxycillin 500")  # or None — items
+#       stay free strings unless a master exists (depth is opted into)
+if master and master.track_batches:
+    ...  # goods-in must name its batch; bool flags + reorder Decimals
+
+for master in resolver.stock_items():  # the shortfall fold
+    ...
+
+bom = resolver.stock_bom(name="Desk-STD")  # or None
+bom.output_item, bom.output_qty  # "Desk", Decimal("2")
+bom.components  # (("Plank", Decimal("6")), ...)
+
+rate = resolver.stock_price("Amoxycillin 500", "MedPlus", on=voucher_date)
+#       the date-effective list price; None is the honest "no suggestion"
+```
+
+The handles return frozen data objects (`StockItemMaster`,
+`StockBomMaster`), book-scoped, immutable snapshots — never ORM rows. The
+inventory pack is the worked example: it enforces the tracking modes on
+`meta.stock` documents and validates the manufacturing journal against the
+named BOM, entirely through these handles. The API floor (ADR-011) keeps
+every older pack loading unchanged.
+
 ## Cost allocations ride the draft (API 0.10, ADR-025)
 
 Cost-centre splits are **core schema** (migration 0007), not a pack document

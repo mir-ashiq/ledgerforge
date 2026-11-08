@@ -1,6 +1,6 @@
 """The main window — one native frame around the whole product.
 
-Sidebar navigation (Alt+1..6), native menu bar, a status bar that carries the
+Sidebar navigation (Alt+1..7), native menu bar, a status bar that carries the
 engine's heartbeat, and the keyboard identity the engine was built for:
 Ctrl+N posts a voucher from anywhere, F5 refreshes the page in focus, Ctrl+Q
 quits. The window IS the application — nothing opens a browser, ever.
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from .banking import BankingPage
 from .client import ApiClient
 from .daybook import DayBookPage
+from .inventory import InventoryPage
 from .masters import MastersPage
 from .models import Book
 from .order_dialog import NewOrderDialog
@@ -37,12 +38,14 @@ from .widgets import app_icon, error_detail
 #: (page key, sidebar label) in navigation order — the Orders page joins
 #: after Masters (ADR-024): the quote-to-cash and procure-to-pay documents
 #: get their own home between the masters they name and the reports they
-#: feed. Alt+1..6 follow the list.
+#: feed. Inventory follows Banking (ADR-027): the stock depth's masters,
+#: positions and recipes. Alt+1..7 follow the list.
 PAGES = [
     ("daybook", "Day Book"),
     ("masters", "Masters"),
     ("orders", "Orders"),
     ("banking", "Banking"),
+    ("inventory", "Inventory"),
     ("reports", "Reports"),
     ("periods", "Periods"),
     ("sandbox", "Sandbox"),
@@ -66,6 +69,7 @@ class MainWindow(QMainWindow):
         self.masters = MastersPage(client)
         self.orders = OrdersPage(client)
         self.banking = BankingPage(client)
+        self.inventory = InventoryPage(client)
         self.reports = ReportsPage(client)
         self.periods = PeriodsPage(client)
         self.sandbox = SandboxPage(client)
@@ -74,6 +78,7 @@ class MainWindow(QMainWindow):
             self.masters,
             self.orders,
             self.banking,
+            self.inventory,
             self.reports,
             self.periods,
             self.sandbox,
@@ -281,4 +286,4 @@ class MainWindow(QMainWindow):
     def _goto_pending_report(self, key: str) -> None:
         """The Orders page's pending button: jump to Reports, pre-selected."""
         self.reports.select_report(key)
-        self._goto(3)  # Reports is the fourth page now (Orders is third)
+        self._goto(4)  # Reports is the fifth page now (Inventory is fifth)

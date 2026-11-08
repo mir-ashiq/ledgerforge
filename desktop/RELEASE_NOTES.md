@@ -1,3 +1,73 @@
+# LedgerForge 0.24.0 — inventory depth
+
+**Phase 6 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
+the stockroom, given a memory.** Batches remember their expiry, serial
+numbers remember their shelf, godowns remember what they hold — and the
+manufacturing journal remembers exactly what it cost to make. The
+comparison table's biggest gap closes at parity's depth, with valuation
+staying the moving weighted average ADR-011 promised.
+
+## What's new in the window
+
+- **The Inventory page** (native, `Alt+7`) and the **stock screen** on
+  the web (`Alt+V`): stock-item masters with their tracking modes and
+  re-order levels, the positions browser with the godown and batch
+  split, the BOM recipes — and the expiry ageing, re-order shortfall,
+  godown-wise and batch-wise reports one key away (`1`–`5`).
+- **Batches & expiry with FEFO**: every stock line may carry a batch and
+  its expiry (the first receipt fixes it); issues name their batch or
+  take FEFO — earliest expiry first, ties by batch name, the allocation
+  recorded in the document's `computed`. The expiry-ageing report
+  buckets every dated batch: expired, ≤30, ≤60, ≤90, >90 days.
+- **Serial numbers are identity**: one per unit; receiving a duplicate
+  is a data error; issuing a serial that sits at another godown or in
+  another batch is refused — a serial is one physical thing.
+- **Godowns are a first-class dimension** — a location key on movements
+  and positions, not another ledger: `(item, godown) → qty` in the fold,
+  and an issue cannot take what the location does not hold (the ADR-011
+  limitation, closed).
+- **Re-order levels and the shortfall report**; **price lists**
+  (per-party, date-effective) whose effective rate is annotated on
+  sales — suggestions never commit; the selling rate stays yours.
+- **The manufacturing journal**: consumes components at their moving
+  averages, adds your charge legs (wages, power, freight — anything
+  outside Stock-in-Hand), and produces the output at the rolled-up cost
+  — `output value = Σ components + Σ charges`, one exact amount. A named
+  BOM validates the recipe; without one, the explicit journal stands
+  alone. Every stock document prints as the physical document it is.
+
+## What's new underneath
+
+- **Migration `0009_stock_depth` (ADR-027)** — the third core-schema
+  change since the scale-out, by the ADR-025 argument restated for
+  master data: stock items, price lists and BOMs are masters that need
+  database identity (UNIQUE names per book, FK-validated components,
+  one rate per item/party/date slot). The **movements' depth stays in
+  the document fold** — ADR-011's extension, not its replacement: no
+  document rewrite, old books upgrade in place.
+- **Plugin API 0.12**: four stock-master reads on the `Resolver` —
+  `stock_item(name)`, `stock_items()`, `stock_bom(name)` (frozen
+  `StockItemMaster`/`StockBomMaster` snapshots) and
+  `stock_price(item, party, on)`. The ADR-011 floor keeps every older
+  pack loading.
+- **The tolerant replay**: positions fold ALL items together now (a
+  manufacture needs its components' states to cost its output), and a
+  replay of reversal-orphaned history applies the overdraw instead of
+  refusing the whole book — the position reports the orphan, the
+  posting guards stop new ones.
+- **Five pack reports over one fold** — `stock-position`,
+  `stock-godown`, `stock-batch`, `stock-expiry`, `stock-shortfall` —
+  each as PDF (the shared print-bridge layout), CSV and JSON: one
+  truth, every surface.
+- 11 kernel + 17 pack + 8 native + 4 web tests pin the depth: the
+  grammar's guards, FEFO's determinism, the manufacturing cost rollup's
+  exactness, reversal netting across every sub-ledger, and book
+  isolation. Migration 0009 is drift-guarded and independently
+  reversible; docs refreshed (README, ROADMAP, plugin guide, keyboard
+  guide, this file).
+
+---
+
 # LedgerForge 0.23.0 — the banking pack
 
 **Phase 5 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):

@@ -88,6 +88,10 @@ class ApiClient:
         response = self._client.delete(path, params=params)
         return self._unwrap(response)
 
+    def _patch(self, path: str, payload: dict | None = None) -> Any:
+        response = self._client.patch(path, json=payload or {})
+        return self._unwrap(response)
+
     @staticmethod
     def _unwrap(response: httpx.Response) -> Any:
         if response.status_code >= 400:
@@ -332,6 +336,51 @@ class ApiClient:
             response.headers.get("content-type", "application/octet-stream"),
             name,
         )
+
+    def pack_data(self, key: str, **params: str) -> dict:
+        """A pack report's JSON payload (plugin API 0.8) — the rows a UI
+        consumes, the same fold the PDF renders from."""
+        query = dict(params)
+        query["format"] = "json"
+        response = self._client.get(f"/api/v1/reports/pack/{key}", params=query)
+        if response.status_code >= 400:
+            raise ApiError(response.status_code, _detail(_safe_json(response), response.text[:300]))
+        return response.json()
+
+    # ------------------------------------------------------------- inventory
+    def inventory_items(self) -> list[dict]:
+        return self._get("/api/v1/inventory/items")
+
+    def inventory_create_item(self, payload: dict) -> dict:
+        return self._post("/api/v1/inventory/items", payload)
+
+    def inventory_update_item(self, item_id: int, payload: dict) -> dict:
+        return self._patch(f"/api/v1/inventory/items/{item_id}", payload)
+
+    def inventory_delete_item(self, item_id: int) -> dict:
+        return self._delete(f"/api/v1/inventory/items/{item_id}")
+
+    def inventory_prices(self, item_id: int | None = None) -> list[dict]:
+        params = {"item_id": item_id} if item_id is not None else None
+        response = self._client.get("/api/v1/inventory/prices", params=params)
+        if response.status_code >= 400:
+            raise ApiError(response.status_code, _detail(_safe_json(response), response.text[:300]))
+        return response.json()
+
+    def inventory_create_price(self, payload: dict) -> dict:
+        return self._post("/api/v1/inventory/prices", payload)
+
+    def inventory_delete_price(self, price_id: int) -> dict:
+        return self._delete(f"/api/v1/inventory/prices/{price_id}")
+
+    def inventory_boms(self) -> list[dict]:
+        return self._get("/api/v1/inventory/boms")
+
+    def inventory_create_bom(self, payload: dict) -> dict:
+        return self._post("/api/v1/inventory/boms", payload)
+
+    def inventory_delete_bom(self, bom_id: int) -> dict:
+        return self._delete(f"/api/v1/inventory/boms/{bom_id}")
 
     # -------------------------------------------------------------- periods
     def periods(self) -> list[Period]:

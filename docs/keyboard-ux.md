@@ -115,6 +115,7 @@ Screens `push`/`pop` scopes; `Esc` pops the top; arrow keys move roving focus wi
 | `Alt+P` | `payslip.open` | gateway (ADR-013) |
 | `Alt+B` | `daybook.open` | gateway (ADR-015) |
 | `Alt+G` | `banking.open` | gateway (ADR-026 — statements, reconciliation, cheques) |
+| `Alt+V` | `inventory.open` | gateway (ADR-027 — stock depth: items, positions, BOMs; `Alt+N` is the voucher screen's new-draft and keeps it) |
 | `Alt+X` | `plugins.open` | gateway (ADR-016) |
 | `↑`/`↓`, `k`/`j` | `daybook.up` / `daybook.down` | daybookScreen, filters unfocused |
 | `Enter`, `Ctrl+P` | `daybook.print` | daybookScreen, filters unfocused |

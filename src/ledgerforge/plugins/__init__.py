@@ -334,6 +334,38 @@ class PriorDocument:
 
 
 @dataclass(frozen=True)
+class StockItemMaster:
+    """A stock-item master as seen by a plugin (API 0.12, ADR-027): the
+    tracking modes (TallyPrime's "maintain in batches / serial numbers"
+    toggles) and the re-order levels, as an immutable snapshot taken
+    inside the caller's transaction. ``None`` from ``stock_item`` means
+    the item has no master — ADR-011's string-item freedom stands; depth
+    is opted into, never demanded."""
+
+    id: int
+    name: str
+    unit: str | None
+    track_batches: bool
+    track_serials: bool
+    reorder_level: Decimal | None
+    reorder_quantity: Decimal | None
+
+
+@dataclass(frozen=True)
+class StockBomMaster:
+    """A bill of materials as seen by a plugin (API 0.12, ADR-027): the
+    output item and per-run quantity, the components as
+    ``(item name, qty per output unit)`` pairs in recipe order — the
+    manufacturing journal's validation input, frozen at read time."""
+
+    id: int
+    name: str
+    output_item: str
+    output_qty: Decimal
+    components: tuple[tuple[str, Decimal], ...]
+
+
+@dataclass(frozen=True)
 class LedgerEntryLine:
     """One posted ledger entry with its voucher's provenance (plugin API
     0.8, ADR-023): the engine-side row a ledger statement folds — amount
@@ -552,6 +584,94 @@ class Resolver:
         from ..banking import bank_lines as _bank_lines
 
         return _bank_lines(self._session, book=self._book, ledger_id=ledger_id)
+
+    # ------------------------------------------- stock masters (API 0.12)
+    def stock_item(self, *, name: str) -> StockItemMaster | None:
+        """The stock-item master a document names, or None (plugin API
+        0.12, ADR-027) — the ``ledger``/``group`` discipline applied to
+        stock masters. Book-scoped; an immutable snapshot; ``None`` keeps
+        ADR-011's string-item freedom (no master, no demands)."""
+        from ..inventory import item_master_by_name
+
+        row = item_master_by_name(self._session, self._book, str(name).strip())
+        if row is None:
+            return None
+        return StockItemMaster(
+            id=row.id,
+            name=row.name,
+            unit=row.unit,
+            track_batches=bool(row.track_batches),
+            track_serials=bool(row.track_serials),
+            reorder_level=row.reorder_level,
+            reorder_quantity=row.reorder_quantity,
+        )
+
+    def stock_items(self) -> list[StockItemMaster]:
+        """Every stock-item master of the book, name order (plugin API
+        0.12, ADR-027) — the shortfall report's fold input."""
+        from sqlalchemy import select as _select
+
+        from ..models import StockItem
+
+        rows = self._session.scalars(
+            _select(StockItem).where(StockItem.book_id == self._book.id).order_by(StockItem.name)
+        ).all()
+        return [
+            StockItemMaster(
+                id=r.id,
+                name=r.name,
+                unit=r.unit,
+                track_batches=bool(r.track_batches),
+                track_serials=bool(r.track_serials),
+                reorder_level=r.reorder_level,
+                reorder_quantity=r.reorder_quantity,
+            )
+            for r in rows
+        ]
+
+    def stock_bom(self, *, name: str) -> StockBomMaster | None:
+        """The bill of materials a manufacturing journal names, with its
+        components resolved to names (plugin API 0.12, ADR-027) — the
+        recipe the journal validates against. Book-scoped; None when the
+        book knows no such BOM (an explicit journal needs no recipe)."""
+        from ..inventory import bom_by_name, bom_components
+        from ..models import StockItem
+
+        bom = bom_by_name(self._session, self._book, str(name).strip())
+        if bom is None:
+            return None
+        output = self._session.get(StockItem, bom.output_item_id)
+        return StockBomMaster(
+            id=bom.id,
+            name=bom.name,
+            output_item=output.name if output else "",
+            output_qty=bom.output_qty,
+            components=tuple(
+                (item_name, qty) for _id, item_name, qty in bom_components(self._session, bom)
+            ),
+        )
+
+    def stock_price(
+        self, item: str, party: str | None = None, on: date | None = None
+    ) -> Decimal | None:
+        """The effective price-list rate for ``(item, party, date)``
+        (plugin API 0.12, ADR-027): the latest ``effective_from <= on``
+        among the applicable rows, a party-specific row beating the
+        generic list price at the same date. ``None`` is the honest "no
+        suggestion" — suggestions never commit (the matchmaker's law);
+        the selling rate stays the operator's explicit entry."""
+        from ..inventory import effective_price, item_master_by_name
+
+        master = item_master_by_name(self._session, self._book, str(item).strip())
+        if master is None:
+            return None
+        party_id = None
+        if party:
+            ledger = self.ledger(name=str(party).strip())
+            if ledger is None:
+                return None  # unknown party: no price applies
+            party_id = ledger.id
+        return effective_price(self._session, self._book, master, party_id, on)
 
 
 class PluginRegistry:

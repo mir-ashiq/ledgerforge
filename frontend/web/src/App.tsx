@@ -5,7 +5,7 @@
  * switching and the command palette. Screens: VoucherScreen (entry),
  * PayslipScreen (ADR-013), DaybookScreen (ADR-015), PluginsScreen (ADR-016),
  * SlotsScreen (ADR-019), BooksScreen and PeriodsScreen (Phase 1),
- * BankingScreen (Phase 5 / ADR-026).
+ * BankingScreen (Phase 5 / ADR-026), InventoryScreen (Phase 6 / ADR-027).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -13,6 +13,7 @@ import { keymap, useCommand } from '@ledgerforge/keyboard-kit/react';
 import { api, setActiveBook } from './api/client';
 import type { BookOut, GroupOut, LedgerOut } from './api/types';
 import { BankingScreen } from './components/BankingScreen';
+import { InventoryScreen } from './components/InventoryScreen';
 import { BooksScreen } from './components/BooksScreen';
 import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
@@ -33,7 +34,8 @@ type Screen =
   | 'books'
   | 'periods'
   | 'outstandings'
-  | 'banking';
+  | 'banking'
+  | 'inventory';
 
 /** Where the remembered book id lives between launches. */
 const ACTIVE_BOOK_KEY = 'lf.activeBook';
@@ -176,6 +178,17 @@ export default function App() {
     },
     'Alt+G',
   );
+  // the inventory screen (Phase 6 / ADR-027): Alt+V opens (inVentory —
+  // Alt+N has been the voucher screen's new-draft since its first day),
+  // Esc is back
+  useCommand(
+    {
+      id: 'inventory.open',
+      title: 'Inventory — stock depth: items, positions, BOMs',
+      run: () => setScreen('inventory'),
+    },
+    'Alt+V',
+  );
 
   return (
     <>
@@ -208,6 +221,8 @@ export default function App() {
         <OutstandingsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : screen === 'banking' ? (
         <BankingScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : screen === 'inventory' ? (
+        <InventoryScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : (
         <SlotsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}

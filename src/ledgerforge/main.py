@@ -12,7 +12,19 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from . import __version__
-from .api import auth, banking, books, masters, ops, periods, plugins, reports, slots, vouchers
+from .api import (
+    auth,
+    banking,
+    books,
+    inventory,
+    masters,
+    ops,
+    periods,
+    plugins,
+    reports,
+    slots,
+    vouchers,
+)
 from .auth import build_verifier, warn_if_disabled
 from .db import get_engine
 from .errors import EngineError
@@ -94,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(reports.router, prefix="/api/v1")
     app.include_router(periods.router, prefix="/api/v1")
     app.include_router(ops.router, prefix="/api/v1")
+    app.include_router(inventory.router, prefix="/api/v1")
     app.include_router(banking.router, prefix="/api/v1")
     app.include_router(plugins.hooks_router, prefix="/api/v1")
 

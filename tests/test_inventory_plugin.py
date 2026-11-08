@@ -159,6 +159,7 @@ def test_goods_in_builds_tally_shape(client, fresh_db):
         "line_amount": "1000.00",
         "qty_after": "10",
         "avg_cost_after": "100.0000",
+        "godown": "Main location",  # ADR-027: the depth annotation rides along
     }
     assert computed_of(body, "Sprockets")["avg_cost_after"] == "50.0000"
 
@@ -397,6 +398,7 @@ def test_recount_adjusts_both_directions(client, fresh_db):
         "delta_qty": "-1",
         "value_delta": "-100.00",
         "qty_after": "9",
+        "godown": "Main location",  # ADR-027: the depth annotation rides along
     }
     assert computed_of(body, "Pins")["value_delta"] == "50.00"
     assert computed["total_adjustment"] == "-50.00"

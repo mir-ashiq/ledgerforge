@@ -511,3 +511,125 @@ export interface BankChequeRegister {
   counts: { issued: number; presented: number; cleared: number };
   rows: BankChequeRow[];
 }
+
+/** A stock-item master (ADR-027): the tracking modes (TallyPrime's
+ * "maintain in" toggles) and the re-order levels the shortfall report
+ * folds against. Masters are optional — string items keep their freedom;
+ * depth is opted into. */
+export interface StockItemMaster {
+  id: number;
+  name: string;
+  unit: string | null;
+  track_batches: boolean;
+  track_serials: boolean;
+  reorder_level: string | null;
+  reorder_quantity: string | null;
+  notes: string | null;
+  price_count: number;
+  bom_count: number;
+}
+
+/** One date-effective price-list row; party null = the list price. */
+export interface StockPriceRow {
+  id: number;
+  item_id: number;
+  item: string | null;
+  party_ledger_id: number | null;
+  party: string | null;
+  effective_from: string;
+  rate: string;
+}
+
+/** A BOM's component: the item and the qty per output unit. */
+export interface StockBomLine {
+  id: number;
+  component_item_id: number;
+  component: string;
+  qty_per_output: string;
+}
+
+/** A bill of materials (ADR-027): the manufacturing journal's recipe. */
+export interface StockBom {
+  id: number;
+  name: string;
+  output_item_id: number;
+  output: string;
+  output_qty: string;
+  notes: string | null;
+  components: StockBomLine[];
+}
+
+/** One batch of one item inside the position fold. */
+export interface StockBatchPosition {
+  batch: string;
+  qty: string;
+  expiry: string | null;
+  godowns: Record<string, string>;
+}
+
+/** One item's position with its depth (ADR-027): godowns, batches, serials. */
+export interface StockPositionRow {
+  item: string;
+  qty: string;
+  value: string;
+  avg_cost: string | null;
+  serial_count: number;
+  godowns: Record<string, string>;
+  batches: StockBatchPosition[];
+}
+
+/** GET /reports/pack/stock-position?format=json */
+export interface StockPositionReport {
+  as_of: string;
+  items: StockPositionRow[];
+  total_value: string;
+}
+
+/** GET /reports/pack/stock-godown?format=json */
+export interface StockGodownReport {
+  as_of: string;
+  rows: { godown: string; item: string; qty: string; value: string; avg_cost: string | null }[];
+  godown_totals: Record<string, string>;
+}
+
+/** GET /reports/pack/stock-batch?format=json */
+export interface StockBatchReport {
+  as_of: string;
+  rows: {
+    item: string;
+    batch: string;
+    expiry: string | null;
+    qty: string;
+    value: string;
+    godowns: Record<string, string>;
+  }[];
+}
+
+/** GET /reports/pack/stock-expiry?format=json — FEFO's evidence. */
+export interface StockExpiryReport {
+  as_of: string;
+  rows: {
+    item: string;
+    batch: string;
+    expiry: string;
+    days_left: string;
+    bucket: string;
+    qty: string;
+    value: string;
+  }[];
+  bucket_totals: Record<string, string>;
+}
+
+/** GET /reports/pack/stock-shortfall?format=json — the re-order report. */
+export interface StockShortfallReport {
+  as_of: string;
+  rows: {
+    item: string;
+    unit: string | null;
+    on_hand: string;
+    reorder_level: string;
+    below_by: string;
+    reorder_quantity: string;
+    suggested_order: string;
+  }[];
+}
