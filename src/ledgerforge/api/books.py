@@ -16,11 +16,12 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import exporting
 from ..engine.currency import get_currency
 from ..errors import ConflictError, NotFoundError, ValidationError
 from ..models import Book, Group, Ledger, Voucher, VoucherType
@@ -121,11 +122,13 @@ def create_book(payload: BookCreate, session: SessionDep, _: AdminDep):
 
 
 @router.get("", response_model=list[BookOut])
-def list_books(session: SessionDep, _: ReaderDep):
+def list_books(request: Request, session: SessionDep, _: ReaderDep):
     """Every book, archived last — the picker list (and the remedy for the
     400 that asks you to choose)."""
     books = session.scalars(select(Book).order_by(Book.is_archived, Book.id)).all()
-    return [_book_out(b) for b in books]
+    out = [_book_out(b) for b in books]
+    exported = exporting.list_export(request, out, BookOut, "books")
+    return exported if exported is not None else out
 
 
 @router.get("/{book_id}", response_model=BookOut)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ledgerforge"
-version = "0.26.0"
+version = "0.27.0"
 description = "Community-driven, keyboard-first, double-entry business management engine — inspired by TallyPrime"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +32,7 @@ dependencies = [
     "cryptography>=42",  # imported directly by the plugin trust gate (ADR-016)
     "httpx>=0.27",
     "alembic>=1.13",
+    "openpyxl>=3.1",  # the xlsx half of the ADR-030 export seam
 ]
 
 [project.optional-dependencies]

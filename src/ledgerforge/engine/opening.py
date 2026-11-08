@@ -24,6 +24,8 @@ def post_opening(
     manager: PluginManager,
     settings: Settings,
     book: Book,
+    *,
+    emit: bool = True,
 ) -> tuple[Voucher, bool]:  # noqa: F821 — Voucher from .posting
     voucher_payload = VoucherCreate(
         voucher_type="OPEN",
@@ -33,4 +35,4 @@ def post_opening(
         meta=payload.meta,
         entries=payload.entries,
     )
-    return post_voucher(session, voucher_payload, manager, settings, book)
+    return post_voucher(session, voucher_payload, manager, settings, book, emit=emit)

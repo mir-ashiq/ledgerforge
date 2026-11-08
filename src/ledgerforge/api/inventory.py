@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
-from .. import inventory
+from .. import exporting, inventory
 from . import BookDep, BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
@@ -86,10 +86,26 @@ def _payload(model: BaseModel) -> dict[str, Any]:
 
 
 # -------------------------------------------------------------------- items
+ITEM_COLUMNS = [
+    "id",
+    "name",
+    "unit",
+    "track_batches",
+    "track_serials",
+    "reorder_level",
+    "reorder_quantity",
+    "notes",
+    "price_count",
+    "bom_count",
+]
+
+
 @router.get("/items")
-def list_items(session: SessionDep, book: BookDep, _: ReaderDep):
+def list_items(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     """Every stock-item master of the book, name order."""
-    return inventory.list_items(session, book)
+    rows = inventory.list_items(session, book)
+    exported = exporting.rows_export(request, rows, ITEM_COLUMNS, "stock-items")
+    return exported if exported is not None else rows
 
 
 @router.get("/items/{item_id}")
@@ -126,13 +142,21 @@ def delete_item(session: SessionDep, book: BookDep, _: BookkeeperDep, item_id: i
 # ------------------------------------------------------------------- prices
 @router.get("/prices")
 def list_prices(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
     item_id: int | None = Query(default=None),
 ):
     """Price rows of the book — optionally one item's — the honest history."""
-    return inventory.list_prices(session, book, item_id)
+    rows = inventory.list_prices(session, book, item_id)
+    exported = exporting.rows_export(
+        request,
+        rows,
+        ["id", "item", "party", "from_date", "to_date", "rate"],
+        "stock-prices",
+    )
+    return exported if exported is not None else rows
 
 
 @router.post("/prices", status_code=201)
@@ -182,8 +206,12 @@ def effective_price(
 
 # --------------------------------------------------------------------- BOMs
 @router.get("/boms")
-def list_boms(session: SessionDep, book: BookDep, _: ReaderDep):
-    return inventory.list_boms(session, book)
+def list_boms(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
+    rows = inventory.list_boms(session, book)
+    exported = exporting.rows_export(
+        request, rows, ["id", "item", "component_count", "notes"], "stock-boms"
+    )
+    return exported if exported is not None else rows
 
 
 @router.get("/boms/{bom_id}")

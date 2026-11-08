@@ -15,6 +15,7 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import exporting
 from ..engine.currency import get_currency, resolve_rate
 from ..errors import NotFoundError, ValidationError
 from ..models import Book, CostCategory, CostCentre, Currency, FxRate, Group, Ledger
@@ -129,9 +130,11 @@ def create_group(
 
 
 @router.get("/groups", response_model=list[GroupOut])
-def list_groups(session: SessionDep, book: BookDep, _: ReaderDep):
+def list_groups(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     groups = session.scalars(select(Group).where(Group.book_id == book.id).order_by(Group.id)).all()
-    return [_group_out(session, g) for g in groups]
+    out = [_group_out(session, g) for g in groups]
+    exported = exporting.list_export(request, out, GroupOut, "groups")
+    return exported if exported is not None else out
 
 
 @router.patch("/groups/{group_id}", response_model=GroupOut)
@@ -206,6 +209,7 @@ def create_ledger(
 
 @router.get("/ledgers", response_model=list[LedgerOut])
 def list_ledgers(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -220,7 +224,7 @@ def list_ledgers(
     if search:
         stmt = stmt.where(Ledger.name.ilike(f"%{search}%"))
     rows = session.execute(stmt).all()
-    return [
+    out = [
         LedgerOut(
             id=ledger.id,
             name=ledger.name,
@@ -231,6 +235,8 @@ def list_ledgers(
         )
         for ledger, group in rows
     ]
+    exported = exporting.list_export(request, out, LedgerOut, "ledgers")
+    return exported if exported is not None else out
 
 
 # ================================================================ cost masters
@@ -297,11 +303,13 @@ def create_cost_category(
 
 
 @router.get("/cost-categories", response_model=list[CostCategoryOut])
-def list_cost_categories(session: SessionDep, book: BookDep, _: ReaderDep):
+def list_cost_categories(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     categories = session.scalars(
         select(CostCategory).where(CostCategory.book_id == book.id).order_by(CostCategory.id)
     ).all()
-    return [_category_out(c) for c in categories]
+    out = [_category_out(c) for c in categories]
+    exported = exporting.list_export(request, out, CostCategoryOut, "cost-categories")
+    return exported if exported is not None else out
 
 
 @router.patch("/cost-categories/{category_id}", response_model=CostCategoryOut)
@@ -406,11 +414,13 @@ def create_cost_centre(
 
 
 @router.get("/cost-centres", response_model=list[CostCentreOut])
-def list_cost_centres(session: SessionDep, book: BookDep, _: ReaderDep):
+def list_cost_centres(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     centres = session.scalars(
         select(CostCentre).where(CostCentre.book_id == book.id).order_by(CostCentre.id)
     ).all()
-    return [_centre_out(session, c) for c in centres]
+    out = [_centre_out(session, c) for c in centres]
+    exported = exporting.list_export(request, out, CostCentreOut, "cost-centres")
+    return exported if exported is not None else out
 
 
 @router.patch("/cost-centres/{centre_id}", response_model=CostCentreOut)
@@ -467,9 +477,11 @@ def create_currency(payload: CurrencyCreate, session: SessionDep, _: BookkeeperD
 
 
 @router.get("/currencies", response_model=list[CurrencyOut], tags=["currencies"])
-def list_currencies(session: SessionDep, _: ReaderDep):
+def list_currencies(request: Request, session: SessionDep, _: ReaderDep):
     currencies = session.scalars(select(Currency).order_by(Currency.code)).all()
-    return [_currency_out(c) for c in currencies]
+    out = [_currency_out(c) for c in currencies]
+    exported = exporting.list_export(request, out, CurrencyOut, "currencies")
+    return exported if exported is not None else out
 
 
 @router.patch("/currencies/{code}", response_model=CurrencyOut, tags=["currencies"])
@@ -536,6 +548,7 @@ def create_fx_rate(payload: FxRateCreate, session: SessionDep, book: BookDep, _:
 
 @router.get("/fx-rates", response_model=list[FxRateOut], tags=["fx-rates"])
 def list_fx_rates(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -554,7 +567,9 @@ def list_fx_rates(
         stmt = stmt.where(FxRate.to_ccy == to_ccy.upper())
     if valid_on:
         stmt = stmt.where(FxRate.valid_on == valid_on)
-    return [_fx_rate_out(r) for r in session.scalars(stmt.limit(500)).all()]
+    out = [_fx_rate_out(r) for r in session.scalars(stmt.limit(500)).all()]
+    exported = exporting.list_export(request, out, FxRateOut, "fx-rates")
+    return exported if exported is not None else out
 
 
 @router.patch("/fx-rates/{rate_id}", response_model=FxRateOut, tags=["fx-rates"])

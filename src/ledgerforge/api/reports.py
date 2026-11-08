@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, Response
 
+from .. import exporting
 from ..errors import NotFoundError
 from ..models import CostCentre
 from ..plugins import Resolver
@@ -28,8 +29,18 @@ from . import BookDep, ReaderDep, SessionDep
 router = APIRouter(prefix="/reports", tags=["reports"])
 
 
+def _export(request, payload, projection, stem):
+    """ADR-030's format seam: ``?format=csv|xlsx`` on a report surface."""
+    fmt = exporting.export_format(request)
+    if fmt is None:
+        return None
+    columns, rows = projection(payload)
+    return exporting.export_response(fmt, columns=columns, rows=rows, stem=stem)
+
+
 @router.get("/trial-balance")
 def get_trial_balance(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -41,11 +52,13 @@ def get_trial_balance(
     as_of = as_of or date.today()
     response = trial_balance(session, book.id, as_of, fast=fast)
     response["groups"] = group_rollups(session, book.id, as_of, fast=fast)
-    return response
+    exported = _export(request, response, exporting.trial_balance_projection, "trial-balance")
+    return exported if exported is not None else response
 
 
 @router.get("/profit-loss")
 def get_profit_loss(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -55,11 +68,14 @@ def get_profit_loss(
         bool, Query(description="ADR-018: S(to) − S(from − 1) from the balance cache")
     ] = False,
 ):
-    return profit_loss(session, book.id, date_from, date_to, fast=fast)
+    payload = profit_loss(session, book.id, date_from, date_to, fast=fast)
+    exported = _export(request, payload, exporting.profit_loss_projection, "profit-loss")
+    return exported if exported is not None else payload
 
 
 @router.get("/balance-sheet")
 def get_balance_sheet(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -69,11 +85,14 @@ def get_balance_sheet(
     ] = False,
 ):
     as_of = as_of or date.today()
-    return balance_sheet(session, book.id, as_of, fast=fast)
+    payload = balance_sheet(session, book.id, as_of, fast=fast)
+    exported = _export(request, payload, exporting.balance_sheet_projection, "balance-sheet")
+    return exported if exported is not None else payload
 
 
 @router.get("/fy-close")
 def get_fy_close(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -82,12 +101,15 @@ def get_fy_close(
     """The financial-year close preview (issue #5): the exact lines that zero
     every income/expense ledger as of ``as_of`` and move the net result to
     Profit & Loss A/c. ``POST /api/v1/periods/{id}/close`` posts them."""
-    return fy_close(session, book.id, as_of)
+    payload = fy_close(session, book.id, as_of)
+    exported = _export(request, payload, exporting.fy_close_projection, "fy-close")
+    return exported if exported is not None else payload
 
 
 # ------------------------------------------------------------- cost centres
 @router.get("/cost-centres")
 def get_cost_centre_summary(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -97,12 +119,15 @@ def get_cost_centre_summary(
     """The cost-centre break-up's top view (ADR-025): every centre's
     allocation rollup through the closure, plus the Unallocated mass —
     allocated + unallocated is the window's whole entry mass."""
-    return cost_centre_summary(session, book.id, date_from, date_to)
+    payload = cost_centre_summary(session, book.id, date_from, date_to)
+    exported = _export(request, payload, exporting.cost_summary_projection, "cost-centres")
+    return exported if exported is not None else payload
 
 
 @router.get("/cost-centres/{centre_id}/breakup")
 def get_cost_centre_breakup(
     centre_id: int,
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -116,11 +141,15 @@ def get_cost_centre_breakup(
         raise NotFoundError(f"Cost centre {centre_id} does not exist in book {book.name!r}")
     payload = cost_centre_breakup(session, book.id, centre_id, date_from, date_to)
     payload["centre_name"] = centre.name
-    return payload
+    exported = _export(
+        request, payload, exporting.cost_breakup_projection, f"cost-breakup-{centre.name}"
+    )
+    return exported if exported is not None else payload
 
 
 @router.get("/cost-categories")
 def get_cost_category_summary(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -129,7 +158,9 @@ def get_cost_category_summary(
 ):
     """The category rollup (ADR-025): allocations through the centre→
     category edge and the category closure."""
-    return cost_category_summary(session, book.id, date_from, date_to)
+    payload = cost_category_summary(session, book.id, date_from, date_to)
+    exported = _export(request, payload, exporting.cost_summary_projection, "cost-categories")
+    return exported if exported is not None else payload
 
 
 def _safe_stem(name: str) -> str:
@@ -158,11 +189,28 @@ def pack_report(
     if factory is None:
         known = ", ".join(sorted(registry.report_views)) or "none registered"
         raise NotFoundError(f"No pack report registered for {key!r} (known: {known})")
-    report = factory(Resolver(session, book), dict(request.query_params))
+    # ADR-030: the format param is the SEAM's vocabulary; the pack speaks
+    # pdf/csv/json. xlsx asks the pack for its CSV (the columns verbatim)
+    # and re-renders it — one seam, every pack. Every other format passes
+    # through to the pack untouched (the pre-seam contract).
+    query = dict(request.query_params)
+    requested = query.pop("format", None)
+    if requested == "xlsx":
+        query["format"] = "csv"
+    elif requested is not None:
+        query["format"] = requested
+    report = factory(Resolver(session, book), query)
     stem = _safe_stem(report.filename)
-    if report.data is not None and request.query_params.get("format") == "json":
+    if report.data is not None and requested == "json":
         return report.data  # plugin API 0.8 (ADR-023) — the UI surface
-    if request.query_params.get("format") == "csv" and report.csv is not None:
+    if requested == "xlsx":
+        # the pack's own CSV re-rendered as xlsx — the pack's columns
+        # verbatim, one seam for every pack.
+        if report.csv is None:
+            raise NotFoundError(f"pack report {key!r} has no tabular form to export as xlsx")
+        columns, rows = exporting.csv_to_rows(report.csv)
+        return exporting.export_response("xlsx", columns=columns, rows=rows, stem=stem, sheet=stem)
+    if requested == "csv" and report.csv is not None:
         # the machine format the docstring always promised, honoured even
         # when a print view exists (ADR-026: the reconciliation CSV)
         return Response(

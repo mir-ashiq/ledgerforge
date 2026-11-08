@@ -809,9 +809,17 @@ BEGIN
     -- it when the plain shape returns.
     ALTER TABLE public.cost_allocations DROP CONSTRAINT IF EXISTS cost_allocations_entry_id_fkey;
 
+    -- The analyst views (0012/ADR-030) sit on voucher_entries; the swap
+    -- drops the original table underneath them, so they come off first
+    -- and go back on after (ops.recreate_analyst_views owns the verbatim
+    -- definitions — the views are the schema's own objects, never data).
+    DROP VIEW IF EXISTS views.voucher_lines, views.ledger_monthly, views.ledger_balances;
+
     ALTER TABLE public.voucher_entries RENAME TO voucher_entries_plain;
     ALTER TABLE public.voucher_entries_part RENAME TO voucher_entries;
     DROP TABLE public.voucher_entries_plain;
+
+    PERFORM ops.recreate_analyst_views();
 
     CREATE TRIGGER trg_entries_date
         BEFORE INSERT ON public.voucher_entries
@@ -843,6 +851,53 @@ END $$;
 
 -- The mirror image: partitioned voucher_entries -> the plain 0001 shape.
 -- Balance-cache rows are shape-agnostic and survive untouched.
+-- The analyst views (0012/ADR-030) depend on voucher_entries; the swap
+-- drops the original underneath them — they come off first (see the
+-- conversion) and this recreates them verbatim after either direction.
+CREATE OR REPLACE FUNCTION ops.recreate_analyst_views()
+RETURNS void
+LANGUAGE sql AS $$
+    CREATE OR REPLACE VIEW views.voucher_lines AS
+    SELECT bk.name AS book, v.voucher_no, v.voucher_date,
+           t.code AS voucher_type, l.name AS ledger, g.name AS "group",
+           e.line_no, e.dc, e.amount, e.currency, e.amount_fx, e.fx_rate,
+           e.narration AS line_narration, v.narration,
+           cc.name AS cost_centre, ca.amount AS cost_centre_amount
+    FROM public.voucher_entries e
+    JOIN public.vouchers v ON v.id = e.voucher_id
+    JOIN public.voucher_types t ON t.id = v.voucher_type_id
+    JOIN public.ledgers l ON l.id = e.ledger_id
+    JOIN public.groups g ON g.id = l.group_id
+    JOIN public.books bk ON bk.id = v.book_id
+    LEFT JOIN public.cost_allocations ca ON ca.entry_id = e.id
+    LEFT JOIN public.cost_centres cc ON cc.id = ca.centre_id;
+
+    CREATE OR REPLACE VIEW views.ledger_monthly AS
+    SELECT bk.name AS book, l.name AS ledger, g.name AS "group",
+           date_trunc('month', e.voucher_date)::date AS "month",
+           SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE 0 END) AS debit,
+           SUM(CASE WHEN e.dc = 'C' THEN e.amount ELSE 0 END) AS credit
+    FROM public.voucher_entries e
+    JOIN public.ledgers l ON l.id = e.ledger_id
+    JOIN public.groups g ON g.id = l.group_id
+    JOIN public.books bk ON bk.id = e.book_id
+    GROUP BY bk.name, l.name, g.name, date_trunc('month', e.voucher_date)::date;
+
+    CREATE OR REPLACE VIEW views.ledger_balances AS
+    SELECT bk.name AS book, l.name AS ledger, g.name AS "group",
+           SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE 0 END) AS closing_debit,
+           SUM(CASE WHEN e.dc = 'C' THEN e.amount ELSE 0 END) AS closing_credit,
+           SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE -e.amount END) AS closing_net
+    FROM public.voucher_entries e
+    JOIN public.ledgers l ON l.id = e.ledger_id
+    JOIN public.groups g ON g.id = l.group_id
+    JOIN public.books bk ON bk.id = e.book_id
+    GROUP BY bk.name, l.name, g.name;
+
+    GRANT SELECT ON views.voucher_lines, views.ledger_monthly, views.ledger_balances
+        TO ledgerforge_readonly;
+$$;
+
 CREATE OR REPLACE FUNCTION ops.unpartition_entries()
 RETURNS TABLE (out_step TEXT, out_detail TEXT)
 LANGUAGE plpgsql AS $$
@@ -908,9 +963,14 @@ BEGIN
 
     RETURN QUERY SELECT 'swap', format('%s rows — atomic rename-and-drop', v_rows);
 
+    -- the analyst views come off for the swap (see ops.recreate_analyst_views)
+    DROP VIEW IF EXISTS views.voucher_lines, views.ledger_monthly, views.ledger_balances;
+
     ALTER TABLE public.voucher_entries RENAME TO voucher_entries_old;
     ALTER TABLE public.voucher_entries_plain RENAME TO voucher_entries;
     DROP TABLE public.voucher_entries_old;
+
+    PERFORM ops.recreate_analyst_views();
 
     CREATE TRIGGER trg_entries_date
         BEFORE INSERT ON public.voucher_entries

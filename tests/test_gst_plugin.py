@@ -583,7 +583,7 @@ def test_nil_month_and_guards(demo):
         ("", "period"),
         ("period=2026-13", "YYYY-MM"),
         ("period=not-a-month", "YYYY-MM"),
-        (f"period={PERIOD}&format=xlsx", "format"),
+        (f"period={PERIOD}&format=docx", "format"),  # xlsx = the ADR-030 seam
         (f"period={PERIOD}&round=centimes", "round"),
     ]:
         r = demo.get(f"/api/v1/reports/pack/gstr1?{query}", headers=default_headers(demo))
@@ -593,7 +593,7 @@ def test_nil_month_and_guards(demo):
     # the side= parameter is the HSN summary's
     for query, fragment in [
         (f"period={PERIOD}&side=sideways", "side"),
-        (f"period={PERIOD}&format=xlsx", "format"),
+        (f"period={PERIOD}&format=docx", "format"),  # xlsx = the ADR-030 seam
         (f"period={PERIOD}&round=centimes", "round"),
     ]:
         r = demo.get(f"/api/v1/reports/pack/gst-hsn?{query}", headers=default_headers(demo))

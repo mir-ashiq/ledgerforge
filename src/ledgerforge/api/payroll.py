@@ -24,7 +24,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
-from .. import attendance
+from .. import attendance, exporting
 from . import BookDep, BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -74,6 +74,7 @@ def post_attendance(
 
 @router.get("/attendance")
 def get_attendance(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -83,7 +84,7 @@ def get_attendance(
     counts, payable days deliberately absent (the pack computes those).
     Superseded batches stay as history (see /attendance/history) but reads
     never see them."""
-    return {
+    payload = {
         "period": period,
         "entries": [
             {
@@ -97,6 +98,21 @@ def get_attendance(
             for row in attendance.live_register(session, book=book, period=period)
         ],
     }
+    fmt = exporting.export_format(request)
+    exported = (
+        exporting.export_response(
+            fmt,
+            columns=["employee", "present", "absent", "half", "leave_paid", "note"],
+            rows=exporting.model_rows(
+                payload["entries"],
+                ["employee", "present", "absent", "half", "leave_paid", "note"],
+            ),
+            stem=f"attendance-{period}",
+        )
+        if fmt is not None
+        else None
+    )
+    return exported if exported is not None else payload
 
 
 @router.get("/attendance/history")

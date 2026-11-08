@@ -260,7 +260,7 @@ def test_head_revision_is_single_and_parseable():
     from alembic.script import ScriptDirectory
 
     head = lf_migrations.head_revision()
-    assert head == "0011_payroll_depth"
+    assert head == "0012_data_exchange"
     assert lf_migrations.revisions() == {
         "0001_baseline": None,
         "0002_multi_currency": "0001_baseline",
@@ -273,6 +273,7 @@ def test_head_revision_is_single_and_parseable():
         "0009_stock_depth": "0008_banking",
         "0010_gst_2b": "0009_stock_depth",
         "0011_payroll_depth": "0010_gst_2b",
+        "0012_data_exchange": "0011_payroll_depth",
     }
     scripts = ScriptDirectory(str(lf_migrations.migrations_dir()))
     assert scripts.get_current_head() == head

@@ -180,7 +180,7 @@ def test_the_page_joins_the_window_after_gst():
     """Alt+7 lands on Payroll — the people workbench follows the compliance
     one (the window's own test walks the sidebar dynamically)."""
     assert PAGES[6] == ("payroll", "Payroll")
-    assert len(PAGES) == 10
+    assert len(PAGES) == 11  # +Data Exchange (ADR-030, after Payroll)
 
 
 def test_the_register_and_positions_render(page):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from .. import exporting
 from ..engine.periods import (
     close_period,
     create_period,
@@ -49,11 +50,13 @@ def post_period(payload: PeriodCreate, session: SessionDep, book: BookDep, _: Ad
 
 
 @router.get("", response_model=list[PeriodOut])
-def list_periods(session: SessionDep, book: BookDep, _: ReaderDep):
+def list_periods(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     periods = (
         session.query(Period).filter(Period.book_id == book.id).order_by(Period.starts_on).all()
     )
-    return [_period_out(p) for p in periods]
+    out = [_period_out(p) for p in periods]
+    exported = exporting.list_export(request, out, PeriodOut, "periods")
+    return exported if exported is not None else out
 
 
 @router.get("/{period_id}", response_model=PeriodOut)

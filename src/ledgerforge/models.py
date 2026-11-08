@@ -521,3 +521,27 @@ class AttendanceLine(Base):
     note: Mapped[str | None]
     fingerprint: Mapped[str] = mapped_column(Text)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class ApiToken(Base):
+    """A personal API token (ADR-030, migration 0012): the desktop's
+    non-OIDC answer for integrations. The raw ``lft_…`` token is returned
+    exactly once at mint and never stored — this row carries its SHA-256,
+    the role ceiling, the books scope (the ``books``-claim semantics:
+    ``["*"]`` or a list of ids), an optional expiry, and the revocation
+    timestamp. A credential store, not financial history: revocation is a
+    soft verdict the row remembers."""
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    name: Mapped[str] = mapped_column(Text)
+    token_prefix: Mapped[str] = mapped_column(Text)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True)
+    role: Mapped[str] = mapped_column(Text)
+    books: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default='["*"]')
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -248,7 +248,7 @@ def test_pf_guards(demo):
         ("period=2026-10&round=centimes", "round"),
         ("period=2026-10&ceiling=abc", "ceiling"),
         ("period=2026-10&ceiling=-5", "non-negative"),
-        ("period=2026-10&format=xlsx", "format"),
+        ("period=2026-10&format=docx", "format"),  # xlsx = the ADR-030 seam; docx refused
         ("period=2026-10&wage=,,", "wage"),
     ]:
         r = demo.get(f"/api/v1/reports/pack/pf?{query}")
@@ -476,7 +476,7 @@ def test_tds_guards_and_nil_statements(demo):
         ("", "period"),
         ("period=2026-10&component=,,", "component"),
         ("period=2026-10&round=centimes", "round"),
-        ("period=2026-10&format=xlsx", "format"),
+        ("period=2026-10&format=docx", "format"),  # xlsx = the ADR-030 seam; docx refused
     ]:
         # default_headers: this test runs after the books-are-strangers test,
         # so a second book exists and the caller must name one

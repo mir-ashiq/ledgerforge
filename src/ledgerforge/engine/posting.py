@@ -208,10 +208,18 @@ def post_voucher(
     manager: PluginManager,
     settings: Settings,
     book: Book,
+    *,
+    emit: bool = True,
 ) -> tuple[Voucher, bool]:
     """Post a voucher into ``book`` in ONE ACID transaction (ADR-009).
     Returns (voucher, created); ``created=False`` means an idempotent
-    replay of the same client_token — replay resolves within the book."""
+    replay of the same client_token — replay resolves within the book.
+
+    ``emit=False`` (ADR-030, the import pipeline) suppresses the
+    after-commit event: an import runs many vouchers inside ONE outer
+    transaction (each ``commit()`` a savepoint release), so the caller
+    collects the payloads and emits them after the outer commit — the
+    event's "after-commit" promise stays true."""
     # 1. Idempotency (book-scoped: the same offline client may retry into
     # two books without interference — ADR-009)
     if payload.client_token is not None:
@@ -363,19 +371,21 @@ def post_voucher(
             raise gate from exc
         raise
 
-    # 9. After-commit events (isolated; never break posting)
-    manager.emit(
-        "voucher.posted",
-        {
-            "voucher_id": voucher.id,
-            "voucher_no": voucher.voucher_no,
-            "uuid": str(voucher.uuid),
-            "book_id": book.id,
-            "voucher_type": vtype.code,
-            "voucher_date": voucher.voucher_date.isoformat(),
-            "meta": dict(voucher.meta or {}),  # the full document for after-commit bridges
-        },
-    )
+    # 9. After-commit events (isolated; never break posting). The import
+    # pipeline defers these past its outer commit (emit=False above).
+    if emit:
+        manager.emit(
+            "voucher.posted",
+            {
+                "voucher_id": voucher.id,
+                "voucher_no": voucher.voucher_no,
+                "uuid": str(voucher.uuid),
+                "book_id": book.id,
+                "voucher_type": vtype.code,
+                "voucher_date": voucher.voucher_date.isoformat(),
+                "meta": dict(voucher.meta or {}),  # the full document for after-commit bridges
+            },
+        )
     return voucher, True
 
 

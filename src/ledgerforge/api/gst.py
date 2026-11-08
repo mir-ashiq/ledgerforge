@@ -24,7 +24,7 @@ from typing import Literal
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
-from .. import gst_compliance
+from .. import exporting, gst_compliance
 from . import BookDep, BookkeeperDep, ReaderDep, SessionDep
 
 router = APIRouter(prefix="/gst", tags=["gst"])
@@ -73,14 +73,22 @@ def post_download(
 
 
 @router.get("/portal/downloads")
-def get_downloads(session: SessionDep, book: BookDep, _: ReaderDep):
+def get_downloads(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     """Every import receipt, newest first — the honest provenance of every
     portal-side figure the reconciliation shows."""
-    return {"downloads": gst_compliance.downloads(session, book=book)}
+    downloads = gst_compliance.downloads(session, book=book)
+    exported = exporting.rows_export(
+        request,
+        downloads,
+        ["id", "kind", "period", "gstin", "source", "line_count", "imported_at"],
+        "gst-downloads",
+    )
+    return exported if exported is not None else {"downloads": downloads}
 
 
 @router.get("/portal/lines")
 def get_lines(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -94,7 +102,7 @@ def get_lines(
     (kind, period) statement, oldest document first. Amounts are strings —
     the client never sums (Law 3)."""
     rows = gst_compliance.portal_lines(session, book=book, kind=kind, period=period, gstin=gstin)
-    return {
+    payload = {
         "kind": kind,
         "period": period,
         "gstin": (gstin or "").upper() or None,
@@ -115,3 +123,42 @@ def get_lines(
             for r in rows
         ],
     }
+    fmt = exporting.export_format(request)
+    exported = (
+        exporting.export_response(
+            fmt,
+            columns=[
+                "supplier_gstin",
+                "party",
+                "doc_type",
+                "doc_no",
+                "doc_date",
+                "taxable",
+                "igst",
+                "cgst",
+                "sgst",
+                "pos",
+                "itc_available",
+            ],
+            rows=exporting.model_rows(
+                payload["lines"],
+                [
+                    "supplier_gstin",
+                    "party",
+                    "doc_type",
+                    "doc_no",
+                    "doc_date",
+                    "taxable",
+                    "igst",
+                    "cgst",
+                    "sgst",
+                    "pos",
+                    "itc_available",
+                ],
+            ),
+            stem=f"gst-{kind}-{period}",
+        )
+        if fmt is not None
+        else None
+    )
+    return exported if exported is not None else payload

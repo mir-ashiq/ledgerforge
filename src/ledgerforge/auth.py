@@ -33,14 +33,18 @@ route.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import secrets
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 import httpx
 import jwt as pyjwt
 from fastapi import HTTPException, Request, status
+from sqlalchemy import select
 
 from .settings import get_settings
 
@@ -54,6 +58,10 @@ ROLE_LEVEL: dict[str, int] = {"reader": 0, "bookkeeper": 1, "admin": 2}
 #: Claim paths checked for roles, in order: plain ``roles`` (Auth0 custom,
 #: most IdPs) then Keycloak's ``realm_access.roles``.
 DEFAULT_ROLE_CLAIMS = ("roles", "realm_access.roles")
+
+#: The personal-token prefix (ADR-030): bearers starting with this verify
+#: against the database; everything else goes to OIDC.
+PERSONAL_TOKEN_PREFIX = "lft_"
 
 _JWKS_CACHE_TTL = 15 * 60  # seconds; refreshes sooner on unknown `kid`
 
@@ -233,6 +241,71 @@ class OIDCTokenVerifier:
         return Principal(sub=sub, roles=roles, claims=claims)
 
 
+# ------------------------------------------------------------ personal tokens
+
+
+def mint_personal_token() -> tuple[str, str, str]:
+    """(raw, prefix, sha256hex) — the raw token is shown exactly once
+    (ADR-030). 32 urlsafe chars ≈ 190 bits of entropy: a plain SHA-256
+    lookup hash is the honest construction (no salted KDF needed for
+    high-entropy random inputs, unlike human passwords)."""
+    raw = PERSONAL_TOKEN_PREFIX + secrets.token_urlsafe(32)
+    return raw, raw[:12], hashlib.sha256(raw.encode()).hexdigest()
+
+
+def hash_personal_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+class PersonalTokenVerifier:
+    """Verifies ``lft_…`` bearers against ``api_tokens`` (ADR-030): the
+    desktop's non-OIDC answer. One indexed lookup by SHA-256, the
+    revocation and expiry verdicts, one cheap touch-write for
+    ``last_used_at`` (usage is observability, not audit). The session
+    factory is injectable for tests; production uses the engine's own.
+    """
+
+    def __init__(self, session_factory=None) -> None:
+        if session_factory is None:
+            from .db import session_factory as default_factory
+
+            session_factory = default_factory()  # the sessionmaker itself
+        self._session_factory = session_factory
+
+    def verify(self, token: str) -> Principal:
+        from .models import ApiToken
+
+        digest = hash_personal_token(token)
+        session = self._session_factory()
+        try:
+            row = session.scalar(select(ApiToken).where(ApiToken.token_hash == digest))
+            if row is None:
+                raise VerificationError("unknown personal token")
+            if row.revoked_at is not None:
+                raise VerificationError("personal token has been revoked")
+            if row.expires_at is not None:
+                expires = row.expires_at
+                if expires.tzinfo is None:  # a naive column read — treat as UTC
+                    expires = expires.replace(tzinfo=UTC)
+                if expires <= datetime.now(UTC):
+                    raise VerificationError("personal token has expired")
+            principal = Principal(
+                sub=f"token:{row.id}",
+                roles=(row.role,),  # type: ignore[arg-type]
+                claims={"books": list(row.books or ["*"]), "token_name": row.name},
+            )
+            # the touch-write: best effort — a failed UPDATE never fails auth
+            try:
+                row.last_used_at = datetime.now(UTC)
+                session.commit()
+            except Exception:  # noqa: BLE001 — observability only
+                session.rollback()
+                logger.warning("personal token last_used touch failed", exc_info=True)
+            return principal
+        finally:
+            session.close()
+
+
 # ------------------------------------------------------------ FastAPI layer
 
 
@@ -260,8 +333,30 @@ async def auth_context(request: Request) -> Principal:
             detail="missing bearer token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    token = header[7:].strip()
+    # The ADR-030 chain: personal tokens (lft_…) verify against the
+    # database, everything else against the OIDC issuer. The prefix makes
+    # the dispatch unambiguous — a JWT never starts with "lft_".
+    if token.startswith(PERSONAL_TOKEN_PREFIX):
+        personal: PersonalTokenVerifier | None = getattr(
+            request.app.state, "personal_token_verifier", None
+        )
+        if personal is None:  # not wired (unit tests without the app)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="personal tokens are not available on this deployment",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            return personal.verify(token)
+        except VerificationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=exc.detail,
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from exc
     try:
-        return verifier.verify(header[7:].strip())
+        return verifier.verify(token)
     except VerificationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

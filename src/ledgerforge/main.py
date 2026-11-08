@@ -16,6 +16,7 @@ from .api import (
     auth,
     banking,
     books,
+    dataexchange,
     gst,
     inventory,
     masters,
@@ -25,9 +26,10 @@ from .api import (
     plugins,
     reports,
     slots,
+    tokens,
     vouchers,
 )
-from .auth import build_verifier, warn_if_disabled
+from .auth import PersonalTokenVerifier, build_verifier, warn_if_disabled
 from .db import get_engine
 from .errors import EngineError
 from .plugins import PluginManager
@@ -69,6 +71,10 @@ def create_app() -> FastAPI:
         app.state.token_verifier = build_verifier()
     else:
         app.state.token_verifier = None
+    # Personal tokens (ADR-030): always available — in oidc mode they chain
+    # by prefix (lft_… → database, everything else → the issuer); in
+    # disabled mode the whole auth chain is bypassed anyway (dev only).
+    app.state.personal_token_verifier = PersonalTokenVerifier()
 
     # CORS: in dev (auth disabled) allow everything for convenience; with
     # authentication on, the browser UI is same-origin (proxied /api), so no
@@ -112,6 +118,8 @@ def create_app() -> FastAPI:
     app.include_router(banking.router, prefix="/api/v1")
     app.include_router(gst.router, prefix="/api/v1")
     app.include_router(payroll.router, prefix="/api/v1")
+    app.include_router(dataexchange.router, prefix="/api/v1")
+    app.include_router(tokens.router, prefix="/api/v1")
     app.include_router(plugins.hooks_router, prefix="/api/v1")
 
     @app.get("/health", tags=["meta"])

@@ -284,9 +284,11 @@ def smoke(data_dir: Path | None = None, port: int | None = None) -> int:
 
     Runs under ``QT_QPA_PLATFORM=offscreen`` (the workflow sets it): the
     engine boots, the main window constructs against the real client, the
-    day book loads, a trial balance renders through the reporting API, and
-    the GSTR-1 pack answers (the gst plugin ships inside the bundle). Every
-    failure prints SMOKE FAILED with its reason; the last line is SMOKE OK.
+    day book loads, a trial balance renders through the reporting API, the
+    GSTR-1 pack answers (the gst plugin ships inside the bundle), and an
+    export proves the ADR-030 format seam (CSV with the engine's exact
+    digits). Every failure prints SMOKE FAILED with its reason; the last
+    line is SMOKE OK.
     """
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -312,7 +314,7 @@ def smoke(data_dir: Path | None = None, port: int | None = None) -> int:
     window = MainWindow(client, str(data))
     window.show()
 
-    remaining = {"day book", "trial balance", "gstr1 pack"}
+    remaining = {"day book", "trial balance", "gstr1 pack", "export seam"}
     state = {"failed": False}
 
     def fail(stage: str, error: object) -> None:
@@ -362,11 +364,31 @@ def smoke(data_dir: Path | None = None, port: int | None = None) -> int:
             lambda e: fail("gstr1 pack", e),
         )
 
+    def _export():
+        # ADR-030's seam on a real surface: the trial balance as CSV, its
+        # first line the columns, the digits the engine's own.
+        def done(result):
+            content, name = result
+            text = content.decode("utf-8")
+            header = text.splitlines()[0] if text.splitlines() else ""
+            print(f"export seam: {len(content)} bytes csv ({name}), header: {header!r}")
+            if "ledger_name" not in header:
+                fail("export seam", ValueError(f"unexpected CSV header: {header!r}"))
+                return
+            landed("export seam")
+
+        run_task(
+            lambda: client.export_bytes("/api/v1/reports/trial-balance", {}, "csv"),
+            done,
+            lambda e: fail("export seam", e),
+        )
+
     # a hard ceiling so a hung engine still fails the gate instead of the job
     QTimer.singleShot(120_000, lambda: fail("overall", TimeoutError("two minutes, no completion")))
     QTimer.singleShot(100, _daybook)
     QTimer.singleShot(150, _tb)
     QTimer.singleShot(200, _gstr1)
+    QTimer.singleShot(250, _export)
 
     code = app.exec()
     window.close()

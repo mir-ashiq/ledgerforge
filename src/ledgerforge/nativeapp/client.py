@@ -447,6 +447,72 @@ class ApiClient:
     def scale_out(self) -> dict:
         return self._get("/api/v1/ops/scale-out")
 
+    # -------------------------------------------------------- data exchange
+    def import_file(
+        self,
+        kind: str,
+        fmt: str,
+        content: str,
+        *,
+        source: str | None = None,
+        dry_run: bool = False,
+        balance_to: str | None = None,
+        ledger_id: int | None = None,
+    ) -> dict:
+        """The import front door (ADR-030): one file, one kind, one
+        transaction — ``dry_run`` is the preview receipt."""
+        payload: dict[str, Any] = {
+            "kind": kind,
+            "format": fmt,
+            "content": content,
+            "dry_run": dry_run,
+        }
+        if source:
+            payload["source"] = source
+        if balance_to:
+            payload["balance_to"] = balance_to
+        if ledger_id is not None:
+            payload["ledger_id"] = ledger_id
+        return self._post("/api/v1/dataexchange/imports", payload)
+
+    def tally_import(
+        self,
+        xml: str,
+        *,
+        source: str | None = None,
+        dry_run: bool = False,
+        type_map: dict[str, str] | None = None,
+        balance_to: str | None = None,
+    ) -> dict:
+        """The TallyPrime migration path (ADR-030) — masters, openings,
+        vouchers and stock masters in one idempotent transaction, with the
+        verification report (source TB vs imported TB) in the receipt."""
+        payload: dict[str, Any] = {"xml": xml, "dry_run": dry_run}
+        if source:
+            payload["source"] = source
+        if type_map:
+            payload["type_map"] = type_map
+        if balance_to:
+            payload["balance_to"] = balance_to
+        return self._post("/api/v1/dataexchange/tally", payload)
+
+    def exports_catalog(self) -> dict:
+        """Every exportable surface with its parameters (ADR-030 §3)."""
+        return self._get("/api/v1/dataexchange/exports")
+
+    def export_bytes(self, path: str, params: dict, fmt: str) -> tuple[bytes, str]:
+        """A surface's export (``?format=csv|xlsx``) as bytes + filename —
+        the pattern ``voucher_pdf`` set."""
+        query = {**params, "format": fmt}
+        response = self._client.get(path, params=query)
+        if response.status_code >= 400:
+            raise ApiError(response.status_code, _detail(_safe_json(response), response.text[:300]))
+        name = f"export.{fmt}"
+        disposition = response.headers.get("content-disposition", "")
+        if "filename=" in disposition:
+            name = disposition.split("filename=", 1)[1].strip('" ')
+        return response.content, name
+
 
 def _safe_json(response: httpx.Response) -> Any:
     try:

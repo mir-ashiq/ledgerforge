@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from .banking import BankingPage
 from .client import ApiClient
+from .dataexchange import DataExchangePage
 from .daybook import DayBookPage
 from .gst import GstPage
 from .inventory import InventoryPage
@@ -42,8 +43,12 @@ from .widgets import app_icon, error_detail
 #: get their own home between the masters they name and the reports they
 #: feed. Inventory follows Banking (ADR-027): the stock depth's masters,
 #: positions and recipes. GST follows Inventory (ADR-028): the compliance
-#: workbench. Payroll follows GST (ADR-029): the people workbench. Alt+1..9
-#: and Alt+0 (the tenth) follow the list.
+#: workbench. Payroll follows GST (ADR-029): the people workbench. Data
+#: Exchange follows Payroll (ADR-030): the migration workbench — imports,
+#: the TallyPrime path, exports. Alt+1..9 and Alt+0 (the tenth) follow the
+#: list; the eleventh page keeps its sidebar place without an Alt key —
+#: ten direct keys is the keyboard's own ceiling, and Sandbox is the
+#: playground, not the daily driver.
 PAGES = [
     ("daybook", "Day Book"),
     ("masters", "Masters"),
@@ -52,6 +57,7 @@ PAGES = [
     ("inventory", "Inventory"),
     ("gst", "GST"),
     ("payroll", "Payroll"),
+    ("dataexchange", "Data Exchange"),
     ("reports", "Reports"),
     ("periods", "Periods"),
     ("sandbox", "Sandbox"),
@@ -78,6 +84,7 @@ class MainWindow(QMainWindow):
         self.inventory = InventoryPage(client)
         self.gst = GstPage(client)
         self.payroll = PayrollPage(client)
+        self.dataexchange = DataExchangePage(client)
         self.reports = ReportsPage(client)
         self.periods = PeriodsPage(client)
         self.sandbox = SandboxPage(client)
@@ -89,6 +96,7 @@ class MainWindow(QMainWindow):
             self.inventory,
             self.gst,
             self.payroll,
+            self.dataexchange,
             self.reports,
             self.periods,
             self.sandbox,
@@ -160,9 +168,12 @@ class MainWindow(QMainWindow):
 
         navigate = self.menuBar().addMenu("&Navigate")
         for index, (_key, label) in enumerate(PAGES):
-            action = QAction(f"&{index + 1}  {label}", self)
-            # the tenth page takes Alt+0 — the keyboard's own wrap-around
-            action.setShortcut(QKeySequence(f"Alt+{(index + 1) % 10}"))
+            if index < 10:
+                action = QAction(f"&{index + 1}  {label}", self)
+                # the tenth page takes Alt+0 — the keyboard's own wrap-around
+                action.setShortcut(QKeySequence(f"Alt+{(index + 1) % 10}"))
+            else:
+                action = QAction(f"    {label}", self)  # past the Alt decade
             action.triggered.connect(lambda _checked=False, row=index: self._goto(row))
             navigate.addAction(action)
 

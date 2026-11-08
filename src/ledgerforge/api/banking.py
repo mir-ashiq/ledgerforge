@@ -19,7 +19,7 @@ from typing import Literal
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field
 
-from .. import banking
+from .. import banking, exporting
 from ..banking import (
     DEFAULT_WINDOW_DAYS,
     bank_entries,
@@ -53,13 +53,27 @@ def _emit(request: Request, event: str, payload: dict) -> None:
     request.app.state.plugin_manager.emit(event, payload)
 
 
+def _export(request, payload):
+    """ADR-030's format seam for the line book (matched/voucher columns
+    ride along — the reconciliation screen's spreadsheet)."""
+    fmt = exporting.export_format(request)
+    if fmt is None:
+        return None
+    columns, rows = exporting.bank_lines_projection(payload)
+    return exporting.export_response(
+        fmt, columns=columns, rows=rows, stem=f"bank-lines-{payload.get('ledger_name', 'ledger')}"
+    )
+
+
 # ------------------------------------------------------------------ the feed
 @router.get("/ledgers")
-def list_bank_ledgers(session: SessionDep, book: BookDep, _: ReaderDep):
+def list_bank_ledgers(request: Request, session: SessionDep, book: BookDep, _: ReaderDep):
     """Every bank-account ledger of the book with its current balance —
     the pickers' feed (the same Cr-positive figure the reconciliation
     proves)."""
-    return {"ledgers": bank_ledgers(session, book)}
+    ledgers = bank_ledgers(session, book)
+    exported = exporting.rows_export(request, ledgers, ["id", "name", "balance"], "bank-ledgers")
+    return exported if exported is not None else {"ledgers": ledgers}
 
 
 # ------------------------------------------------------------------- import
@@ -107,6 +121,7 @@ def post_statement(
 @router.get("/{ledger_id}/lines")
 def get_lines(
     ledger_id: int,
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -121,12 +136,14 @@ def get_lines(
         rows = [r for r in rows if r.match is None or not r.match.live]
     elif status == "matched":
         rows = [r for r in rows if r.match is not None and r.match.live]
-    return {
+    payload = {
         "ledger_id": ledger.id,
         "ledger_name": ledger.name,
         "status": status,
         "lines": [_line_out(row) for row in rows],
     }
+    exported = _export(request, payload)
+    return exported if exported is not None else payload
 
 
 def _line_out(row) -> dict:
@@ -160,6 +177,7 @@ def _line_out(row) -> dict:
 @router.get("/{ledger_id}/entries")
 def get_entries(
     ledger_id: int,
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -170,12 +188,20 @@ def get_entries(
     entry the suggestions engine will not pair (the amounts disagree) is
     still matchable by name here."""
     ledger = resolve_bank_ledger(session, book, ledger_id)
-    return {
+    entries = bank_entries(session, book=book, ledger_id=ledger.id, status=status)
+    payload = {
         "ledger_id": ledger.id,
         "ledger_name": ledger.name,
         "status": status,
-        "entries": bank_entries(session, book=book, ledger_id=ledger.id, status=status),
+        "entries": entries,
     }
+    exported = exporting.rows_export(
+        request,
+        entries,
+        ["voucher_no", "voucher_date", "dc", "amount", "narration", "cheque_no"],
+        f"bank-entries-{ledger.name}",
+    )
+    return exported if exported is not None else payload
 
 
 # -------------------------------------------------------------- suggestions
@@ -260,6 +286,7 @@ def delete_match(
 @router.get("/{ledger_id}/reconciliation")
 def get_reconciliation(
     ledger_id: int,
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -270,6 +297,13 @@ def get_reconciliation(
     book − statement = unmatched-book effects − unmatched-statement effects
     + matched-pair differences, exact Decimals, asserted."""
     ledger = resolve_bank_ledger(session, book, ledger_id)
-    return reconciliation(
+    payload = reconciliation(
         session, book=book, ledger=ledger, as_of=as_of, statement_balance=statement_balance
     )
+    exported = exporting.rows_export(
+        request,
+        payload.get("rows") or [],
+        ["kind", "label", "date", "amount", "effect", "reference", "narration"],
+        f"reconciliation-{ledger.name}",
+    )
+    return exported if exported is not None else payload

@@ -1493,6 +1493,34 @@ CREATE TRIGGER trg_attendance_lines_immutable
     FOR EACH ROW EXECUTE FUNCTION trg_forbid_mutation();
 
 -- ----------------------------------------------------------------------------
+-- Personal API tokens (0012/ADR-030) — the desktop's non-OIDC answer for
+-- integrations: long-lived, scoped, revocable credentials. The raw token
+-- (`lft_…`, 32 urlsafe chars) is returned exactly once at mint and never
+-- stored; the table holds its SHA-256 (a high-entropy random token needs
+-- no salted KDF — a lookup hash is the honest construction), the role
+-- ceiling, the books scope (the `books`-claim semantics: ["*"] or ids),
+-- an optional expiry, and the revocation timestamp. Mutable by design —
+-- a token is a credential, not financial history; revocation is a soft
+-- verdict the row remembers (append-only is the ledgers' law, not the
+-- security store's).
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name         TEXT NOT NULL CHECK (name <> ''),
+    token_prefix TEXT NOT NULL,
+    token_hash   TEXT NOT NULL UNIQUE,
+    role         TEXT NOT NULL CHECK (role IN ('reader', 'bookkeeper', 'admin')),
+    books        JSONB NOT NULL DEFAULT '["*"]'::jsonb,
+    expires_at   TIMESTAMPTZ,
+    created_by   TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_used_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (token_hash);
+
+-- ----------------------------------------------------------------------------
 -- Application role: least privilege. Even a compromised application cannot
 -- update or delete financial history.
 -- ----------------------------------------------------------------------------
@@ -1554,4 +1582,98 @@ GRANT INSERT ON payroll_attendance_batches, payroll_attendance_lines TO ledgerfo
 GRANT SELECT ON payroll_attendance_batches, payroll_attendance_lines TO ledgerforge_app;
 GRANT USAGE ON SEQUENCE payroll_attendance_batches_id_seq,
     payroll_attendance_lines_id_seq TO ledgerforge_app;
+-- Personal API tokens (0012/ADR-030): a credential store, not financial
+-- history — mint, touch (last_used) and revoke are all writes it needs.
+GRANT SELECT, INSERT, UPDATE ON api_tokens TO ledgerforge_app;
+GRANT USAGE ON SEQUENCE api_tokens_id_seq TO ledgerforge_app;
 GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO ledgerforge_app;
+
+-- ----------------------------------------------------------------------------
+-- The analyst surface (0012/ADR-030): read-only SQL views + a named role
+-- for ODBC. The `views` schema is the analyst's contract — flat, joinable,
+-- stable, and deliberately cross-book (pivot tables don't know books; an
+-- operator who doesn't want that never mints the analyst login). The
+-- ledgerforge_readonly role holds SELECT on the views and nothing else:
+-- the base tables stay the engine's. Amounts stay NUMERIC end to end —
+-- the ODBC driver receives exact decimals, never floats (Law 3).
+-- ----------------------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS views;
+
+CREATE OR REPLACE VIEW views.books AS
+SELECT b.id, b.name, b.slug, b.base_currency, b.fy_start_month,
+       b.is_archived, b.created_at
+FROM public.books b;
+
+CREATE OR REPLACE VIEW views.groups AS
+SELECT bk.name AS book, g.id, g.name, g.code, parent.name AS parent,
+       g.nature, g.affects_gross, g.is_root
+FROM public.groups g
+JOIN public.books bk ON bk.id = g.book_id
+LEFT JOIN public.groups parent ON parent.id = g.parent_id;
+
+CREATE OR REPLACE VIEW views.ledgers AS
+SELECT bk.name AS book, l.id, l.name, l.code, g.name AS "group",
+       l.is_system, l.created_at
+FROM public.ledgers l
+JOIN public.groups g ON g.id = l.group_id
+JOIN public.books bk ON bk.id = l.book_id;
+
+CREATE OR REPLACE VIEW views.vouchers AS
+SELECT bk.name AS book, v.id, v.voucher_no, v.voucher_date,
+       t.code AS voucher_type, t.name AS type_name, v.narration,
+       v.reversal_of, v.posted_at, v.uuid
+FROM public.vouchers v
+JOIN public.books bk ON bk.id = v.book_id
+JOIN public.voucher_types t ON t.id = v.voucher_type_id;
+
+CREATE OR REPLACE VIEW views.voucher_lines AS
+SELECT bk.name AS book, v.voucher_no, v.voucher_date,
+       t.code AS voucher_type, l.name AS ledger, g.name AS "group",
+       e.line_no, e.dc, e.amount, e.currency, e.amount_fx, e.fx_rate,
+       e.narration AS line_narration, v.narration,
+       cc.name AS cost_centre, ca.amount AS cost_centre_amount
+FROM public.voucher_entries e
+JOIN public.vouchers v ON v.id = e.voucher_id
+JOIN public.voucher_types t ON t.id = v.voucher_type_id
+JOIN public.ledgers l ON l.id = e.ledger_id
+JOIN public.groups g ON g.id = l.group_id
+JOIN public.books bk ON bk.id = v.book_id
+LEFT JOIN public.cost_allocations ca ON ca.entry_id = e.id
+LEFT JOIN public.cost_centres cc ON cc.id = ca.centre_id;
+
+CREATE OR REPLACE VIEW views.ledger_monthly AS
+SELECT bk.name AS book, l.name AS ledger, g.name AS "group",
+       date_trunc('month', e.voucher_date)::date AS "month",
+       SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE 0 END) AS debit,
+       SUM(CASE WHEN e.dc = 'C' THEN e.amount ELSE 0 END) AS credit
+FROM public.voucher_entries e
+JOIN public.ledgers l ON l.id = e.ledger_id
+JOIN public.groups g ON g.id = l.group_id
+JOIN public.books bk ON bk.id = e.book_id
+GROUP BY bk.name, l.name, g.name, date_trunc('month', e.voucher_date)::date;
+
+CREATE OR REPLACE VIEW views.ledger_balances AS
+SELECT bk.name AS book, l.name AS ledger, g.name AS "group",
+       SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE 0 END) AS closing_debit,
+       SUM(CASE WHEN e.dc = 'C' THEN e.amount ELSE 0 END) AS closing_credit,
+       SUM(CASE WHEN e.dc = 'D' THEN e.amount ELSE -e.amount END) AS closing_net
+FROM public.voucher_entries e
+JOIN public.ledgers l ON l.id = e.ledger_id
+JOIN public.groups g ON g.id = l.group_id
+JOIN public.books bk ON bk.id = e.book_id
+GROUP BY bk.name, l.name, g.name;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'ledgerforge_readonly') THEN
+        CREATE ROLE ledgerforge_readonly NOLOGIN;
+    END IF;
+END $$;
+
+GRANT USAGE ON SCHEMA views TO ledgerforge_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA views TO ledgerforge_readonly;
+-- The application never reads the views (it owns the tables); the
+-- analyst role never reads the tables. The one exception is deliberate:
+-- ledgerforge_app gets USAGE on the schema so its own diagnostics can
+-- prove the views answer — SELECT stays the analyst's alone.
+GRANT USAGE ON SCHEMA views TO ledgerforge_app;

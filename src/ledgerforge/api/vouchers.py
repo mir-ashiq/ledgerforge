@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import exporting
 from ..engine.opening import post_opening
 from ..engine.posting import get_voucher_with_entries, post_voucher
 from ..engine.reversal import reverse_voucher
@@ -157,8 +158,23 @@ def voucher_pdf(
     )
 
 
+# The day-book export's flat columns (ADR-030): the list surface a
+# spreadsheet wants — entries and meta stay JSON's business.
+DAYBOOK_COLUMNS = [
+    "id",
+    "voucher_no",
+    "voucher_type",
+    "voucher_date",
+    "amount",
+    "narration",
+    "reversal_of",
+    "posted_at",
+]
+
+
 @router.get("/vouchers", response_model=list[VoucherOut])
 def list_vouchers(
+    request: Request,
     session: SessionDep,
     book: BookDep,
     _: ReaderDep,
@@ -179,7 +195,9 @@ def list_vouchers(
     if date_to:
         stmt = stmt.where(Voucher.voucher_date <= date_to)
     vouchers = session.scalars(stmt).all()
-    return [_voucher_out(session, v) for v in vouchers]
+    out = [_voucher_out(session, v) for v in vouchers]
+    exported = exporting.rows_export(request, out, DAYBOOK_COLUMNS, "day-book")
+    return exported if exported is not None else out
 
 
 @router.post("/vouchers/{voucher_id}/reverse")
