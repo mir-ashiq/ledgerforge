@@ -68,6 +68,12 @@ Trigger journal for `groups`/`ledgers`/`voucher_types` changes: `occurred_at, ac
 2. **Immutability** — `acc_forbid_mutation()` `BEFORE UPDATE OR DELETE` on `vouchers`, `voucher_entries`, `audit_log`; plus the application role is granted only `SELECT, INSERT`.
 3. **Exact decimals** — `NUMERIC(26,8)` everywhere money appears; application layer additionally rejects scale > 8 before insert (PostgreSQL would otherwise silently round).
 
+### `api_tokens` (ADR-030, migration 0012)
+`name, token_prefix, token_hash (SHA-256, UNIQUE), role, books JSONB, expires_at?, created_by, created_at, last_used_at?, revoked_at?`. The raw `lft_…` token is returned exactly once at mint and never stored — a high-entropy random input needs a plain lookup hash, not a salted KDF. A credential store, not financial history: revocation is a soft verdict the row remembers.
+
+### The `views` schema (ADR-030, migration 0012)
+Seven read-only projections for analysts and ODBC: `books`, `groups`, `ledgers`, `vouchers`, `voucher_lines` (with ledger/group/cost-centre names, never ids), `ledger_monthly`, `ledger_balances`. The NOLOGIN role `ledgerforge_readonly` holds `SELECT` on the views and nothing else — the base tables stay the engine's. The ADR-018 shape conversions lift the three `voucher_entries`-backed views for their table swap and put them back verbatim (`ops.recreate_analyst_views()`).
+
 ## Reporting functions (`rpt` schema)
 
 | Function | Purpose |
@@ -81,4 +87,4 @@ Call as raw SQL (`SELECT * FROM rpt.trial_balance('2026-11-06')`) or through the
 
 ## Roles
 
-`schema.sql` creates a `ledgerforge_app` role (no login) and grants it exactly what the engine needs: `SELECT, INSERT` on the immutable financial tables, full DML on masters/counters, `EXECUTE` on `rpt.*`. Defense in depth: even a SQL injection in the application cannot update or delete financial history.
+`schema.sql` creates a `ledgerforge_app` role (no login) and grants it exactly what the engine needs: `SELECT, INSERT` on the immutable financial tables, full DML on masters/counters, `EXECUTE` on `rpt.*`. Defense in depth: even a SQL injection in the application cannot update or delete financial history. A second role `ledgerforge_readonly` (ADR-030) reads only the `views` schema — the analyst's lane, walled off from the engine's.

@@ -78,16 +78,16 @@ subscriptions for updates and remote services.
 | GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox, 2A/2B recon, 3B, 9, notes, multi-GSTIN, e-way outbox (ADR-028) | **parity** — landed in v0.25.0 (Phase 7); reverse-charge and set-off stay honestly blank, portal adapters stay plugin-side (D3) |
 | Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS, attendance-derived pay, loans with EMI recovery, F&F, payslip distribution (ADR-029) | **parity** — landed in v0.26.0 (Phase 8); a leave *balance* (accrual policy) stays the operator's fact, SMTP stays bridge-side by design (D3) |
 | Bill-wise & outstanding, ageing, interest | ✔ | ✔ (ADR-023) | **parity** — landed in v0.20.0 (Phase 2) |
-| Data exchange | ✔ Excel/CSV/TDL/XML | JSON REST API only | **gap** (Phase 9 — incl. the Tally migration path) |
+| Data exchange | ✔ Excel/CSV/TDL/XML | CSV/XLSX import (masters, openings, vouchers, stock, bank) & export on every surface, TallyPrime XML migration with a verification report, SQL views + ODBC, personal API tokens (ADR-030) | **parity** — landed in v0.27.0 (Phase 9); TDL (Tally's proprietary language) stays out by design — Python packs are the answer (D4) |
 | Extensibility | TDL (proprietary) | Python packs, signed index, sandbox slots | **LedgerForge leads** |
 | Deployment | Windows LAN (Silver/Gold) | Native Windows app, web container, REST API, CLI | **LedgerForge leads** on openness; **behind** on signing/auto-update (Phase 10) |
 | Price | ₹22,500+ per seat | AGPL-3.0, free forever | **LedgerForge leads** |
 
 The honest summary: **the accounting core is at parity** — bill-wise, orders, cost
-centres, banking, inventory, GST compliance depth and payroll depth all landed
-(v0.20–v0.26). What remains toward v1.0 is the data-exchange path (imports and
-the Tally migration), distribution hardening (signing, auto-update), and the
-v1.0 parity release itself (Phases 9–11). That is exactly what the remaining
+centres, banking, inventory, GST compliance depth, payroll depth and data
+exchange all landed (v0.20–v0.27). What remains toward v1.0 is distribution
+hardening (signing, auto-update), and the v1.0 parity release itself
+(Phases 10–11). That is exactly what the remaining
 phases below deliver, in dependency order.
 
 ---

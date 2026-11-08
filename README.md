@@ -472,6 +472,41 @@ Design: [ADR-012](docs/adr/012-payroll-pack.md),
 [ADR-029](docs/adr/029-payroll-depth.md),
 [plugin guide](docs/plugin-guide.md).
 
+## Data exchange & the Tally migration path (v0.27, ADR-030)
+
+**The adoption lever: you can move off TallyPrime onto LedgerForge.**
+
+- **CSV/Excel import** — `POST /api/v1/dataexchange/imports`, one front
+  door, five kinds: masters (groups & ledgers), opening balances, vouchers
+  (with FX lines and cost-aware columns), stock item masters, and bank
+  statements (ADR-026's own machinery). Every import is previewable
+  (`dry_run` runs the whole pipeline and discards it), validated with the
+  row number named, all-or-nothing (one bad row rolls back the file), and
+  idempotent — masters create-if-absent by name, vouchers replay by
+  content-addressed client token. The engine never grows a bulk lane: an
+  imported voucher walks the exact path a keyboard voucher walks.
+- **Export everywhere** — `?format=csv|xlsx` on every report and list
+  surface (the catalogue: `GET /api/v1/dataexchange/exports`); pack
+  reports gain `xlsx` beside their CSV. The digits are the engine's own
+  exact decimals — Law 3 through the spreadsheet.
+- **The TallyPrime XML import** — `POST /api/v1/dataexchange/tally`:
+  masters, opening balances (ONE Opening Journal; `balance_to` absorbs a
+  residual explicitly), vouchers with FX, stock item masters — and the
+  **verification report**: the source trial balance folded straight from
+  the XML against the imported one folded from what landed, per ledger,
+  difference column, every skip named. Unmapped voucher types are skipped
+  and reported, never guessed; unknown ledgers land under *Suspense A/c*
+  and are reported.
+- **The analyst seat** — the `views` schema: seven read-only, flat,
+  cross-book SQL projections with a `ledgerforge_readonly` role that
+  reads the views and nothing else. `POST /api/v1/ops/analyst-access`
+  mints/rotates the `lf_analyst` ODBC login (one-time password;
+  PostgreSQL keeps the SCRAM verifier); amounts stay NUMERIC end to end.
+- **Personal API tokens** — `POST /api/v1/tokens` (admin): long-lived,
+  scoped, revocable credentials (`lft_…`, shown once, SHA-256 at rest)
+  for integrations without an IdP — role ceiling, books scope, expiry,
+  immediate revocation, `last_used_at` observability.
+
 ## Bill-wise & outstanding management (roadmap Phase 2, ADR-023)
 
 TallyPrime's party ledgers carry **bill-wise details** — every invoice opens
@@ -1098,6 +1133,14 @@ ship as new revisions that also update the SQL files in the same PR — see
 [db/migrations/README.md](db/migrations/README.md).
 
 ## Status & roadmap
+
+v0.27.0 — everything below, plus the payroll depth
+(v0.26, ADR-029: attendance registers as facts, loans with EMI
+recovery, the full & final settlement, payslip distribution) and
+**data exchange & the Tally migration path (v0.27, ADR-030: CSV/XLSX
+import & export, the TallyPrime XML migration with a verification
+report, SQL views + ODBC, personal API tokens)** — the accounting core
+is at parity.
 
 v0.24.0 — the accounting kernel, the voucher-entry screen, the command palette
 with persisted key rebinding, OIDC authentication, multi-currency books,

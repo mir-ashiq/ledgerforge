@@ -70,6 +70,33 @@ Configure your IdP (Keycloak, Auth0, …) so tokens carry:
 `GET /health` reports `auth_mode`; monitoring should alert on anything
 other than `"oidc"`.
 
+### Personal API tokens (ADR-030) — integrations without an IdP
+
+Sync scripts, bridges and companions authenticate with long-lived personal
+tokens instead of standing up an IdP: `POST /api/v1/tokens` (admin) mints
+one — the raw `lft_…` value appears **exactly once** in that response —
+with a role ceiling (a principal may never mint above its own level), a
+books scope reusing the `books`-claim semantics, and an optional expiry.
+`GET /api/v1/tokens` lists (prefix only, never the hash), `DELETE
+/api/v1/tokens/{id}` revokes — the next request carrying it is a 401. In
+`oidc` mode the bearer prefix dispatches: `lft_…` verifies against the
+database, everything else goes to the issuer.
+
+### The analyst seat — SQL views and ODBC (ADR-030)
+
+The `views` schema (books, groups, ledgers, vouchers, voucher_lines,
+ledger_monthly, ledger_balances) is the analyst's stable, read-only SQL
+contract — deliberately cross-book and whole-book; amounts stay NUMERIC
+end to end (the ODBC driver receives exact decimals). To open the seat:
+`POST /api/v1/ops/analyst-access` (admin) mints or rotates the `lf_analyst`
+LOGIN with a one-time server-generated password (PostgreSQL keeps only its
+SCRAM verifier) and answers with the connection parameters the psqlODBC
+dialog wants; `DELETE /api/v1/ops/analyst-access` drops the seat. One seat
+by design — per-analyst seats are the DB owner's own `GRANT` away. The
+endpoint needs CREATEROLE: the desktop's embedded cluster has it; on
+server deployments the database owner either mints the seat or grants the
+app role the privilege — the failure explains itself.
+
 ## 4. Multi-worker tuning
 
 | Knob | Guidance |

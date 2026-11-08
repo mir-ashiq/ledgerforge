@@ -1,3 +1,100 @@
+# LedgerForge 0.27.0 — data exchange & the Tally migration path
+
+**Phase 9 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
+the adoption lever — you can move off TallyPrime onto LedgerForge.** Every
+import is a previewable, idempotent, all-or-nothing transaction that walks
+the engine's own posting path (Law 1 has no bulk lane), every report and
+list surface exports CSV/XLSX through one seam, the TallyPrime XML import
+proves itself with a trial-balance verification report, analysts get
+read-only SQL views with an ODBC seat, and integrations get personal API
+tokens (ADR-030).
+
+## What's new in the window
+
+- **The Data Exchange page** (native, `Alt+8`, after Payroll): the
+  migration workbench — import CSV/Excel (masters, opening balances,
+  vouchers, stock masters) with the engine's own preview receipt before
+  anything lands, walk the TallyPrime XML migration with the verification
+  table (source trial balance vs imported, difference column), and export
+  any report or list surface to CSV or XLSX through the native file
+  dialog. Reports moves to `Alt+9`, Periods to `Alt+0`.
+- **CSV/Excel import**: `POST /api/v1/dataexchange/imports` — one front
+  door, five kinds. Headers normalize (Ledger Name ≡ ledger_name), rows
+  validate with their row number named, one bad row rolls back the whole
+  file, `dry_run` runs the entire pipeline and discards it, and re-import
+  of the same file is a no-op receipt (content-addressed client tokens —
+  masters by name, vouchers by file fingerprint + ref). Opening balances
+  post as ONE Opening Journal; an unbalanced file is a 422 naming the
+  difference, with `balance_to` (classically *Suspense A/c*) absorbing a
+  residual explicitly, never silently.
+- **Export everywhere**: `?format=csv|xlsx` on every report and list
+  surface — trial balance, P&L, balance sheet, FY close, cost centres and
+  categories, the day book, masters, bank ledgers/lines/entries/
+  reconciliation, GST downloads/lines, attendance, stock items/prices/
+  BOMs, books, periods. The digits are the engine's own exact decimals
+  (Law 3 through the spreadsheet). Pack reports gain `xlsx` beside their
+  CSV — the pack's columns, verbatim.
+- **The TallyPrime import**: `POST /api/v1/dataexchange/tally` — the
+  export's XML (masters, opening balances, vouchers with FX lines, stock
+  item masters) lands in one idempotent all-or-nothing transaction.
+  Tally's group names are LedgerForge's own (the v0.1 seeding), Receipt→
+  RCT/Payment→PYT/Sales→SAL/… map onto the seeded codes (extend with
+  `type_map`); an unmapped type is **skipped and reported, never
+  guessed**; a voucher naming a ledger the export never described
+  auto-creates it under *Suspense A/c* and says so. And the verification
+  report: the source trial balance folded straight from the XML against
+  the imported one folded from what landed — per ledger, difference
+  column, both totals asserted. An operator signs the migration when the
+  differences are zero, and understands every one that is not.
+- **The analyst seat**: the `views` schema — seven read-only, flat,
+  cross-book projections (books, groups, ledgers, vouchers,
+  voucher_lines with names not ids, ledger_monthly, ledger_balances)
+  with a `ledgerforge_readonly` role that reads the views and nothing
+  else. `POST /api/v1/ops/analyst-access` (admin) mints or rotates the
+  `lf_analyst` LOGIN with a one-time password and answers with the ODBC
+  connection parameters; `DELETE` drops the seat. Amounts stay NUMERIC
+  end to end — psqlODBC receives exact decimals.
+- **Personal API tokens**: `POST /api/v1/tokens` (admin) — long-lived,
+  scoped, revocable credentials for sync scripts and bridges without an
+  IdP. The raw `lft_…` token appears exactly once; the row stores only
+  its SHA-256. Role ceiling (never mint above yourself), books scope (the
+  `books`-claim semantics verbatim), optional expiry, immediate
+  revocation, `last_used_at` observability. The auth chain dispatches by
+  prefix: `lft_…` → the database, everything else → the OIDC issuer.
+
+## What's new underneath
+
+- **Migration `0012_data_exchange`** (alembic head): the `api_tokens`
+  table, the `views` schema with its role and grants, and the ADR-018
+  shape conversions taught to lift the three `voucher_entries`-backed
+  views for their table swap and put them back verbatim
+  (`ops.recreate_analyst_views()`).
+- **The import transaction**: one outer transaction on a dedicated
+  connection; every inner `post_voucher` commit degrades to a savepoint
+  release (`join_transaction_mode="create_savepoint"`), and after-commit
+  events fire only after the OUTER commit — the `emit=False` seam on
+  `post_voucher`/`post_opening`.
+- **`ledgerforge/exporting.py`** — one renderer pair (CSV text, XLSX via
+  openpyxl — a new pure-Python core dependency, ~1 MB into the Windows
+  bundle; legacy `.xls` is deliberately not read), with the report
+  projections (payload → columns/rows) as pure, tested functions.
+- **`ledgerforge/dataexchange.py`** and **`ledgerforge/tally_import.py`**
+  — the kernel services: decode/validate/map/post, the Tally dialect and
+  its verification fold. Books are strangers (ADR-009): an import lands
+  in exactly one book.
+- The smoke gate gains a proof: an export answers with the engine's own
+  CSV header (the format seam, on a real surface).
+
+## The plan, on the record
+
+The capability ledger's Data exchange row flips to **parity** — landed in
+v0.27.0 (Phase 9). TDL (Tally's proprietary language) stays out by
+design — Python packs are the answer. Next: **Phase 10 — distribution
+hardening** (Windows code signing, macOS/Linux packages, auto-update —
+ADR-031, pays the ADR-021 debt).
+
+---
+
 # LedgerForge 0.26.0 — payroll depth
 
 **Phase 8 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
