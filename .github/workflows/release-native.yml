@@ -73,9 +73,13 @@ jobs:
       # credentials — the SmartScreen warning dies the day this is armed.
       # Without secrets the exe ships unsigned: checksummed, inside the
       # signed update manifest, and honestly labeled in the release notes.
+      # (The `secrets` context is not allowed in `if` — the armed flag
+      # rides step env, the documented pattern.)
       - name: Code-sign the Windows exe (Azure Trusted Signing)
-        if: matrix.os == 'windows-latest' && secrets.AZURE_TENANT_ID != ''
+        if: matrix.os == 'windows-latest' && env.LF_AZURE_SIGNING == 'true'
         uses: Microsoft/trusted-signing-action@v0
+        env:
+          LF_AZURE_SIGNING: ${{ secrets.AZURE_TENANT_ID != '' }}
         with:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -89,8 +93,9 @@ jobs:
       # materialized from the MACOS_SIGNING_CERT_P12/MACOS_SIGNING_PASSWORD
       # secrets; notarytool credentials via the standard environment.
       - name: Codesign + notarize the .app (when credentials exist)
-        if: matrix.os == 'macos-latest' && secrets.MACOS_SIGNING_CERT_P12 != ''
+        if: matrix.os == 'macos-latest' && env.LF_MACOS_SIGNING == 'true'
         env:
+          LF_MACOS_SIGNING: ${{ secrets.MACOS_SIGNING_CERT_P12 != '' }}
           MACOS_SIGNING_CERT_P12: ${{ secrets.MACOS_SIGNING_CERT_P12 }}
           MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
@@ -252,8 +257,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Write + sign the update manifest
-        if: secrets.LF_UPDATE_SIGNING_KEY != ''
+        if: env.LF_HAS_SIGNING_KEY == 'true'
         env:
+          LF_HAS_SIGNING_KEY: ${{ secrets.LF_UPDATE_SIGNING_KEY != '' }}
           LF_UPDATE_SIGNING_KEY: ${{ secrets.LF_UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
@@ -271,7 +277,9 @@ jobs:
           shred -u release-key.pem || rm -f release-key.pem
 
       - name: Write the update manifest (unsigned — no signing key configured)
-        if: secrets.LF_UPDATE_SIGNING_KEY == ''
+        if: env.LF_HAS_SIGNING_KEY != 'true'
+        env:
+          LF_HAS_SIGNING_KEY: ${{ secrets.LF_UPDATE_SIGNING_KEY != '' }}
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name }}"
