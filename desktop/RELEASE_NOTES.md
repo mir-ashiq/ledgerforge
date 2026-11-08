@@ -1,319 +1,84 @@
-# LedgerForge 0.27.0 — data exchange & the Tally migration path
+# LedgerForge 0.28.0 — distribution hardening
 
-**Phase 9 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the adoption lever — you can move off TallyPrime onto LedgerForge.** Every
-import is a previewable, idempotent, all-or-nothing transaction that walks
-the engine's own posting path (Law 1 has no bulk lane), every report and
-list surface exports CSV/XLSX through one seam, the TallyPrime XML import
-proves itself with a trial-balance verification report, analysts get
-read-only SQL views with an ODBC seat, and integrations get personal API
-tokens (ADR-030).
+**Phase 10 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
+the trust story of a download (ADR-031).** Every release now ships on
+three platforms from one pipeline, every update the app ever installs is
+verified against a key pinned inside the app itself before a byte of it
+is used, and crash diagnostics stay on your machine unless you choose
+otherwise — no telemetry by default, as a pledge, not a setting.
 
-## What's new in the window
+## What's new for the user
 
-- **The Data Exchange page** (native, `Alt+8`, after Payroll): the
-  migration workbench — import CSV/Excel (masters, opening balances,
-  vouchers, stock masters) with the engine's own preview receipt before
-  anything lands, walk the TallyPrime XML migration with the verification
-  table (source trial balance vs imported, difference column), and export
-  any report or list surface to CSV or XLSX through the native file
-  dialog. Reports moves to `Alt+9`, Periods to `Alt+0`.
-- **CSV/Excel import**: `POST /api/v1/dataexchange/imports` — one front
-  door, five kinds. Headers normalize (Ledger Name ≡ ledger_name), rows
-  validate with their row number named, one bad row rolls back the whole
-  file, `dry_run` runs the entire pipeline and discards it, and re-import
-  of the same file is a no-op receipt (content-addressed client tokens —
-  masters by name, vouchers by file fingerprint + ref). Opening balances
-  post as ONE Opening Journal; an unbalanced file is a 422 naming the
-  difference, with `balance_to` (classically *Suspense A/c*) absorbing a
-  residual explicitly, never silently.
-- **Export everywhere**: `?format=csv|xlsx` on every report and list
-  surface — trial balance, P&L, balance sheet, FY close, cost centres and
-  categories, the day book, masters, bank ledgers/lines/entries/
-  reconciliation, GST downloads/lines, attendance, stock items/prices/
-  BOMs, books, periods. The digits are the engine's own exact decimals
-  (Law 3 through the spreadsheet). Pack reports gain `xlsx` beside their
-  CSV — the pack's columns, verbatim.
-- **The TallyPrime import**: `POST /api/v1/dataexchange/tally` — the
-  export's XML (masters, opening balances, vouchers with FX lines, stock
-  item masters) lands in one idempotent all-or-nothing transaction.
-  Tally's group names are LedgerForge's own (the v0.1 seeding), Receipt→
-  RCT/Payment→PYT/Sales→SAL/… map onto the seeded codes (extend with
-  `type_map`); an unmapped type is **skipped and reported, never
-  guessed**; a voucher naming a ledger the export never described
-  auto-creates it under *Suspense A/c* and says so. And the verification
-  report: the source trial balance folded straight from the XML against
-  the imported one folded from what landed — per ledger, difference
-  column, both totals asserted. An operator signs the migration when the
-  differences are zero, and understands every one that is not.
-- **The analyst seat**: the `views` schema — seven read-only, flat,
-  cross-book projections (books, groups, ledgers, vouchers,
-  voucher_lines with names not ids, ledger_monthly, ledger_balances)
-  with a `ledgerforge_readonly` role that reads the views and nothing
-  else. `POST /api/v1/ops/analyst-access` (admin) mints or rotates the
-  `lf_analyst` LOGIN with a one-time password and answers with the ODBC
-  connection parameters; `DELETE` drops the seat. Amounts stay NUMERIC
-  end to end — psqlODBC receives exact decimals.
-- **Personal API tokens**: `POST /api/v1/tokens` (admin) — long-lived,
-  scoped, revocable credentials for sync scripts and bridges without an
-  IdP. The raw `lft_…` token appears exactly once; the row stores only
-  its SHA-256. Role ceiling (never mint above yourself), books scope (the
-  `books`-claim semantics verbatim), optional expiry, immediate
-  revocation, `last_used_at` observability. The auth chain dispatches by
-  prefix: `lft_…` → the database, everything else → the OIDC issuer.
+- **Updates that verify themselves.** On each start the app fetches the
+  release's `update_manifest.json` and its detached Ed25519 signature,
+  and checks it against the release key pinned in the app's own bytes —
+  a manifest that does not verify is not parsed, not compared, never
+  used (fail closed). A newer release downloads quietly — a
+  **file-level delta** where one exists for your version, so only
+  changed files move — is verified byte-for-byte against the signed
+  manifest, and **applies the next time you start the app**, never while
+  you work. The status bar says what happened; `Help > Check for
+  Updates…` (Ctrl+U) re-runs the check; the About box shows the pinned
+  key's fingerprint (`C189:C1B9:CBCB:3C73`). A power cut mid-apply
+  repairs itself on the following boot. `LF_UPDATE_CHECKS=0` disables
+  automatic checks; `LF_UPDATE_URL` points the app at your own mirror.
+- **macOS and Linux builds, same app.** `LedgerForge-<version>-macos-arm64.zip`
+  (double-click the `.app`) and `LedgerForge-<version>-linux-x64.tar.gz`
+  (extract, run `LedgerForge/LedgerForge`; a `.desktop` file rides
+  along) — built from the same spec as Windows, smoke-gated the same
+  way, published in the same release. macOS is arm64 (Apple silicon);
+  Intel Macs run from source. Ubuntu 22.04 builds the Linux package for
+  glibc reach.
+- **Crash reports that stay yours.** If anything crashes, a plain-JSON
+  report lands in `<data>/crashes` — readable, yours, kept. **Nothing is
+  ever sent anywhere** unless your administrator configured a collector
+  (`LF_CRASH_ENDPOINT`) and you choose to send (`Help > Crash reports…`,
+  or the explicit `LF_CRASH_REPORTING=1` opt-in). The payload carries
+  version, platform and the traceback — never your books. No collector
+  ships in the download; no telemetry exists to enable.
+- **Code signing, armed.** The release workflow signs the Windows exe
+  with Azure Trusted Signing and the macOS app with a Developer ID +
+  notarization the moment the repository carries those credentials —
+  this release's artifacts are **unsigned** (the project holds no
+  certificate yet): SHA-256 checksums are published as `checksums.txt`,
+  and the update path is Ed25519-verified regardless. The release notes
+  will say "signed" the day it is true, plainly.
 
 ## What's new underneath
 
-- **Migration `0012_data_exchange`** (alembic head): the `api_tokens`
-  table, the `views` schema with its role and grants, and the ADR-018
-  shape conversions taught to lift the three `voucher_entries`-backed
-  views for their table swap and put them back verbatim
-  (`ops.recreate_analyst_views()`).
-- **The import transaction**: one outer transaction on a dedicated
-  connection; every inner `post_voucher` commit degrades to a savepoint
-  release (`join_transaction_mode="create_savepoint"`), and after-commit
-  events fire only after the OUTER commit — the `emit=False` seam on
-  `post_voucher`/`post_opening`.
-- **`ledgerforge/exporting.py`** — one renderer pair (CSV text, XLSX via
-  openpyxl — a new pure-Python core dependency, ~1 MB into the Windows
-  bundle; legacy `.xls` is deliberately not read), with the report
-  projections (payload → columns/rows) as pure, tested functions.
-- **`ledgerforge/dataexchange.py`** and **`ledgerforge/tally_import.py`**
-  — the kernel services: decode/validate/map/post, the Tally dialect and
-  its verification fold. Books are strangers (ADR-009): an import lands
-  in exactly one book.
-- The smoke gate gains a proof: an export answers with the engine's own
-  CSV header (the format seam, on a real surface).
+- **`ledgerforge/updating.py`** — the update contract: canonical-form
+  signing (formatting is not the contract, content is), the pinned key,
+  plan choice (delta preferred, full as the fallback), staging with
+  strict set-equality against `delta.json` (zip-slip refused, every
+  staged file SHA-256-verified before `pending.json` exists), and an
+  idempotent apply-on-relaunch with an apply journal — the updater's
+  failure mode is "no update", never "broken app".
+- **`nativeapp/updater.py` + `nativeapp/crashes.py`** — the window's
+  quiet halves: the background controller (QThreadPool, the ADR-022
+  discipline) and the capture-always/opt-in-send reporter with its
+  allowlisted payload. The engine child dumps fatal signals beside the
+  GUI's reports.
+- **`release-native.yml`** replaces `release-windows.yml`: a
+  windows/macos/linux build matrix, per-artifact offscreen smoke gates,
+  the signing gates (env-flag pattern — GitHub refuses `secrets` in
+  `if:`), and a publish job that builds **file-level deltas against the
+  previous release** (`scripts/make_delta.py`), writes and signs
+  `update_manifest.json` (`scripts/make_update_manifest.py`, the
+  `LF_UPDATE_SIGNING_KEY` Actions secret), and publishes the GitHub
+  Release with checksums, deltas, manifest and signature.
+- **The smoke gate grows two proofs**: the update gate (an unsigned and
+  a tampered manifest are both refused; nothing staged) and the crash
+  gate (a report lands, readable, allowlisted) — proven on the shipped
+  bytes of every platform.
+- 42 new tests (`test_updating`, `test_crashes`, `test_native_updater`)
+  — **678 green**, plus the frontend suites and the E2E flow unchanged.
 
 ## The plan, on the record
 
-The capability ledger's Data exchange row flips to **parity** — landed in
-v0.27.0 (Phase 9). TDL (Tally's proprietary language) stays out by
-design — Python packs are the answer. Next: **Phase 10 — distribution
-hardening** (Windows code signing, macOS/Linux packages, auto-update —
-ADR-031, pays the ADR-021 debt).
+The capability ledger's Deployment row flips to **parity** — landed in
+v0.28.0 (Phase 10, pays the ADR-021 debt). What remains is **Phase 11 —
+the parity release** itself: the accountant's day as a scripted
+acceptance run in CI, performance certification at 10× the workload
+model, the accessibility audit, and the v1.0 announcement.
 
 ---
-
-# LedgerForge 0.26.0 — payroll depth
-
-**Phase 8 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the people, given their paperwork.** The attendance register feeds
-per-day pay heads, loans recover themselves from their schedules, the
-relieving letter's numbers are one voucher — and the payslip batch leaves
-the building without the kernel ever opening a socket (ADR-029, extends
-ADR-012).
-
-## What's new in the window
-
-- **The Payroll page** (native, `Alt+7`): the people workbench — key the
-  period's attendance register (a grid, previewed before it lands), issue
-  staff loans (the confirmation quotes the engine's own EMI schedule),
-  settle a relieving employee's dues (encashment, earnings, recoveries,
-  one voucher), and walk every payroll document the book holds with
-  per-employee payslip PDFs one key away.
-- **Attendance registers as facts**: `POST /api/v1/payroll/attendance`
-  keys present / absent / half-day / leave-with-pay per employee per
-  period (a half-day is 0.5; the calendar is the honesty ceiling).
-  Re-entry of the same register is a no-op; a corrected register is a new
-  snapshot — latest-batch-wins, append-only history, the GSTR-2B
-  discipline restated for the shop floor.
-- **Attendance-derived pay**: an earning component may carry `per_day`
-  instead of `amount` — the run derives `per_day × payable days`
-  (present + half × 0.5 + leave-with-pay) from the live register and
-  records the derivation beside the amount. No register, no derivation:
-  a 422, never a guess.
-- **Loans & advances with EMI recovery**: `mode: "loan"` issues the
-  advance against the bank with the exact-Decimal annuity schedule
-  computed into the document (rate 0 = interest-free; the final row
-  absorbs its own rounding so principals sum exactly). The schedule is
-  advisory; recovery is the run's new `recovery` component — it reduces
-  net pay, credits the advance ledger, and can never cross the
-  outstanding fold. A recovery naming its loan adopts the scheduled EMI
-  for the period automatically.
-- **The full & final settlement**: `mode: "settlement"` books leave
-  encashment (days × rate — the operator's facts), extra dues,
-  withholdings and loan recoveries in one voucher, paying direct from
-  the bank or accruing to the payable. After it the employee is
-  **relieved**: runs, loans and further settlements refuse; payouts stay
-  legal — the dues are the whole point. A reversal reopens the
-  relationship.
-- **The payslip outbox**: every run queues one envelope per employee to
-  `LF_PAYROLL_OUTBOX`, and `lf-payslip-bridge` renders the PDF batch
-  through the same layout engine as Ctrl+P — and, only when the operator
-  configures SMTP (`LF_PAYROLL_SMTP_*`), emails each payslip to the
-  address the run entry carried. **Core never sends mail**; the bridge is
-  the only mailer, and a blank address is never guessed.
-
-## What's new underneath
-
-- Migration `0011_payroll_depth` — the fifth core-schema change since
-  0006, the ADR-026 argument restated for the shop floor:
-  `payroll_attendance_batches` + `payroll_attendance_lines`, INSERT-only,
-  append-only, idempotent by revision-carrying fingerprint. Old books
-  upgrade in place (the smoke test proves the migrate path on every
-  build).
-- Plugin API **0.14**: `Resolver.attendance_lines(period)` — the payroll
-  pack's per-day fold input as a versioned, session-free read (the
-  `fy_start_month` precedent). The kernel stays meaning-blind; the pack
-  computes payable days.
-- Loans and settlements are documents on the same `meta.payroll` grammar
-  as runs and payouts — the same lock discipline, the same reversal
-  netting, the same books-are-strangers isolation. The loan and
-  settlement folds reuse the run fold's machinery: a reversed loan
-  restores the outstanding exactly as a reversed run restores YTD.
-- Two pack reports join the register: `payroll-attendance` (the live
-  register with payable days — JSON for the UI, CSV, PDF) and
-  `payroll-loans` (per-employee positions and per-loan schedules), both
-  from the same folds the guards run.
-
-## The plan, on the record
-
-The capability ledger's Payroll row flips to **parity** — landed in
-v0.26.0 (Phase 8). Next: **Phase 9 — data exchange & the Tally migration
-path** (CSV/Excel import with previewable, idempotent transactions, the
-TallyPrime XML import with a verification report, SQL views + personal
-API tokens — ADR-030).
-
----
-
-# LedgerForge 0.25.0 — GST compliance depth
-
-**Phase 7 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the tax month, closed end to end.** The books and the portal finally sit
-at the same table: the GSTR-2A/2B download imports as facts, the
-reconciliation prices every matched, mismatched and missing document —
-and the 3B, the 9 and the e-way-bill outbox join the GSTR-1 register on
-the same folds (ADR-028, extends ADR-017).
-
-## What's new in the window
-
-- **The GST page** (native, `Alt+6`) and the **GST screen** on the web
-  (`Alt+T`): the compliance workbench — import the portal's 2A/2B
-  download (paste the adapter's JSON, preview first), walk the
-  reconciliation table with every state and reason named, read the ITC
-  both sides claim, and take the statutory PDFs (GSTR-1, 3B, 9, the
-  comparison) home. The Reports page gains the GSTR-3B summary, the
-  GSTR-9 scaffolding and the reconciliation with PDF export.
-- **The GSTR-2A/2B reconciliation**: the books' inward register (keyed on
-  the supplier's GSTIN and their own invoice number) against the imported
-  portal statement — matched / mismatched / missing-in-books /
-  missing-in-portal, magnitudes priced, every disagreement's reason
-  named, the ITC difference exact to the cent. Re-downloads are no-ops
-  when unchanged and new snapshots when the portal moved.
-- **GSTR-3B, the monthly summary's own statement**: outward intra/inter
-  and the eligible ITC netted of returns, the net payable — the ledger's
-  numbers or no numbers, with the not-captured heads (reverse charge,
-  exempt) named as blanks, never guessed.
-- **GSTR-9 scaffolding**: the year in twelve monthly folds plus the
-  annual totals (Table 4's outward, Table 6's ITC) — the portal-only
-  tables honestly left for the portal's own records.
-- **Credit & debit notes** are first-class document modes: a credit note
-  walks the sale backwards (same ledgers, opposite side) and nets every
-  outward figure; a debit note reverses the input credit. The GSTR-1
-  register names every document INV/CN/DN.
-- **Multi-GSTIN books**: a voucher's `supplier_gstin` segments every
-  statement; `?gstin=` scopes one registration of a company registered
-  in several states.
-- **The e-way-bill outbox** (the IRN pattern applied to movement): every
-  threshold-crossing document (₹50,000 by default, `LF_GST_EWB_THRESHOLD`
-  to move the line) queues a movement envelope after commit — with the
-  Part-B facts you captured at dispatch — and `lf-ewb-bridge` ships it to
-  your adapter: 2xx records the EWB number, 4xx parks, 5xx retries.
-
-## What's new underneath
-
-- Migration `0010_gst_2b` — the fourth core-schema change since 0006, by
-  the ADR-026 argument restated for the tax portal: `gst_downloads` +
-  `gst_download_lines`, INSERT-only, append-only, idempotent by
-  fingerprint. Old books upgrade in place (the smoke test proves the
-  migrate path on every build).
-- Plugin API **0.13**: `Resolver.gst_portal_lines(kind, period, gstin=)` —
-  the pack's fold input as a versioned, session-free read (the
-  `bank_lines` precedent). The kernel stays comparison-blind; the pack
-  decides what a portal row means.
-- The GST pack's statements are folds of the same registers GSTR-1
-  already used — a 3B that disagrees with the register is a bug, not a
-  rounding story. Credit/debit notes ride the same tax ledgers opposite
-  side; reversals still net.
-- The kernel seam (`gst_compliance.py`, `POST /api/v1/gst/portal/import`,
-  the receipts and lines feeds, the `gst.download.imported` event) never
-  talks to the GST portal itself — the operator's adapter translates, D3.
-
-## The plan, on the record
-
-The capability ledger's GST row flips to **parity** — landed in v0.25.0
-(Phase 7). Next: **Phase 8 — payroll depth** (attendance & leave
-documents, loans & advances with EMI recovery, full & final settlement,
-the payslip distribution seam — ADR-029, extends ADR-012).
-
----
-
-# LedgerForge 0.24.0 — inventory depth
-
-**Phase 6 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the stockroom, given a memory.** Batches remember their expiry, serial
-numbers remember their shelf, godowns remember what they hold — and the
-manufacturing journal remembers exactly what it cost to make. The
-comparison table's biggest gap closes at parity's depth, with valuation
-staying the moving weighted average ADR-011 promised.
-
-## What's new in the window
-
-- **The Inventory page** (native, `Alt+7`) and the **stock screen** on
-  the web (`Alt+V`): stock-item masters with their tracking modes and
-  re-order levels, the positions browser with the godown and batch
-  split, the BOM recipes — and the expiry ageing, re-order shortfall,
-  godown-wise and batch-wise reports one key away (`1`–`5`).
-- **Batches & expiry with FEFO**: every stock line may carry a batch and
-  its expiry (the first receipt fixes it); issues name their batch or
-  take FEFO — earliest expiry first, ties by batch name, the allocation
-  recorded in the document's `computed`. The expiry-ageing report
-  buckets every dated batch: expired, ≤30, ≤60, ≤90, >90 days.
-- **Serial numbers are identity**: one per unit; receiving a duplicate
-  is a data error; issuing a serial that sits at another godown or in
-  another batch is refused — a serial is one physical thing.
-- **Godowns are a first-class dimension** — a location key on movements
-  and positions, not another ledger: `(item, godown) → qty` in the fold,
-  and an issue cannot take what the location does not hold (the ADR-011
-  limitation, closed).
-- **Re-order levels and the shortfall report**; **price lists**
-  (per-party, date-effective) whose effective rate is annotated on
-  sales — suggestions never commit; the selling rate stays yours.
-- **The manufacturing journal**: consumes components at their moving
-  averages, adds your charge legs (wages, power, freight — anything
-  outside Stock-in-Hand), and produces the output at the rolled-up cost
-  — `output value = Σ components + Σ charges`, one exact amount. A named
-  BOM validates the recipe; without one, the explicit journal stands
-  alone. Every stock document prints as the physical document it is.
-
-## What's new underneath
-
-- **Migration `0009_stock_depth` (ADR-027)** — the third core-schema
-  change since the scale-out, by the ADR-025 argument restated for
-  master data: stock items, price lists and BOMs are masters that need
-  database identity (UNIQUE names per book, FK-validated components,
-  one rate per item/party/date slot). The **movements' depth stays in
-  the document fold** — ADR-011's extension, not its replacement: no
-  document rewrite, old books upgrade in place.
-- **Plugin API 0.12**: four stock-master reads on the `Resolver` —
-  `stock_item(name)`, `stock_items()`, `stock_bom(name)` (frozen
-  `StockItemMaster`/`StockBomMaster` snapshots) and
-  `stock_price(item, party, on)`. The ADR-011 floor keeps every older
-  pack loading.
-- **The tolerant replay**: positions fold ALL items together now (a
-  manufacture needs its components' states to cost its output), and a
-  replay of reversal-orphaned history applies the overdraw instead of
-  refusing the whole book — the position reports the orphan, the
-  posting guards stop new ones.
-- **Five pack reports over one fold** — `stock-position`,
-  `stock-godown`, `stock-batch`, `stock-expiry`, `stock-shortfall` —
-  each as PDF (the shared print-bridge layout), CSV and JSON: one
-  truth, every surface.
-- 11 kernel + 17 pack + 8 native + 4 web tests pin the depth: the
-  grammar's guards, FEFO's determinism, the manufacturing cost rollup's
-  exactness, reversal netting across every sub-ledger, and book
-  isolation. Migration 0009 is drift-guarded and independently
-  reversible; docs refreshed (README, ROADMAP, plugin guide, keyboard
-  guide, this file).
-
