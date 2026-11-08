@@ -116,6 +116,7 @@ Screens `push`/`pop` scopes; `Esc` pops the top; arrow keys move roving focus wi
 | `Alt+B` | `daybook.open` | gateway (ADR-015) |
 | `Alt+G` | `banking.open` | gateway (ADR-026 — statements, reconciliation, cheques) |
 | `Alt+V` | `inventory.open` | gateway (ADR-027 — stock depth: items, positions, BOMs; `Alt+N` is the voucher screen's new-draft and keeps it) |
+| `Alt+T` | `gst.open` | gateway (ADR-028 — GST compliance: 2A/2B import, the ITC reconciliation, 3B/9; `Alt+G` has belonged to banking since ADR-026, T for tax) |
 | `Alt+X` | `plugins.open` | gateway (ADR-016) |
 | `↑`/`↓`, `k`/`j` | `daybook.up` / `daybook.down` | daybookScreen, filters unfocused |
 | `Enter`, `Ctrl+P` | `daybook.print` | daybookScreen, filters unfocused |

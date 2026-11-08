@@ -6,7 +6,7 @@ Inspired by TallyPrime. The three financial laws (docs/analysis.md §7):
 3. All money is arbitrary-precision decimal — floating point is banned.
 """
 
-__version__ = "0.24.0"
+__version__ = "0.25.0"
 
 #: Version of the stable plugin API surface (semver; see docs/plugin-guide.md).
 #: 0.2 — DraftLine gained the optional FX snapshot fields
@@ -57,4 +57,10 @@ __version__ = "0.24.0"
 #:       price-list lookup) — the ledger/group discipline applied to stock
 #:       masters, so the inventory pack can enforce tracking modes and
 #:       validate recipes without ever touching the session.
-PLUGIN_API_VERSION = "0.12"
+#: 0.13 — the portal-download read (ADR-028):
+#:       ``Resolver.gst_portal_lines(kind, period, gstin=None)`` (the
+#:       latest-snapshot rows of one imported GSTR-2A/2B statement — the
+#:       GST pack’s reconciliation fold input, the ``bank_lines``
+#:       precedent of 0.11) — so the pack’s ITC comparison reads
+#:       stored facts through the versioned API, never the session.
+PLUGIN_API_VERSION = "0.13"

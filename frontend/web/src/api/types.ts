@@ -633,3 +633,77 @@ export interface StockShortfallReport {
     suggested_order: string;
   }[];
 }
+
+// ---- gst: portal downloads & the ITC reconciliation (ADR-028, Phase 7) ----
+
+/** One import receipt row of GET /gst/portal/downloads — the honest
+ * provenance of every portal-side figure the reconciliation shows. */
+export interface GstDownloadReceipt {
+  id: number;
+  /** The portal statement kind: '2b' (static, ITC-as-stated) or '2a'
+   * (auto-drafted from suppliers' GSTR-1). */
+  kind: '2a' | '2b';
+  /** The return period the statement covers (YYYY-MM). */
+  period: string;
+  /** The registrant whose statement this is (multi-GSTIN books). */
+  gstin: string;
+  source: string | null;
+  line_count: number;
+  imported_at: string | null;
+}
+
+/** What POST /gst/portal/import returns — the dry run previews it, the real
+ * import is the receipt the UIs show and the gst.download.imported event
+ * carries. */
+export interface GstImportReceipt {
+  kind: '2a' | '2b';
+  period: string;
+  gstin: string;
+  source: string | null;
+  parsed: number;
+  new: number;
+  duplicates: number;
+  /** The snapshot number of this (kind, period, gstin) import — the fold
+   * prefers the latest revision per document key (append-only, Law 2). */
+  revision: number;
+  dry_run: boolean;
+  batch_id?: number;
+}
+
+/** One comparison row of the gst-recon fold (ADR-028): every document lands
+ * in exactly one bucket — matched, mismatched, missing in books, missing in
+ * portal; the reason names the disagreement. Amounts are strings verbatim —
+ * the client never sums (Law 3). */
+export interface GstReconRow {
+  state: 'matched' | 'mismatched' | 'missing_books' | 'missing_portal';
+  supplier_gstin: string;
+  party: string;
+  doc_type: string;
+  doc_no: string;
+  doc_date: string;
+  books_taxable: string | null;
+  books_tax: string | null;
+  portal_taxable: string | null;
+  portal_tax: string | null;
+  reason: string;
+}
+
+/** GET /reports/pack/gst-recon?period=&kind=&gstin=&format=json — the books'
+ * inward register against the imported portal statement. */
+export interface GstReconData {
+  period: string;
+  kind: string;
+  gstin: string | null;
+  counts: { matched: number; mismatched: number; missing_books: number; missing_portal: number };
+  /** Inward documents without a supplier GSTIN or invoice number — counted,
+   * never guessed. */
+  unmatchable_books: number;
+  itc: {
+    books: string;
+    portal: string;
+    difference: string;
+    portal_ineligible_rows: number;
+    portal_ineligible_tax: string;
+  };
+  rows: GstReconRow[];
+}

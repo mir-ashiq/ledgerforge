@@ -1,4 +1,6 @@
-"""Reports — Trial Balance, P&L, Balance Sheet, FY-close, the GST pack,
+"""Reports — Trial Balance, P&L, Balance Sheet, FY-close, the GST pack
+(GSTR-1 plus the ADR-028 compliance fold: the 3B summary, the 2A/2B
+reconciliation, the GSTR-9 scaffolding),
 the bills pack's outstanding book (ADR-023: receivable/payable with
 ageing, the party ledger statement, interest on overdue bills), the
 orders pack's pending book (ADR-024: sales and purchase sides), and the
@@ -37,16 +39,20 @@ from .models import TrialBalanceRow, money
 from .tasks import run
 
 #: report id -> (label, needs) where needs ∈ {"as_of", "range", "period",
-#: "party_range", "centre_range"}: as_of = one date; range = from/to;
-#: period = YYYY-MM; party_range = a party (required) + an optional
-#: from/to window (ADR-023); centre_range = a cost centre name (required)
-#: + from/to (ADR-025).
+#: "party_range", "centre_range", "year"}: as_of = one date; range =
+#: from/to; period = YYYY-MM; party_range = a party (required) + an
+#: optional from/to window (ADR-023); centre_range = a cost centre name
+#: (required) + from/to (ADR-025); year = YYYY (the annual returns,
+#: ADR-028).
 REPORTS: dict[str, tuple[str, str]] = {
     "trial-balance": ("Trial Balance", "as_of"),
     "profit-loss": ("Profit & Loss", "range"),
     "balance-sheet": ("Balance Sheet", "as_of"),
     "fy-close": ("FY Close Preview", "as_of"),
     "gstr1": ("GSTR-1 (GST pack)", "period"),
+    "gstr3b": ("GSTR-3B Summary (GST pack)", "period"),
+    "gst-recon": ("GSTR-2A/2B Reconciliation (GST pack)", "period"),
+    "gstr9": ("GSTR-9 Scaffolding (GST pack)", "year"),
     "bills-receivable": ("Bills Receivable (ageing)", "as_of"),
     "bills-payable": ("Bills Payable (ageing)", "as_of"),
     "ledger-statement": ("Party Ledger Statement", "party_range"),
@@ -61,6 +67,9 @@ REPORTS: dict[str, tuple[str, str]] = {
 #: the pack keys whose PDF view "Save PDF…" offers (the statutory print).
 PDF_PACKS = {
     "gstr1",
+    "gstr3b",
+    "gst-recon",
+    "gstr9",
     "bills-receivable",
     "bills-payable",
     "ledger-statement",
@@ -118,6 +127,12 @@ class ReportsPage(QWidget):
         self.period_edit.setPlaceholderText("e.g. 2026-10")
         bar.addWidget(self.period_label)
         bar.addWidget(self.period_edit)
+
+        self.year_label = QLabel("year (YYYY)")
+        self.year_edit = QLineEdit()
+        self.year_edit.setPlaceholderText("e.g. 2026")
+        bar.addWidget(self.year_label)
+        bar.addWidget(self.year_edit)
 
         self.party_label = QLabel("party")
         self.party_edit = QLineEdit()
@@ -180,6 +195,8 @@ class ReportsPage(QWidget):
         self.date_to.setVisible(needs in ("range", "party_range", "centre_range"))
         self.period_label.setVisible(needs == "period")
         self.period_edit.setVisible(needs == "period")
+        self.year_label.setVisible(needs == "year")
+        self.year_edit.setVisible(needs == "year")
         self.party_label.setVisible(needs == "party_range")
         self.party_edit.setVisible(needs == "party_range")
         self.centre_label.setVisible(needs == "centre_range")
@@ -195,6 +212,9 @@ class ReportsPage(QWidget):
             "balance-sheet": self._load_balance_sheet,
             "fy-close": self._load_fy_close,
             "gstr1": self._load_gstr1,
+            "gstr3b": self._load_gstr3b,
+            "gst-recon": self._load_gst_recon,
+            "gstr9": self._load_gstr9,
             "bills-receivable": self._load_bills,
             "bills-payable": self._load_bills,
             "ledger-statement": self._load_statement,
@@ -234,6 +254,24 @@ class ReportsPage(QWidget):
         if len(period) != 7 or period[4] != "-":
             raise ValueError("GSTR-1 needs a period like 2026-10 (YYYY-MM).")
         return lambda: self._client.pack("gstr1", period=period, format_="csv")
+
+    def _load_gstr3b(self):
+        period = self.period_edit.text().strip()
+        if len(period) != 7 or period[4] != "-":
+            raise ValueError("GSTR-3B needs a period like 2026-10 (YYYY-MM).")
+        return lambda: self._client.pack("gstr3b", period=period, format_="csv")
+
+    def _load_gst_recon(self):
+        period = self.period_edit.text().strip()
+        if len(period) != 7 or period[4] != "-":
+            raise ValueError("The reconciliation needs a period like 2026-10 (YYYY-MM).")
+        return lambda: self._client.pack("gst-recon", period=period, format_="csv")
+
+    def _load_gstr9(self):
+        year = self.year_edit.text().strip()
+        if len(year) != 4 or not year.isdigit():
+            raise ValueError("GSTR-9 needs a year like 2026 (YYYY).")
+        return lambda: self._client.pack("gstr9", period=year, format_="csv")
 
     def _load_bills(self):
         key = self.report_box.currentData()  # bills-receivable | bills-payable
@@ -570,9 +608,10 @@ class ReportsPage(QWidget):
         if key not in PDF_PACKS:
             return
         params = {}
-        if key == "gstr1":
-            period = self.period_edit.text().strip()
-            params = {"period": period}
+        if key in ("gstr1", "gstr3b", "gst-recon"):
+            params = {"period": self.period_edit.text().strip()}
+        elif key == "gstr9":
+            params = {"period": self.year_edit.text().strip()}
         elif key == "ledger-statement":
             party = self.party_edit.text().strip()
             if not party:

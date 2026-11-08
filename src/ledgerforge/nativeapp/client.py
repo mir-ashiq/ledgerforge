@@ -248,6 +248,18 @@ class ApiClient:
             payload["opening_balance"] = opening_balance
         return self._post(f"/api/v1/banking/{ledger_id}/statements", payload)
 
+    def gst_import(self, text: str, *, source: str | None = None, dry_run: bool = False) -> dict:
+        """Import one GST portal download (GSTR-2A/2B, ADR-028) — validated,
+        idempotent; ``dry_run`` is the preview."""
+        payload: dict = {"text": text, "dry_run": dry_run}
+        if source:
+            payload["source"] = source
+        return self._post("/api/v1/gst/portal/import", payload)
+
+    def gst_downloads(self) -> list[dict]:
+        """Every portal-download receipt, newest first (ADR-028)."""
+        return self._get("/api/v1/gst/portal/downloads").get("downloads", [])
+
     def bank_lines(self, ledger_id: int, status: str = "all") -> dict:
         """The statement line book with live-match state (ADR-026)."""
         return self._get(f"/api/v1/banking/{ledger_id}/lines", status=status)

@@ -919,3 +919,25 @@ body {
 .banking-cheques .hint {
   margin-top: 0.5rem;
 }
+
+/* ---- gst compliance screen (ADR-028, Phase 7) ---------------------------- */
+.gst-area {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem 1rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.gst-area .hint {
+  margin: 0.25rem 0 0;
+}
+
+.gst-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}

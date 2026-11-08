@@ -353,6 +353,29 @@ Design: [ADR-027](docs/adr/027-inventory-depth.md) (extends
 [ADR-011](docs/adr/011-inventory-pack.md)),
 [plugin guide](docs/plugin-guide.md).
 
+## GST compliance depth: the 2A/2B reconciliation, GSTR-3B/9, e-way bills (v0.25, ADR-028)
+
+The tax month, closed end to end. Import the portal's GSTR-2A/2B download
+(the operator adapter's `lf-gst-2b/1` JSON — all-or-nothing, idempotent;
+a changed re-download lands as a new snapshot, never an edit), and the
+reconciliation prices every document: matched, mismatched (the reason
+named), missing in books, missing in portal — the ITC both sides claim,
+exact to the cent.
+
+- **Credit & debit notes** are document modes now: a credit note walks the
+  sale backwards on the same ledgers and nets every outward figure; a
+  debit note reverses the input credit. GSTR-1 names every document
+  INV/CN/DN.
+- **Multi-GSTIN**: `supplier_gstin` on the voucher, `?gstin=` on every
+  statement — one book, several registrations, each statement scoped.
+- **GSTR-3B** (outward, eligible ITC, net payable — the ledger's numbers
+  or no numbers) and **GSTR-9** (twelve monthly folds + the annual
+  totals, the portal-only tables honestly left to the portal).
+- **The e-way-bill outbox**: threshold-crossing documents queue a
+  movement envelope after commit (₹50,000 default, Part-B facts riding),
+  `lf-ewb-bridge` ships it to your adapter — the IRN discipline, applied
+  to movement.
+
 ## Payroll (roadmap §9, ADR-012)
 
 The third business pack — the second in a row with **zero schema change**,
@@ -1101,7 +1124,9 @@ SMB's daily accounting needs, on LedgerForge, without wishing for
 TallyPrime”** — Phase 1 landed in v0.19.0, Phase 2 (bill-wise &
 outstanding) in v0.20.0, Phase 3 (order processing) in v0.21.0, Phase 4
 (cost centres) in v0.22.0, Phase 5 (the banking pack) in v0.23.0, and
-Phase 6 (inventory depth) in v0.24.0. Each phase tracks as a GitHub
+Phase 6 (inventory depth) in v0.24.0. **v0.25, GST compliance depth** —
+the 2A/2B reconciliation, GSTR-3B/9, credit/debit notes, multi-GSTIN and
+the e-way-bill outbox (Phase 7, ADR-028). Each phase tracks as a GitHub
 milestone with a tracking issue:
 
 - [x] React voucher grid + ledger picker on `keyboard-kit` ([frontend/web](frontend/web))
@@ -1203,6 +1228,7 @@ milestone with a tracking issue:
   rollup — the depth stays in the document fold (ADR-011's extension);
   the masters get migration `0009_stock_depth` (plugin API 0.12: the
   stock-master reads on the Resolver).
+- [x] The GST compliance depth (v0.25, Phase 7, ADR-028): 2A/2B ITC reconciliation, GSTR-3B/9, credit/debit notes, multi-GSTIN, the e-way-bill outbox + bridge
 
 ## Contributing
 

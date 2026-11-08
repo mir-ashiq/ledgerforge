@@ -22,6 +22,9 @@ import type {
   CostCentreSummaryOut,
   FyCloseReportOut,
   GroupOut,
+  GstDownloadReceipt,
+  GstImportReceipt,
+  GstReconData,
   LedgerOut,
   OpenBillsOut,
   OutstandingReport,
@@ -344,4 +347,33 @@ export const api = {
     if (status) params.set('status', status);
     return request<BankChequeRegister>(`/reports/pack/banking-cheques?${params.toString()}`);
   },
+
+  // ---- gst: portal downloads & the ITC reconciliation (ADR-028) ----------
+  /** Import one GST portal download (GSTR-2A/2B) — the operator's adapter
+   *  already translated the portal file to the lf-gst-2a/1 / lf-gst-2b/1
+   *  contract; validated all-or-nothing, idempotent by content fingerprint.
+   *  dryRun is the preview (the receipt is the answer either way). */
+  gstImport: (text: string, source?: string, dryRun = false) =>
+    request<GstImportReceipt>('/gst/portal/import', {
+      method: 'POST',
+      body: JSON.stringify({ text, source, dry_run: dryRun }),
+    }),
+  /** Every portal-download receipt, newest first — the downloads table's
+   *  feed, the honest provenance of every portal-side figure. */
+  gstDownloads: async (): Promise<GstDownloadReceipt[]> =>
+    (await request<{ downloads: GstDownloadReceipt[] }>('/gst/portal/downloads')).downloads,
+  /** The ITC reconciliation fold (ADR-028): the books' inward B2B register
+   *  against the imported portal statement — the gst-recon pack report's
+   *  JSON, the same rows the PDF renders. */
+  gstRecon: (period: string, kind: '2a' | '2b' = '2b', gstin?: string) => {
+    const params = new URLSearchParams({ period, kind });
+    if (gstin) params.set('gstin', gstin);
+    params.set('format', 'json');
+    return request<GstReconData>(`/reports/pack/gst-recon?${params.toString()}`);
+  },
+  /** A pack report's PDF as a blob — fetched so the X-Book-Id header
+   *  travels (a plain window.open could never carry it), then handed to a
+   *  browser tab; the payslip precedent. */
+  packPdf: (key: string, params: Record<string, string> = {}) =>
+    requestBlob(`/reports/pack/${key}?${new URLSearchParams(params).toString()}`),
 };

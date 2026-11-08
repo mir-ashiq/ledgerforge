@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from .. import PLUGIN_API_VERSION
 from ..banking import BankLineRow
 from ..errors import ValidationError
+from ..gst_compliance import PortalLine as PortalLineRow
 from ..models import Book, Group, Ledger, Voucher, VoucherEntry, VoucherType
 from .trust import (
     TrustError,
@@ -584,6 +585,20 @@ class Resolver:
         from ..banking import bank_lines as _bank_lines
 
         return _bank_lines(self._session, book=self._book, ledger_id=ledger_id)
+
+    def gst_portal_lines(
+        self, kind: str, period: str, gstin: str | None = None
+    ) -> list[PortalLineRow]:
+        """The latest-snapshot rows of one imported GSTR-2A/2B statement
+        (plugin API 0.13, ADR-028) — the GST pack's reconciliation fold
+        input: the ITC comparison reads the stored portal facts through
+        this versioned read, never the session. Book-scoped like every
+        Resolver read: another book's statement answers empty."""
+        from ..gst_compliance import portal_lines as _portal_lines
+
+        return _portal_lines(
+            self._session, book=self._book, kind=kind, period=period, gstin=gstin
+        )
 
     # ------------------------------------------- stock masters (API 0.12)
     def stock_item(self, *, name: str) -> StockItemMaster | None:

@@ -5,7 +5,8 @@
  * switching and the command palette. Screens: VoucherScreen (entry),
  * PayslipScreen (ADR-013), DaybookScreen (ADR-015), PluginsScreen (ADR-016),
  * SlotsScreen (ADR-019), BooksScreen and PeriodsScreen (Phase 1),
- * BankingScreen (Phase 5 / ADR-026), InventoryScreen (Phase 6 / ADR-027).
+ * BankingScreen (Phase 5 / ADR-026), InventoryScreen (Phase 6 / ADR-027),
+ * GstScreen (Phase 7 / ADR-028).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,6 +18,7 @@ import { InventoryScreen } from './components/InventoryScreen';
 import { BooksScreen } from './components/BooksScreen';
 import { CommandPalette } from './components/CommandPalette';
 import { DaybookScreen } from './components/DaybookScreen';
+import { GstScreen } from './components/GstScreen';
 import { OutstandingsScreen } from './components/OutstandingsScreen';
 import { PayslipScreen } from './components/PayslipScreen';
 import { PeriodsScreen } from './components/PeriodsScreen';
@@ -35,7 +37,8 @@ type Screen =
   | 'periods'
   | 'outstandings'
   | 'banking'
-  | 'inventory';
+  | 'inventory'
+  | 'gst';
 
 /** Where the remembered book id lives between launches. */
 const ACTIVE_BOOK_KEY = 'lf.activeBook';
@@ -189,6 +192,16 @@ export default function App() {
     },
     'Alt+V',
   );
+  // the GST compliance screen (Phase 7 / ADR-028): Alt+T opens (T for tax),
+  // Esc is back
+  useCommand(
+    {
+      id: 'gst.open',
+      title: 'GST compliance — import 2A/2B & reconcile ITC',
+      run: () => setScreen('gst'),
+    },
+    'Alt+T',
+  );
 
   return (
     <>
@@ -223,6 +236,8 @@ export default function App() {
         <BankingScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : screen === 'inventory' ? (
         <InventoryScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
+      ) : screen === 'gst' ? (
+        <GstScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       ) : (
         <SlotsScreen onExit={() => setScreen('voucher')} ctxRef={ctxRef} />
       )}

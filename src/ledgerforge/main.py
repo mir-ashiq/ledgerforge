@@ -16,6 +16,7 @@ from .api import (
     auth,
     banking,
     books,
+    gst,
     inventory,
     masters,
     ops,
@@ -108,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(ops.router, prefix="/api/v1")
     app.include_router(inventory.router, prefix="/api/v1")
     app.include_router(banking.router, prefix="/api/v1")
+    app.include_router(gst.router, prefix="/api/v1")
     app.include_router(plugins.hooks_router, prefix="/api/v1")
 
     @app.get("/health", tags=["meta"])

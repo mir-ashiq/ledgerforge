@@ -426,3 +426,53 @@ class StockBomLine(Base):
         ForeignKey("stock_items.id", ondelete="RESTRICT")
     )
     qty_per_output: Mapped[Decimal]
+
+
+class GstDownload(Base):
+    """One GST portal download's receipt (ADR-028, migration 0010): the
+    return kind ('2a'/'2b'), the period it covers, the registrant GSTIN it
+    belongs to (multi-GSTIN books download one file per registration), the
+    source label and the line count. Append-only — a receipt is history
+    the moment the import lands, exactly the bank-statement discipline."""
+
+    __tablename__ = "gst_downloads"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    kind: Mapped[str] = mapped_column(Text, CheckConstraint("kind IN ('2a', '2b')"))
+    period: Mapped[str] = mapped_column(Text)
+    gstin: Mapped[str] = mapped_column(Text)
+    source: Mapped[str | None]
+    line_count: Mapped[int] = mapped_column(default=0)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)
+
+
+class GstDownloadLine(Base):
+    """One downloaded portal row (ADR-028, migration 0010): a supplier's
+    document as the portal states it — GSTIN, type (INV invoice / CN the
+    supplier's credit note / DN their debit note), number, date, taxable
+    value, the IGST/CGST/SGST split, place of supply and the portal's own
+    ITC-eligibility verdict. ``fingerprint`` is the content identity
+    (kind, period, supplier GSTIN, type, number, occurrence-within-file):
+    UNIQUE (book_id, fingerprint) makes re-downloading the same period a
+    clean no-op while two suppliers' look-alike documents both survive.
+    Append-only, trigger-guarded; interpretation is the GST pack's fold."""
+
+    __tablename__ = "gst_download_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id"))
+    batch_id: Mapped[int] = mapped_column(ForeignKey("gst_downloads.id", ondelete="RESTRICT"))
+    supplier_gstin: Mapped[str] = mapped_column(Text)
+    party: Mapped[str | None]
+    doc_type: Mapped[str] = mapped_column(Text, CheckConstraint("doc_type IN ('INV', 'CN', 'DN')"))
+    doc_no: Mapped[str] = mapped_column(Text)
+    doc_date: Mapped[date] = mapped_column(Date)
+    taxable: Mapped[Decimal]
+    igst: Mapped[Decimal] = mapped_column(default=Decimal(0))
+    cgst: Mapped[Decimal] = mapped_column(default=Decimal(0))
+    sgst: Mapped[Decimal] = mapped_column(default=Decimal(0))
+    pos: Mapped[str | None]
+    itc_available: Mapped[bool] = mapped_column(default=True)
+    fingerprint: Mapped[str] = mapped_column(Text)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), **NOW_DEFAULT)

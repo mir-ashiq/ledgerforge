@@ -482,18 +482,19 @@ def test_gstr1_b2b_register(demo):
     # PERIOD's B2B rows: Chennai Traders alone — Madras Machines was
     # reversed, Walk-in is B2C, the purchase is inward, quick-tax has no
     # party facts
-    chennai = next(row for row in data if row[1] == "Chennai Traders")
-    assert chennai[0] == KA_GSTIN
-    assert chennai[3] == date.today().isoformat()
-    assert chennai[4] == "29"  # place of supply
-    assert chennai[5] == "18+5+0"  # slabs in first-appearance order
+    chennai = next(row for row in data if row[2] == "Chennai Traders")
+    assert chennai[1] == KA_GSTIN
+    assert chennai[0] == "INV"  # the register names its documents
+    assert chennai[4] == date.today().isoformat()
+    assert chennai[5] == "29"  # place of supply
+    assert chennai[6] == "18+5+0"  # slabs in first-appearance order
     # taxable: pins 1,000 + palm oil 500 + books 597 = 2,097.00
-    assert chennai[6] == "2097.00"
+    assert chennai[7] == "2097.00"
     # intra: CGST = SGST = 90.00 + 12.50 + 0.00 = 102.50, IGST 0
-    assert chennai[7] == "102.50"
     assert chennai[8] == "102.50"
-    assert chennai[9] == "0.00"
-    assert {row[1] for row in data} == {"Chennai Traders"}
+    assert chennai[9] == "102.50"
+    assert chennai[10] == "0.00"
+    assert {row[2] for row in data} == {"Chennai Traders"}
 
     # the response is the machine format: attachment, text/csv
     r = demo.get(
@@ -562,11 +563,11 @@ def test_statements_net_reversals(demo):
     )
     assert r.status_code == 201, r.text
     vid = r.json()["id"]
-    assert any(row[1] == "Doomed Traders" for row in gstr1_rows(demo, PERIOD)[1:])
+    assert any(row[2] == "Doomed Traders" for row in gstr1_rows(demo, PERIOD)[1:])
 
     rev = demo.post(f"/api/v1/vouchers/{vid}/reverse", headers=default_headers(demo))
     assert rev.status_code == 201, rev.text
-    assert not any(row[1] == "Doomed Traders" for row in gstr1_rows(demo, PERIOD)[1:])
+    assert not any(row[2] == "Doomed Traders" for row in gstr1_rows(demo, PERIOD)[1:])
     # the HSN summary no longer carries the 500.00 of taxable value
     outward = {row[1]: row for row in hsn_rows(demo, PERIOD)[1:]}
     assert outward["7317"][5] == "1090.00"
@@ -630,8 +631,8 @@ def test_books_are_strangers(demo):
     assert r.status_code == 201, r.text
 
     # the default book, pinned via header — Helios' 999.00 never leaks
-    chennai = next(row for row in gstr1_rows(demo, PERIOD)[1:] if row[1] == "Chennai Traders")
-    assert chennai[6] == "2097.00"
+    chennai = next(row for row in gstr1_rows(demo, PERIOD)[1:] if row[2] == "Chennai Traders")
+    assert chennai[7] == "2097.00"
 
 
 # ------------------------------------------------------------ the IRN outbox

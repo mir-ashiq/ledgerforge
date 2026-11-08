@@ -1,3 +1,75 @@
+# LedgerForge 0.25.0 — GST compliance depth
+
+**Phase 7 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
+the tax month, closed end to end.** The books and the portal finally sit
+at the same table: the GSTR-2A/2B download imports as facts, the
+reconciliation prices every matched, mismatched and missing document —
+and the 3B, the 9 and the e-way-bill outbox join the GSTR-1 register on
+the same folds (ADR-028, extends ADR-017).
+
+## What's new in the window
+
+- **The GST page** (native, `Alt+6`) and the **GST screen** on the web
+  (`Alt+T`): the compliance workbench — import the portal's 2A/2B
+  download (paste the adapter's JSON, preview first), walk the
+  reconciliation table with every state and reason named, read the ITC
+  both sides claim, and take the statutory PDFs (GSTR-1, 3B, 9, the
+  comparison) home. The Reports page gains the GSTR-3B summary, the
+  GSTR-9 scaffolding and the reconciliation with PDF export.
+- **The GSTR-2A/2B reconciliation**: the books' inward register (keyed on
+  the supplier's GSTIN and their own invoice number) against the imported
+  portal statement — matched / mismatched / missing-in-books /
+  missing-in-portal, magnitudes priced, every disagreement's reason
+  named, the ITC difference exact to the cent. Re-downloads are no-ops
+  when unchanged and new snapshots when the portal moved.
+- **GSTR-3B, the monthly summary's own statement**: outward intra/inter
+  and the eligible ITC netted of returns, the net payable — the ledger's
+  numbers or no numbers, with the not-captured heads (reverse charge,
+  exempt) named as blanks, never guessed.
+- **GSTR-9 scaffolding**: the year in twelve monthly folds plus the
+  annual totals (Table 4's outward, Table 6's ITC) — the portal-only
+  tables honestly left for the portal's own records.
+- **Credit & debit notes** are first-class document modes: a credit note
+  walks the sale backwards (same ledgers, opposite side) and nets every
+  outward figure; a debit note reverses the input credit. The GSTR-1
+  register names every document INV/CN/DN.
+- **Multi-GSTIN books**: a voucher's `supplier_gstin` segments every
+  statement; `?gstin=` scopes one registration of a company registered
+  in several states.
+- **The e-way-bill outbox** (the IRN pattern applied to movement): every
+  threshold-crossing document (₹50,000 by default, `LF_GST_EWB_THRESHOLD`
+  to move the line) queues a movement envelope after commit — with the
+  Part-B facts you captured at dispatch — and `lf-ewb-bridge` ships it to
+  your adapter: 2xx records the EWB number, 4xx parks, 5xx retries.
+
+## What's new underneath
+
+- Migration `0010_gst_2b` — the fourth core-schema change since 0006, by
+  the ADR-026 argument restated for the tax portal: `gst_downloads` +
+  `gst_download_lines`, INSERT-only, append-only, idempotent by
+  fingerprint. Old books upgrade in place (the smoke test proves the
+  migrate path on every build).
+- Plugin API **0.13**: `Resolver.gst_portal_lines(kind, period, gstin=)` —
+  the pack's fold input as a versioned, session-free read (the
+  `bank_lines` precedent). The kernel stays comparison-blind; the pack
+  decides what a portal row means.
+- The GST pack's statements are folds of the same registers GSTR-1
+  already used — a 3B that disagrees with the register is a bug, not a
+  rounding story. Credit/debit notes ride the same tax ledgers opposite
+  side; reversals still net.
+- The kernel seam (`gst_compliance.py`, `POST /api/v1/gst/portal/import`,
+  the receipts and lines feeds, the `gst.download.imported` event) never
+  talks to the GST portal itself — the operator's adapter translates, D3.
+
+## The plan, on the record
+
+The capability ledger's GST row flips to **parity** — landed in v0.25.0
+(Phase 7). Next: **Phase 8 — payroll depth** (attendance & leave
+documents, loans & advances with EMI recovery, full & final settlement,
+the payslip distribution seam — ADR-029, extends ADR-012).
+
+---
+
 # LedgerForge 0.24.0 — inventory depth
 
 **Phase 6 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
@@ -151,83 +223,6 @@ Phase 5 (the banking pack) in this release; Phase 6 is **inventory depth**
 - Your data stays where it was: `%LOCALAPPDATA%\LedgerForge` (or your
   `--data-dir`). v0.22 books open in v0.23 after a one-time automatic
   migration (0008 — three new tables only; the migrate path the smoke test
-  proves on every build).
-- The engine runs in its own process (ADR-022): the window cannot crash
-  your books, and the books cannot crash the window.
-
----
-
-# LedgerForge 0.22.0 — cost centres & cost categories
-
-**Phase 4 of the [v1.0 roadmap](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md):
-the break-up, closed.** Where did this money go, and along which axis? A
-rent line splits across branches; a salary line across departments; the
-break-up report rolls those splits up trees. TallyPrime users have lived in
-cost centres for thirty years — LedgerForge now runs them as **the first
-core-database change since the scale-out revision** (migration 0007),
-because allocations must aggregate with the same rigour as the entries they
-split.
-
-## What's new in the window
-
-- **Cost centres… (Ctrl+K) on the voucher form, Alt+K on the web.** Every
-  complete line with its allocated-so-far and its remainder — *always
-  visible* — and a split editor for the picked line: one row per centre,
-  exact arithmetic. A line is **fully allocated or left unallocated**; a
-  partial split cannot be armed, and the engine re-proves every split at
-  posting time. Create a centre inline (name, parent, category) without
-  leaving the entry flow.
-- **Masters grows two tabs.** *Cost Centres* (the allocation tree — every
-  centre answers to exactly one category) and *Cost Categories* (the
-  classification axes: Department, Location, Project…), with create
-  dialogs and the same cycle/root protection as the chart of accounts.
-- **Three new reports:** *Cost Centre Summary* (each centre carries its
-  whole subtree; the **Unallocated** mass is always shown — allocated +
-  unallocated is the window's whole entry mass), *Cost Centre Break-up*
-  (one centre, ledger by ledger, total proven against the rows), and
-  *Cost Category Summary* (a primary category carries its secondaries).
-  Tree-nested, CSV-exportable, FYC sweeps excluded.
-
-## What's new underneath
-
-- **The allocation store is core schema** (ADR-025, migration 0007):
-  `cost_centres` and `cost_categories` as adjacency+closure trees (the
-  chart-of-accounts machinery), and `cost_allocations` — one row per
-  (voucher entry, centre, amount), Dr/Cr preserved from the entry, exact
-  decimals, append-only like the entries they split.
-- **The conservation law, database-enforced like Law 1.** An entry's
-  allocations sum to its amount *exactly* — a deferrable constraint
-  trigger proves it at commit, the same discipline that proves debits
-  equal credits. Nothing partial ever survives a refused posting.
-- **Both shapes of the entry table.** The scale-out partition conversion
-  (ADR-018) and the new allocation→entry foreign key cooperate: the FK
-  rides the plain shape, the insert-time trigger keeps every guarantee on
-  the partitioned shape, and unpartitioning restores the FK.
-- **Reversals mirror the splits** — same centres, same amounts, the
-  flipped side riding the flipped line — so a reversed voucher walks every
-  centre's net back to exactly zero. Plugin API 0.10: packs that split
-  lines now see and must carry `DraftLine.cost_allocations`.
-
-## The plan, on the record
-
-Eleven phases to v1.0 — **"everything an Indian SMB's daily accounting
-needs, on LedgerForge, without wishing for TallyPrime"** — tracked as
-[ROADMAP.md](https://github.com/mir-ashiq/ledgerforge/blob/main/ROADMAP.md)
-with one GitHub milestone per phase. Phase 1 (the completeness pass) landed
-in v0.19.0, Phase 2 (bill-wise & outstanding) in v0.20.0, Phase 3 (order
-processing) in v0.21.0, Phase 4 (cost centres & categories) in this
-release; Phase 5 is **the banking pack** (bank reconciliation, cheque
-management).
-
-## What's underneath (unchanged, and that's the point)
-
-- Embedded PostgreSQL, append-only history, exact decimals — every law
-  enforced at the application and database layers. The native window is an
-  API client: zero business logic in the GUI, one engine for web, Docker
-  and desktop.
-- Your data stays where it was: `%LOCALAPPDATA%\LedgerForge` (or your
-  `--data-dir`). v0.21 books open in v0.22 after a one-time automatic
-  migration (0007 — new tables only; the migrate path the smoke test
   proves on every build).
 - The engine runs in its own process (ADR-022): the window cannot crash
   your books, and the books cannot crash the window.

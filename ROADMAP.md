@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.24.0** |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.25.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -31,12 +31,16 @@ is fully landed:
   (quotation/SO/DN/PO/GRN, position fold, pending reports — ADR-024, v0.21), banking
   (statements, reconciliation proof, cheques — ADR-026, v0.23), inventory (ADR-011's
   weighted-average fold, grown to depth in v0.24: batches/serials/expiry with FEFO,
-  godowns, re-order + shortfall, price lists, the manufacturing journal — ADR-027).
+  godowns, re-order + shortfall, price lists, the manufacturing journal — ADR-027),
+  GST grown to compliance depth in v0.25: credit/debit notes netting every
+  statement, multi-GSTIN scoping, GSTR-3B/9, the 2A/2B ITC reconciliation
+  against imported portal downloads, the e-way-bill outbox + bridge — ADR-028).
 - **Surfaces**: keyboard-first web UI (command palette, rebindable Tally keymap, sandboxed
   plugin slots), native Windows application (ADR-022: a Qt window over an embedded
   PostgreSQL — no browser; the Orders page and document pickers joined in v0.21, the
   cost split dialog and masters tabs in v0.22, the Banking page and web banking screen
-  in v0.23, the Inventory page and web stock screen in v0.24), CLI,
+  in v0.23, the Inventory page and web stock screen in v0.24, the GST page and
+  web compliance screen in v0.25), CLI,
   REST API, dependency-free PDF printing.
 - **Trust**: signed community plugin distribution with the curator index, Ed25519
   signatures, operator acknowledgement.
@@ -71,7 +75,7 @@ subscriptions for updates and remote services.
 | Orders (quote/SO/PO/GRN) | ✔ | ✔ (ADR-024) | **parity** — landed in v0.21.0 (Phase 3) |
 | Cost centres | ✔ | ✔ (ADR-025) | **parity** — landed in v0.22.0 (Phase 4) |
 | Banking, BRS, cheques | ✔ (incl. connected banking) | ✔ (ADR-026) | **parity** — landed in v0.23.0 (Phase 5); per-bank connected-banking APIs stay plugin-side by design (D3) |
-| GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox | **partial** (Phase 7) |
+| GST | ✔ (GSTR-1/2A/2B/3B/9, e-way, e-invoice) | GSTR-1, HSN summary, IRN outbox, 2A/2B recon, 3B, 9, notes, multi-GSTIN, e-way outbox (ADR-028) | **parity** — landed in v0.25.0 (Phase 7); reverse-charge and set-off stay honestly blank, portal adapters stay plugin-side (D3) |
 | Payroll | ✔ (attendance, loans, F&F) | runs, YTD, payslips, PF/ESI/TDS | **partial** (Phase 8) |
 | Bill-wise & outstanding, ageing, interest | ✔ | ✔ (ADR-023) | **parity** — landed in v0.20.0 (Phase 2) |
 | Data exchange | ✔ Excel/CSV/TDL/XML | JSON REST API only | **gap** (Phase 9 — incl. the Tally migration path) |
@@ -80,10 +84,11 @@ subscriptions for updates and remote services.
 | Price | ₹22,500+ per seat | AGPL-3.0, free forever | **LedgerForge leads** |
 
 The honest summary: **the accounting core is at parity** — bill-wise, orders, cost
-centres, banking and inventory depth all landed (v0.20–v0.24). What remains is compliance
-depth (GST returns, payroll depth), the data-exchange path (imports and the Tally
-migration), and distribution polish (signing, auto-update). That is exactly what the
-remaining phases below deliver, in dependency order.
+centres, banking, inventory and GST compliance depth all landed (v0.20–v0.25). What
+remains toward v1.0 is payroll depth (attendance, loans, F&F), the data-exchange
+path (imports and the Tally migration), distribution hardening (signing,
+auto-update), and the v1.0 parity release itself (Phases 8–11). That is exactly
+what the remaining phases below deliver, in dependency order.
 
 ---
 
@@ -175,7 +180,7 @@ database, not in `meta`.
 - Manufacturing: BOM definitions and manufacturing journal documents (the pack's most
   ambitious fold — cost rollup from components at their moving averages).
 
-### Phase 7 — v0.25.0 · GST compliance depth *(ADR-028, extends ADR-017)*
+### Phase 7 — v0.25.0 · GST compliance depth *(ADR-028, extends ADR-017 — landed in v0.25.0)*
 
 - **GSTR-2A/2B comparison**: supplier-purchase register vs the portal download, an ITC
   reconciliation report (matched / mismatched / missing-in-books / missing-in-portal).
@@ -246,4 +251,4 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-08, at the close of Phase 5.*
+code. Last revisited: 2026-11-08, at the close of Phase 7.*

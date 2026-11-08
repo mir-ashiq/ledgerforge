@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ledgerforge"
-version = "0.24.0"
+version = "0.25.0"
 description = "Community-driven, keyboard-first, double-entry business management engine — inspired by TallyPrime"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -69,6 +69,7 @@ ledgerforge = "ledgerforge.__main__:main"
 ledgerforge-desktop = "ledgerforge.desktop:main"
 ledgerforge-native = "ledgerforge.nativeapp:main"
 lf-irn-bridge = "ledgerforge.contrib.irn_bridge:main"
+lf-ewb-bridge = "ledgerforge.contrib.ewb_bridge:main"
 
 [project.entry-points."ledgerforge.plugins"]
 banking = "ledgerforge.contrib.banking"

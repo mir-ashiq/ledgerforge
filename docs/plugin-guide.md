@@ -208,6 +208,35 @@ inventory pack is the worked example: it enforces the tracking modes on
 named BOM, entirely through these handles. The API floor (ADR-011) keeps
 every older pack loading unchanged.
 
+## Reading the GST portal downloads (API 0.13, ADR-028)
+
+The GST pack's reconciliation compares the books' inward register against
+a downloaded GSTR-2A/2B statement — external facts the kernel stores
+(migration `0010`, the banking precedent) and serves to packs through one
+versioned read:
+
+```python
+def register(registry) -> None:
+    registry.register_report("gst-recon", recon_report)
+
+
+def recon_report(resolver, params):
+    period = params["period"]  # YYYY-MM
+    kind = params.get("kind", "2b")  # or "2a"
+    gstin = params.get("gstin") or None  # one registration, or all
+    portal_rows = resolver.gst_portal_lines(kind, period, gstin)
+    ...
+```
+
+`gst_portal_lines` returns frozen `PortalLine` snapshots — the latest
+imported snapshot per registration, exact `Decimal` amounts as stored,
+book-scoped like every Resolver read (another book's statement answers
+empty). The kernel stays comparison-blind: it stores and folds portal
+facts; the pack decides what a row means. Importing is a bookkeeper API
+(`POST /api/v1/gst/portal/import`, the `lf-gst-2a/1` / `lf-gst-2b/1`
+adapter contract, all-or-nothing, idempotent by fingerprint) — never a
+pack concern.
+
 ## Cost allocations ride the draft (API 0.10, ADR-025)
 
 Cost-centre splits are **core schema** (migration 0007), not a pack document
