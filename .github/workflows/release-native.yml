@@ -87,17 +87,23 @@ jobs:
           set -euo pipefail
           FW=dist/LedgerForge.app/Contents/Frameworks/psycopg_binary
           ls -la "$FW"
+          # Xcode 26's install_name_tool refuses to touch signed chained-fixup
+          # binaries ("changing install names ... isn't supported") — strip
+          # the signature first, mutate, re-sign. Exactly the dance Apple
+          # documents for post-build surgery.
           for so in "$FW"/pq*.so "$FW"/_psycopg*.so; do
+            codesign --remove --all-architectures "$so" 2>/dev/null || true
+            install_name_tool -change @rpath/libpq.5.dylib @loader_path/libpq.5.dylib "$so"
             install_name_tool -add_rpath @loader_path "$so" 2>/dev/null || true
-            install_name_tool -change @rpath/libpq.5.dylib @loader_path/libpq.5.dylib "$so" || true
             codesign -s - --force "$so"
           done
           for lib in "$FW"/*.dylib; do
+            codesign --remove --all-architectures "$lib" 2>/dev/null || true
             install_name_tool -add_rpath @loader_path "$lib" 2>/dev/null || true
             codesign -s - --force "$lib"
           done
           echo "--- pq.so after surgery ---"
-          otool -L "$FW"/pq*.so
+          otool -l "$FW"/pq*.so | grep -A2 "LC_LOAD_DYLIB\|LC_RPATH" | head -20
           # the per-file surgery invalidated the bundle-level signature;
           # re-sign the whole .app ad-hoc, exactly as PyInstaller did
           codesign -s - --force --deep dist/LedgerForge.app
