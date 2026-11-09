@@ -81,6 +81,39 @@ for _root, _dirs, _files in os.walk(_pginstall):
         _dest_dir = os.path.dirname(os.path.relpath(_src, _pgs_parent)).replace(os.sep, "/")
         pg_datas.append((_src, _dest_dir))
 
+# --- psycopg's own libpq (macOS only) -----------------------------------
+#
+# psycopg-binary's macOS wheels (3.2.10+) ship their libpq inside a HIDDEN
+# directory — psycopg_binary/.dylibs/ — and the extension modules reference
+# it as '@loader_path/.dylibs/libpq.5.dylib'. PyInstaller's binary analysis
+# drops dot-directories, so that tree never reached the v0.28.0 bundle; at
+# runtime dyld fell back through its search path to pgserver's OWN
+# libpq.5.dylib (PostgreSQL 16, no _PQcancelBlocking, which psycopg links),
+# and the engine child died at boot with ImportError("no pq wrapper
+# available") — Windows and Linux were green only because their wheels use
+# a non-hidden psycopg_binary.libs/ that PyInstaller follows via $ORIGIN.
+#
+# Collect the wheel's dylibs verbatim under psycopg_binary/.dylibs, exactly
+# where @loader_path resolves them; libpq's own neighbours (libssl,
+# libcrypto, libgssapi...) are referenced @loader_path-flat, so the whole
+# directory must ride together.
+if IS_MACOS:
+    import psycopg_binary  # the binary wrapper wheel, layout verified above
+
+    _pb_root = os.path.dirname(psycopg_binary.__file__)
+    _pb_dylibs = os.path.join(_pb_root, ".dylibs")
+    if os.path.isdir(_pb_dylibs):
+        for _root, _dirs, _files in os.walk(_pb_dylibs):
+            for _file in _files:
+                _src = os.path.join(_root, _file)
+                _rel = os.path.relpath(_src, _pb_root)
+                pg_binaries.append((_src, os.path.dirname(_rel).replace(os.sep, "/")))
+    else:
+        print(
+            "WARNING: psycopg_binary has no .dylibs/ directory — if the wheel "
+            "layout changed, verify the frozen engine still boots (ADR-031)."
+        )
+
 datas = [
     # the SQL bootstrap + the Alembic tree, at the package-relative fallback
     (os.path.join(ROOT, "db", "schema.sql"), "ledgerforge/sql"),
