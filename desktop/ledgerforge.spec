@@ -43,6 +43,7 @@ and PNG ride beside it in the tarball).
 import os
 import sys
 
+import pgserver as _pgserver_pkg
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
@@ -50,6 +51,35 @@ IS_WINDOWS = sys.platform == "win32"
 IS_MACOS = sys.platform == "darwin"
 
 pg_datas, pg_binaries, pg_hiddenimports = collect_all("pgserver")
+
+# PostgreSQL's own distribution is a payload, not a Python dependency —
+# ship it verbatim, in the exact layout the wheel carries.
+#
+# PyInstaller's collect_dynamic_libs matches only `lib*.so` on Unix
+# (PY_DYLIB_PATTERNS), but PostgreSQL's runtime-loadable extension
+# modules under pginstall/lib/postgresql/ (dict_snowball.so, plpgsql.so,
+# pgoutput.so, the utf8_and_* converters...) carry no `lib` prefix — so
+# collect_all silently DROPPED them on Linux and macOS, and the frozen
+# app died inside initdb ("could not access file $libdir/dict_snowball").
+# On Windows `*.dll` happens to match every extension, which is why the
+# v0.18–v0.27 Windows builds never tripped this. Bundling the whole tree
+# as data files is deterministic on all three platforms, keeps $libdir
+# resolution (the postgres binaries' own directory logic) untouched, and
+# removes PyInstaller's binary analysis from a tree it does not own.
+_pgs_root = os.path.dirname(_pgserver_pkg.__file__)  # .../site-packages/pgserver
+_pgs_parent = os.path.dirname(_pgs_root)  # .../site-packages
+_pginstall = os.path.join(_pgs_root, "pginstall")
+pg_datas = [
+    (s, d) for s, d in pg_datas if "pginstall" not in d.replace("\\", "/")
+]
+pg_binaries = [
+    (s, d) for s, d in pg_binaries if "pginstall" not in d.replace("\\", "/")
+]
+for _root, _dirs, _files in os.walk(_pginstall):
+    for _file in _files:
+        _src = os.path.join(_root, _file)
+        _dest_dir = os.path.dirname(os.path.relpath(_src, _pgs_parent)).replace(os.sep, "/")
+        pg_datas.append((_src, _dest_dir))
 
 datas = [
     # the SQL bootstrap + the Alembic tree, at the package-relative fallback

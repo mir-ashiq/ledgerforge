@@ -73,7 +73,12 @@ uploading an artifact. A `publish` job that needs all three:
 
 - **signs** the Windows exe when Azure Trusted Signing secrets are present
   (`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`/
-  `TRUSTED_SIGNING_ACCOUNT_NAME`/`TRUSTED_SIGNING_PROFILE`), and the macOS
+  `TRUSTED_SIGNING_ACCOUNT_NAME`/`TRUSTED_SIGNING_PROFILE`/
+  `TRUSTED_SIGNING_ENDPOINT` — the account's regional endpoint, e.g.
+  `https://weu.codesigning.azure.net/`, which the v2
+  `Azure/artifact-signing-action` requires; the arm flag needs tenant id
+  *and* endpoint, so a half-configured repository stays honestly unsigned),
+  and the macOS
   app when Apple credentials are present (`MACOS_SIGNING_IDENTITY` +
   notarytool keychain); without secrets the artifacts stay unsigned —
   checksummed, manifest-signed, honestly labeled, never silently so;

@@ -392,3 +392,151 @@ def test_apply_is_idempotent_after_an_interrupted_run(trees, tmp_path):
     for relpath, content in NEW_FILES.items():
         assert (old_dir / relpath).read_text(encoding="utf-8") == content
     assert not (old_dir / "_internal/legacy.py").exists()
+
+
+# ------------------------------------------------ the release pipeline's
+# own scripts — the workflow runs these verbatim in its publish job, so
+# the CLI seams are proven here too (in-process: the pinned key stays
+# patchable, which the signed round-trip needs).
+
+
+def _run_script(name: str, *argv: str, monkeypatch, capsys) -> tuple[int, str, str]:
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(f"lf_script_{name}", root / "scripts" / name)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr("sys.argv", [name, *argv])
+    code = module.main()
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_delta_script_builds_the_file_level_delta(tmp_path, monkeypatch, capsys):
+    old = tmp_path / "old"
+    new = tmp_path / "new"
+    (old / "_internal").mkdir(parents=True)
+    (new / "_internal").mkdir(parents=True)
+    (old / "_internal" / "kept.py").write_text("same", encoding="utf-8")
+    (old / "_internal" / "gone.py").write_text("bye", encoding="utf-8")
+    (new / "_internal" / "kept.py").write_text("same", encoding="utf-8")
+    (new / "_internal" / "changed.py").write_text("v2", encoding="utf-8")
+    out = tmp_path / "delta.zip"
+
+    code, out_text, _err = _run_script(
+        "make_delta.py",
+        "--old-dir",
+        str(old),
+        "--new-dir",
+        str(new),
+        "--from",
+        "0.27.0",
+        "--to",
+        "0.28.0",
+        "--out",
+        str(out),
+        monkeypatch=monkeypatch,
+        capsys=capsys,
+    )
+    assert code == 0, out_text
+    assert "1 changed/added, 1 removed" in out_text
+    with zipfile.ZipFile(out) as archive:
+        document = json.loads(archive.read("delta.json"))
+        assert document["removed"] == ["_internal/gone.py"]
+        assert document["files"] == {"_internal/changed.py": _sha(b"v2")}
+        assert archive.read("_internal/changed.py") == b"v2"
+
+
+def test_manifest_script_writes_unsigned_with_a_loud_warning(tmp_path, monkeypatch, capsys):
+    package = tmp_path / "pkg.zip"
+    package.write_bytes(b"pkg")
+    out = tmp_path / "update_manifest.json"
+
+    code, out_text, out_err = _run_script(
+        "make_update_manifest.py",
+        "--tag",
+        "v0.28.0",
+        "--version",
+        "0.28.0",
+        "--artifact",
+        f"linux-x64={package}",
+        "--out",
+        str(out),
+        monkeypatch=monkeypatch,
+        capsys=capsys,
+    )
+    assert code == 0, out_err
+    assert "UNSIGNED" in out_text
+    document = json.loads(out.read_text(encoding="utf-8"))
+    assert document["platforms"]["linux-x64"]["sha256"] == _sha(b"pkg")
+    assert document["platforms"]["linux-x64"]["size"] == 3
+
+
+def test_manifest_script_refuses_a_key_that_is_not_the_pin(tmp_path, keypair, monkeypatch, capsys):
+    """A manifest signed by any other key is dead on arrival — every client
+    refuses it — so the script refuses to write one: fail at the pipeline,
+    not in the field."""
+
+    private_pem, _public = keypair
+    package = tmp_path / "pkg.zip"
+    package.write_bytes(b"pkg")
+    key = tmp_path / "release-key.pem"
+    key.write_text(private_pem, encoding="utf-8")
+
+    code, _out_text, out_err = _run_script(
+        "make_update_manifest.py",
+        "--tag",
+        "v0.28.0",
+        "--version",
+        "0.28.0",
+        "--artifact",
+        f"linux-x64={package}",
+        "--key",
+        str(key),
+        "--out",
+        str(tmp_path / "update_manifest.json"),
+        monkeypatch=monkeypatch,
+        capsys=capsys,
+    )
+    assert code == 1
+    assert "not the pinned update key" in out_err
+    assert not (tmp_path / "update_manifest.sig").exists()
+
+
+def test_manifest_script_signs_and_the_client_verifies(tmp_path, keypair, monkeypatch, capsys):
+    """The pipeline seam end to end: the script signs with the pinned key's
+    own half (the pin swapped for the test keypair), and the updater's own
+    verifier accepts what the script wrote — same bytes, same contract."""
+
+    private_pem, public_b64 = keypair
+    monkeypatch.setattr(updating, "PINNED_UPDATE_KEY", public_b64)
+    package = tmp_path / "pkg.zip"
+    package.write_bytes(b"pkg")
+    key = tmp_path / "release-key.pem"
+    key.write_text(private_pem, encoding="utf-8")
+    out = tmp_path / "update_manifest.json"
+
+    code, out_text, out_err = _run_script(
+        "make_update_manifest.py",
+        "--tag",
+        "v0.28.0",
+        "--version",
+        "0.28.0",
+        "--artifact",
+        f"linux-x64={package}",
+        "--key",
+        str(key),
+        "--out",
+        str(out),
+        monkeypatch=monkeypatch,
+        capsys=capsys,
+    )
+    assert code == 0, out_err
+    assert "Ed25519" in out_text
+
+    document = updating.verify_manifest(
+        out.read_bytes(), (tmp_path / "update_manifest.sig").read_text(encoding="utf-8")
+    )
+    assert document["version"] == "0.28.0"
+    assert document["platforms"]["linux-x64"]["sha256"] == _sha(b"pkg")

@@ -75,16 +75,26 @@ jobs:
       # signed update manifest, and honestly labeled in the release notes.
       # (The `secrets` context is not allowed in `if` — the armed flag
       # rides step env, the documented pattern.)
+      # The action lives at Azure/artifact-signing-action (the old
+      # `Microsoft/trusted-signing-action` / `azure/trusted-signing-action`
+      # name is a redirect that job setup cannot resolve — every matrix leg
+      # died at "Set up job" until this was pinned to the canonical repo).
+      # Its v2 inputs are azure-tenant-id/azure-client-id/azure-client-secret
+      # plus the REQUIRED account endpoint; TRUSTED_SIGNING_ENDPOINT
+      # (e.g. https://weu.codesigning.azure.net/) gates the arm flag with
+      # the tenant id so a half-configured repo never meets a required-input
+      # failure.
       - name: Code-sign the Windows exe (Azure Trusted Signing)
         if: matrix.os == 'windows-latest' && env.LF_AZURE_SIGNING == 'true'
-        uses: Microsoft/trusted-signing-action@v0
+        uses: Azure/artifact-signing-action@v2
         env:
-          LF_AZURE_SIGNING: ${{ secrets.AZURE_TENANT_ID != '' }}
+          LF_AZURE_SIGNING: ${{ secrets.AZURE_TENANT_ID != '' && secrets.TRUSTED_SIGNING_ENDPOINT != '' }}
         with:
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
-          account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
           files: dist/LedgerForge/LedgerForge.exe
           timeout: 15
@@ -299,6 +309,9 @@ jobs:
         # distribution hardening") — one source of truth, correct every phase
         run: |
           set -euo pipefail
+          shopt -s nullglob  # no delta/manifest files -> they drop from the
+                             # asset list; a literal unmatched glob would
+                             # fail gh release upload on a file that isn't there
           TAG="${{ github.ref_name }}"
           title="LedgerForge ${TAG} — $(sed -n '1s/^# LedgerForge [0-9.]* — //p' desktop/RELEASE_NOTES.md)"
           cat artifacts/*.sha256 > checksums.txt

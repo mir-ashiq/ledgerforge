@@ -115,9 +115,27 @@ def main() -> int:
         print(f"wrote {args.out} (UNSIGNED)")
         return 0
 
-    from ledgerforge.updating import KEY_FINGERPRINT, sign_manifest
+    from ledgerforge.plugins.trust import fingerprint, load_private_key, public_key_b64
+    from ledgerforge.updating import KEY_FINGERPRINT, PINNED_UPDATE_KEY, sign_manifest
 
-    signature = sign_manifest(manifest, args.key.read_text())
+    pem = args.key.read_text()
+    # The signature is only useful if it verifies against the key pinned in
+    # the shipped app bytes. A signing key that does not match the pin
+    # would produce a manifest every client refuses — refuse it here
+    # instead, loudly, before a dead release ships.
+    derived = public_key_b64(load_private_key(pem).public_key())
+    if derived != PINNED_UPDATE_KEY:
+        print(
+            f"error: the signing key ({fingerprint(derived)}) is not the pinned "
+            f"update key ({KEY_FINGERPRINT}) — every client would refuse this "
+            "manifest; the LF_UPDATE_SIGNING_KEY secret and the "
+            "PINNED_UPDATE_KEY in ledgerforge/updating.py are two halves of "
+            "one keypair",
+            file=sys.stderr,
+        )
+        return 1
+
+    signature = sign_manifest(manifest, pem)
     sig_path = args.out.with_suffix(".sig")
     sig_path.write_text(signature, encoding="utf-8")
     print(f"wrote {args.out} + {sig_path} (Ed25519 {KEY_FINGERPRINT})")
