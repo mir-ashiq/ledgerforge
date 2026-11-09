@@ -1,9 +1,30 @@
 # ADR-026: The banking pack — statements get tables, matches get a table, cheques stay documents
 
-- **Status:** Accepted (2026-11-08)
+- **Status:** Accepted (2026-11-08) · **Amended (2026-11-09, v1.0.0): the
+  direction convention is corrected** — see the amendment note at the end
 - **Deciders:** mir-ashiq
 - **Supersedes:** —
 - **Extends:** ADR-002 (append-only write path — and its first deliberate boundary), ADR-003 (the plugin contract — plugin API 0.11), ADR-009 (book scoping), ADR-010 (the meta store — used where it fits), ADR-011 (the API floor), ADR-016 (drop-in trust — where per-bank adapters live), ADR-023 (the meta-fold precedent), ADR-025 (the schema-exception precedent)
+
+> **Amendment (v1.0.0, 2026-11-09 — found by the accountant's day, ADR-032).**
+> The reconciliation as shipped in v0.23–v0.28 carried a passbook-mirror
+> direction convention: a statement C line (money into the bank) was
+> treated as the books' **Cr** of the bank ledger — contradicting the
+> invoicing pack ("debit the bank ledger, credit the customer"), the
+> payroll pack's payout (Dr payable / Cr bank), and the balance sheet,
+> which duly reported bank balances as *negative* assets under that
+> convention. Every pack's suite passed in isolation; the contradiction
+> only surfaced when `--accountants-day` composed all packs in one book
+> — exactly the composition class of bug the day was built to catch.
+> v1.0.0 corrects the kernel to standard accounting: money into the bank
+> is **Dr Bank** (an asset growing), a deposit line reconciles to a
+> Dr-bank entry (side-opposite pairing), all reconciliation figures and
+> `bank_ledgers` balances read **asset-positive**, and the proof's pair
+> difference is the pair's asset-side difference. Stored statements,
+> lines and matches are untouched (facts are direction-agnostic); books
+> that posted bank receipts as Cr Bank under the old convention must
+> have those vouchers reversed and re-posted. The three financial laws
+> are untouched.
 
 ## Context
 

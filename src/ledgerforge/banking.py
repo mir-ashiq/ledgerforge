@@ -28,11 +28,15 @@ Three disciplines, one module:
   the tests assert it against sums computed by other means (the
   trial-balance discipline).
 
-Direction convention (worth stating once, here): a statement ``C`` line
-(money into the bank) is the side the books would *credit* — the bank
-ledger's Cr; a ``D`` line is its Dr. A matched pair is therefore
-side-equal by nature, and the proof's pair difference is simply
-``entry.amount − line.amount`` on the shared side.
+Direction convention (worth stating once, here — v1.0's correction of the
+v0.23 passbook mirror): a statement ``C`` line (money into the bank) is
+what the books would *debit* — the bank ledger's Dr, an asset growing;
+a ``D`` line is its Cr. A matched pair is therefore side-opposite by
+nature (a deposit line pairs a Dr-bank entry), and the proof's pair
+difference is the pair's asset-side difference: the entry's effect minus
+the line's effect, zero when the two sides price the money identically.
+All reconciliation figures are asset-positive: the bank balance reads
+like the statement, Dr-increases-the-asset.
 
 The kernel stays bank-blind (ADR-026 D3): nothing here knows a bank's
 name, URL or payload — per-bank adapters are drop-in plugins that call
@@ -536,8 +540,9 @@ def resolve_bank_ledger(session: Session, book: Book, ledger_id: int) -> Ledger:
 
 def bank_ledgers(session: Session, book: Book) -> list[dict]:
     """Every bank-account ledger of the book (by group ancestry) — the
-    pickers' feed. The current balance rides along (Cr positive), the same
-    figure the reconciliation proves."""
+    pickers' feed. The current balance rides along asset-positive (Dr
+    minus Cr — the figure the statement and the reconciliation read, v1.0's
+    correction of the v0.23 Cr-positive mirror)."""
     ledgers = session.scalars(
         select(Ledger).where(Ledger.book_id == book.id).order_by(Ledger.name)
     ).all()
@@ -557,7 +562,7 @@ def bank_ledgers(session: Session, book: Book) -> list[dict]:
                 func.coalesce(
                     func.sum(
                         case(
-                            (VoucherEntry.dc == "C", VoucherEntry.amount),
+                            (VoucherEntry.dc == "D", VoucherEntry.amount),
                             else_=-VoucherEntry.amount,
                         )
                     ),
@@ -1103,8 +1108,8 @@ def suggestions(
         line_amount = Decimal(row.amount)
         candidates = []
         for entry in entries:
-            if entry.dc != row.dc:
-                continue  # a deposit reconciles to a credit, a payment to a debit
+            if entry.dc == row.dc:
+                continue  # a deposit line reconciles to a Dr-bank entry, a payment to a Cr
             days = abs((entry.voucher_date - row.value_date).days)
             fuzzy, why = _fuzzy_score(row, entry)
             if days > window_days and fuzzy < 15:
@@ -1216,7 +1221,7 @@ def reconciliation(
 
     book_balance = _money(
         sum(
-            (e.amount if e.dc == "C" else -e.amount for e in entries_upto),
+            (e.amount if e.dc == "D" else -e.amount for e in entries_upto),
             Decimal(0),
         )
     )
@@ -1264,16 +1269,16 @@ def reconciliation(
     for entry in entries_upto:
         if entry.entry_id in paired_entry_ids:
             continue
-        effect = entry.amount if entry.dc == "C" else -entry.amount
+        effect = entry.amount if entry.dc == "D" else -entry.amount
         um_book_total += effect
         rows.append(
             {
                 "kind": "book_deposit_not_credited"
-                if entry.dc == "C"
+                if entry.dc == "D"
                 else "cheque_issued_not_presented",
                 "label": (
                     "Deposit in books, not yet in the bank"
-                    if entry.dc == "C"
+                    if entry.dc == "D"
                     else "Cheque issued / payment not yet presented"
                 ),
                 "date": entry.voucher_date.isoformat(),
@@ -1284,8 +1289,10 @@ def reconciliation(
             }
         )
     for row, entry in pairs:
-        reconciled += entry.amount if entry.dc == "C" else -entry.amount
-        diff = _money(entry.amount - Decimal(row.amount))
+        reconciled += entry.amount if entry.dc == "D" else -entry.amount
+        entry_effect = entry.amount if entry.dc == "D" else -entry.amount
+        line_effect = Decimal(row.amount) if row.dc == "C" else -Decimal(row.amount)
+        diff = _money(entry_effect - line_effect)
         if diff != 0:
             pair_diff_total += diff
             rows.append(

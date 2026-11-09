@@ -63,29 +63,29 @@ def _party_ledger(client, name: str) -> dict:
 
 
 def _receipt(client, bank: str, party: str, amount: str, date_: str, narration=None):
-    """Money into the bank: Cr bank, Dr party."""
+    """Money into the bank: Dr bank (the asset), Cr party."""
     return post_voucher(
         client,
         type_="RCT",
         date_=date_,
         narration=narration,
         entries=[
-            {"ledger_name": party, "dc": "D", "amount": amount},
-            {"ledger_name": bank, "dc": "C", "amount": amount},
+            {"ledger_name": bank, "dc": "D", "amount": amount},
+            {"ledger_name": party, "dc": "C", "amount": amount},
         ],
     )
 
 
 def _payment(client, bank: str, party: str, amount: str, date_: str, narration=None):
-    """Money out of the bank: Dr bank, Cr party."""
+    """Money out of the bank: Cr bank, Dr party."""
     return post_voucher(
         client,
         type_="PYT",
         date_=date_,
         narration=narration,
         entries=[
-            {"ledger_name": bank, "dc": "D", "amount": amount},
-            {"ledger_name": party, "dc": "C", "amount": amount},
+            {"ledger_name": party, "dc": "D", "amount": amount},
+            {"ledger_name": bank, "dc": "C", "amount": amount},
         ],
     )
 
