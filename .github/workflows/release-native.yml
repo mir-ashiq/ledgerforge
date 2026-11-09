@@ -165,6 +165,23 @@ jobs:
           export QT_QPA_PLATFORM=offscreen
           ./dist/LedgerForge.app/Contents/MacOS/LedgerForge --smoke
 
+      # The psycopg/pgserver libpq debugging aid (ADR-031/032): when the
+      # smoke fails, dump the bundle's actual dylib layout so the run log
+      # carries the facts, not theories.
+      - name: Dylib layout forensics (macOS, on smoke failure)
+        if: matrix.os == 'macos-latest' && failure()
+        run: |
+          FW=dist/LedgerForge.app/Contents/Frameworks
+          echo "--- psycopg_binary tree ---"
+          ls -laR "$FW/psycopg_binary" || true
+          echo "--- pgserver dylibs ---"
+          ls -la "$FW/pgserver" 2>/dev/null | grep -i dylib || true
+          echo "--- pq.so dependencies (otool) ---"
+          otool -L "$FW/psycopg_binary/"pq*.so 2>/dev/null || true
+          echo "--- psycopg's libpq version ---"
+          strings "$FW/psycopg_binary/__dot__dylibs/libpq.5.dylib" 2>/dev/null | grep -m1 "PostgreSQL" || true
+          exit 1
+
       - name: The accountant's day, shipped (macOS, ADR-032)
         if: matrix.os == 'macos-latest'
         timeout-minutes: 15
