@@ -133,9 +133,45 @@ def boot_database(data_dir: Path) -> str:
         raise SystemExit(
             "the desktop edition needs the pgserver package — pip install 'ledgerforge[desktop]'"
         ) from exc
+    _harden_pgserver_sockets()
     data_dir.mkdir(parents=True, exist_ok=True)
     server = pgserver.get_server(data_dir / "pgdata", cleanup_mode="stop")
     return server.get_uri()
+
+
+def _harden_pgserver_sockets() -> None:
+    """Let the embedded server boot behind a whitespace-carrying data path.
+
+    pgserver (0.1.4, the latest) passes its socket directory to
+    ``pg_ctl -o '-k <dir>'`` — and ``pg_ctl`` splits that option *string*
+    on whitespace, unquoted. Any data path with a space therefore kills the
+    server at boot with ``postgres: invalid argument: "Support/..."`` —
+    which is precisely macOS's default layout (``~/Library/Application
+    Support/LedgerForge``). Until upstream quotes the option, the socket-dir
+    chooser is wrapped to reject any candidate that carries whitespace and
+    use pgserver's own runtime path (its documented fallback for overlong
+    socket names — space-free on every platform we ship) instead. The
+    cluster itself stays where the user expects it; only the socket file
+    moves. Idempotent, and a no-op on space-free paths.
+    """
+    import pgserver.postgres_server
+
+    original = pgserver.postgres_server.find_suitable_socket_dir
+    if getattr(original, "_lf_space_free", False):
+        return
+
+    def space_free_socket_dir(pgdata, runtime_path):  # noqa: ANN001 — pgserver's signature
+        from pathlib import Path as _Path
+
+        chosen = original(pgdata, runtime_path)
+        if not any(char.isspace() for char in str(chosen)):
+            return chosen
+        fallback = _Path(runtime_path) / "ledgerforge-sockets"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+    space_free_socket_dir._lf_space_free = True  # type: ignore[attr-defined]
+    pgserver.postgres_server.find_suitable_socket_dir = space_free_socket_dir
 
 
 def ensure_schema(dsn: str, *, quiet: bool = False) -> None:

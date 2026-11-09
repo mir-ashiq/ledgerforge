@@ -233,3 +233,32 @@ def test_smoke_boots_the_whole_desktop(tmp_path_factory, fake_ui):
     with psycopg.connect(dsn) as conn:
         books = conn.execute("SELECT name FROM books ORDER BY id").fetchall()
         assert books, "the desktop bootstrap must seed the default book"
+
+
+def test_boot_database_survives_a_spaced_data_dir(tmp_path):
+    """The macOS default layout is ``~/Library/Application Support/...`` — a
+    data path with a space. pgserver 0.1.4 passes the socket directory to
+    ``pg_ctl -o '-k <dir>'`` and pg_ctl splits that option string on
+    whitespace, so without the hardening the server dies at boot with
+    ``postgres: invalid argument`` (the first v0.28.0 macOS leg died
+    exactly there). The cluster must boot, answer, and leave the socket in
+    a space-free directory — the bug is platform-independent, so Linux
+    reproduces it honestly."""
+
+    import psycopg
+
+    spaced = tmp_path / "Application Support" / "LedgerForge"
+    dsn = desktop.boot_database(spaced)
+    with psycopg.connect(dsn) as conn:  # the DSN itself must connect
+        assert conn.execute("SELECT 1").fetchone() == (1,)
+
+    # the socket landed in pgserver's space-free runtime area, not in the
+    # spaced pgdata — and the wrapper is idempotent across boots
+    import pgserver.postgres_server
+    import platformdirs
+
+    runtime_path = platformdirs.user_runtime_path("python_PostgresServer")
+    chosen = pgserver.postgres_server.find_suitable_socket_dir(spaced / "pgdata", runtime_path)
+    assert not any(char.isspace() for char in str(chosen))
+    desktop._harden_pgserver_sockets()
+    assert getattr(pgserver.postgres_server.find_suitable_socket_dir, "_lf_space_free", False)
