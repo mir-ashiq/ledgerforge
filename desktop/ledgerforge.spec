@@ -95,17 +95,18 @@ for _root, _dirs, _files in os.walk(_pginstall):
 # The BUNDLE step's rename of dotted Frameworks directories ('.dylibs' ->
 # '__dot__dylibs' + a symlink) then kept the two libpqs colliding anyway.
 #
-# The fix is deterministic, no symlink roulette: the dylibs are collected
-# into a DOT-FREE destination (psycopg_binary/__dot__dylibs — the rename
-# mechanism only fires on dotted names, so the tree lands verbatim), and
-# the two extension modules' references are rewritten with macOS's own
-# install_name_tool to point there. pgserver's .dylibs (which its
-# pginstall/bin client tools reference as @loader_path/../../.dylibs/) is
-# left to its own devices — the two libpqs never meet again.
+# The fix works WITH the rewriter: PyInstaller's BUNDLE step rewrites the
+# extensions' dylib references to '@rpath/libpq.5.dylib' no matter what
+# they said (the v1.0.0 forensics step proved it with otool -L), so the
+# dylibs are collected FLAT into psycopg_binary/ itself — the first
+# @rpath candidate (@loader_path, the extension's own directory) — where
+# dyld finds them before it can ever reach pgserver's same-named libpq.
+# The neighbours ride along flat too: libpq references them
+# @loader_path-flat, and they all share the directory. pgserver's own
+# .dylibs (which its pginstall/bin client tools reference as
+# @loader_path/../../.dylibs/) is left to its own devices — the two
+# libpqs never meet again.
 if IS_MACOS:
-    import glob
-    import subprocess
-
     import psycopg  # psycopg_binary refuses to load before psycopg; find it beside it
 
     _pb_root = os.path.join(
@@ -115,22 +116,7 @@ if IS_MACOS:
     if os.path.isdir(_pb_dylibs):
         for _root, _dirs, _files in os.walk(_pb_dylibs):
             for _file in _files:
-                _src = os.path.join(_root, _file)
-                pg_binaries.append((_src, "psycopg_binary/__dot__dylibs"))
-        # rewrite the extensions' dependency BEFORE Analysis reads them
-        # (a build-time mutation of the wheel's files — CI installs are
-        # disposable, and PyInstaller re-signs every binary it collects)
-        for _so in glob.glob(os.path.join(_pb_root, "*.so")):
-            subprocess.run(
-                [
-                    "install_name_tool",
-                    "-change",
-                    "@loader_path/.dylibs/libpq.5.dylib",
-                    "@loader_path/__dot__dylibs/libpq.5.dylib",
-                    _so,
-                ],
-                check=True,
-            )
+                pg_binaries.append((os.path.join(_root, _file), "psycopg_binary"))
     else:
         print(
             "WARNING: psycopg_binary has no .dylibs/ directory — if the wheel "
