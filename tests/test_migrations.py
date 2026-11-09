@@ -260,7 +260,7 @@ def test_head_revision_is_single_and_parseable():
     from alembic.script import ScriptDirectory
 
     head = lf_migrations.head_revision()
-    assert head == "0012_data_exchange"
+    assert head == "0013_pnl_between"
     assert lf_migrations.revisions() == {
         "0001_baseline": None,
         "0002_multi_currency": "0001_baseline",
@@ -274,6 +274,7 @@ def test_head_revision_is_single_and_parseable():
         "0010_gst_2b": "0009_stock_depth",
         "0011_payroll_depth": "0010_gst_2b",
         "0012_data_exchange": "0011_payroll_depth",
+        "0013_pnl_between": "0012_data_exchange",
     }
     scripts = ScriptDirectory(str(lf_migrations.migrations_dir()))
     assert scripts.get_current_head() == head
@@ -313,15 +314,17 @@ def test_stepwise_upgrade_and_partial_downgrade(scratch_dbs):
 
     _upgrade(dsn)
     with psycopg.connect(dsn) as conn:
-        # at head (0006) the P&L is book-scoped with the ADR-018 fast flag:
-        # (BIGINT, DATE, DATE, BOOLEAN). It delegates its per-ledger sums to
-        # rpt._ledger_sums_upto, which now owns the FYC exclusion.
-        (uses_helper,) = conn.execute(
+        # at head (0013) the P&L is the period's own aggregation (ADR-032's
+        # certification fix): (BIGINT, DATE, DATE, BOOLEAN). It aggregates
+        # the [from, to] range directly — one partition-pruned GROUP BY,
+        # mathematically identical to the two as-of folds it replaces, and
+        # independent of the balance cache.
+        (uses_range,) = conn.execute(
             "SELECT pg_get_functiondef("
             "'rpt.profit_and_loss(BIGINT, DATE, DATE, BOOLEAN)'::regprocedure)"
-            " LIKE '%_ledger_sums_upto%'"
+            " LIKE '%voucher_date >= p_from%'"
         ).fetchone()
-        assert uses_helper is True
+        assert uses_range is True
         (has_fyc,) = conn.execute(
             "SELECT pg_get_functiondef("
             "'rpt._ledger_sums_upto(BIGINT, DATE, BOOLEAN, BOOLEAN)'::regprocedure)"

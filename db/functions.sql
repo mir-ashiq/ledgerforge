@@ -437,21 +437,28 @@ RETURNS TABLE (
     out_amount    NUMERIC
 )
 LANGUAGE sql STABLE PARALLEL SAFE AS $$
-    WITH s_to AS (
-        SELECT * FROM rpt._ledger_sums_upto(p_book_id, p_to, true, p_fast)
-    ),
-    s_prev AS (
-        SELECT * FROM rpt._ledger_sums_upto(p_book_id, p_from - 1, true, p_fast)
-    ),
-    per_ledger AS (
+    -- The period's own movement, directly: sums over [p_from, p_to] are
+    -- mathematically identical to sums(p_to) − sums(p_from − 1) (exact
+    -- NUMERIC addition associates), and ONE range aggregation is an order
+    -- of magnitude cheaper than TWO as-of folds — especially the earlier
+    -- one, which no single-horizon balance cache can ever serve (ADR-032's
+    -- 10x certification caught the old shape answering a 10x book's P&L in
+    -- 4.6s; this shape does it in milliseconds, cache or no cache).
+    -- p_fast is accepted for signature compatibility and ignored: the
+    -- between scan IS the fast path for a period statement.
+    WITH per_ledger AS (
         SELECT l.group_id AS gid,
-               COALESCE(t.out_dr, 0) - COALESCE(p.out_dr, 0) AS dr,
-               COALESCE(t.out_cr, 0) - COALESCE(p.out_cr, 0) AS cr
-        FROM s_to t
-        FULL JOIN s_prev p ON p.out_ledger_id = t.out_ledger_id
-        JOIN ledgers l ON l.id = COALESCE(t.out_ledger_id, p.out_ledger_id)
-        WHERE COALESCE(t.out_dr, 0) - COALESCE(p.out_dr, 0) <> 0
-           OR COALESCE(t.out_cr, 0) - COALESCE(p.out_cr, 0) <> 0
+               COALESCE(SUM(e.amount) FILTER (WHERE e.dc = 'D'), 0) AS dr,
+               COALESCE(SUM(e.amount) FILTER (WHERE e.dc = 'C'), 0) AS cr
+        FROM voucher_entries e
+        JOIN vouchers v ON v.id = e.voucher_id
+        JOIN ledgers l ON l.id = e.ledger_id
+        WHERE e.book_id = p_book_id
+          AND e.voucher_date >= p_from
+          AND e.voucher_date <= p_to
+          AND v.voucher_type_id NOT IN
+              (SELECT vt.id FROM voucher_types vt WHERE vt.code = 'FYC')
+        GROUP BY l.group_id
     ),
     ledger_class AS (
         SELECT g.nature, g.affects_gross, pl.dr, pl.cr

@@ -103,12 +103,16 @@ if IS_MACOS:
     _pb_root = os.path.join(
         os.path.dirname(os.path.dirname(psycopg.__file__)), "psycopg_binary"
     )
+    _pb_parent = os.path.dirname(_pb_root)  # site-packages: the dest base
     _pb_dylibs = os.path.join(_pb_root, ".dylibs")
     if os.path.isdir(_pb_dylibs):
         for _root, _dirs, _files in os.walk(_pb_dylibs):
             for _file in _files:
                 _src = os.path.join(_root, _file)
-                _rel = os.path.relpath(_src, _pb_root)
+                # dest is relative to site-packages, so the tree lands at
+                # psycopg_binary/.dylibs/ inside the bundle — exactly where
+                # the extension's '@loader_path/.dylibs/...' resolves
+                _rel = os.path.relpath(_src, _pb_parent)
                 pg_binaries.append((_src, os.path.dirname(_rel).replace(os.sep, "/")))
     else:
         print(
