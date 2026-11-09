@@ -98,9 +98,11 @@ for _root, _dirs, _files in os.walk(_pginstall):
 # libcrypto, libgssapi...) are referenced @loader_path-flat, so the whole
 # directory must ride together.
 if IS_MACOS:
-    import psycopg_binary  # the binary wrapper wheel, layout verified above
+    import psycopg  # psycopg_binary refuses to load before psycopg; find it beside it
 
-    _pb_root = os.path.dirname(psycopg_binary.__file__)
+    _pb_root = os.path.join(
+        os.path.dirname(os.path.dirname(psycopg.__file__)), "psycopg_binary"
+    )
     _pb_dylibs = os.path.join(_pb_root, ".dylibs")
     if os.path.isdir(_pb_dylibs):
         for _root, _dirs, _files in os.walk(_pb_dylibs):
