@@ -263,7 +263,10 @@ export function CommandPalette({ onClose, ctxRef }: PaletteProps) {
             {note.text}
           </p>
         )}
-        <div className="palette-list" role="listbox" aria-label="Commands">
+        {/* tabIndex 0 (axe scrollable-region-focusable): the search box
+            still holds the flow, but Tab can reach the scrolling listbox
+            itself so keyboard users can page through it with the arrow keys */}
+        <div className="palette-list" role="listbox" aria-label="Commands" tabIndex={0}>
           {visible.map((row, i) => (
             <div
               key={row.command.id}

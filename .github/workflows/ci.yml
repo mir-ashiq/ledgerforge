@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -161,3 +162,41 @@ jobs:
         run: npx playwright test
         env:
           E2E_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/lf_e2e
+
+  # ADR-032: the performance certification at 10x — pushes to main and
+  # v* tags only (pull requests keep the smoke benchmarks above). The
+  # certificate prints into the run log where any user can read it.
+  certify:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Performance certification at 10x (ADR-032)
+        timeout-minutes: 20
+        run: |
+          python scripts/certify_performance.py \
+            --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres

@@ -150,6 +150,7 @@ class DataExchangePage(QWidget):
         import_bar = QHBoxLayout()
         import_bar.addWidget(QLabel("Import"))
         self.kind_combo = QComboBox()
+        self.kind_combo.setAccessibleName("Data kind")
         for key, label in KINDS:
             self.kind_combo.addItem(label, key)
         import_bar.addWidget(self.kind_combo)
@@ -174,11 +175,13 @@ class DataExchangePage(QWidget):
         export_bar = QHBoxLayout()
         export_bar.addWidget(QLabel("Export"))
         self.surface_combo = QComboBox()
+        self.surface_combo.setAccessibleName("Export surface")
         self.surface_combo.currentIndexChanged.connect(self._surface_changed)
         export_bar.addWidget(self.surface_combo)
         self.params_edit = QLabel("")
         export_bar.addWidget(self.params_edit)
         self.format_combo = QComboBox()
+        self.format_combo.setAccessibleName("Export format")
         for fmt in FORMATS:
             self.format_combo.addItem(fmt.upper(), fmt)
         export_bar.addWidget(self.format_combo)

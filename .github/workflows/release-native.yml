@@ -4,11 +4,14 @@ name: release-native
 # builds LedgerForge on THREE platforms — a real Windows program, a real
 # macOS .app, a real Linux folder — proves each SHIPPED artifact with
 # --smoke (offscreen: engine child -> embedded PostgreSQL -> schema ->
-# /health -> the native window), and one publish job signs what can be
-# signed, packages, builds file-level deltas against the previous release,
-# writes + signs the update manifest (Ed25519, the LF_UPDATE_SIGNING_KEY
-# secret), and publishes the GitHub Release. A failed smoke fails the
-# release — the artifacts are proven, not assumed.
+# /health -> the native window) and then --accountants-day (ADR-032: the
+# full working day, every pack in one session, every number asserted),
+# and one publish job certifies the tag's performance at 10x before it
+# signs what can be signed, packages, builds file-level deltas against
+# the previous release, writes + signs the update manifest (Ed25519, the
+# LF_UPDATE_SIGNING_KEY secret), and publishes the GitHub Release. A
+# failed smoke — or a failed day, or a blown budget — fails the release:
+# the artifacts and the claims are proven, not assumed.
 
 on:
   push:
@@ -136,6 +139,25 @@ jobs:
             exit 1
           }
 
+      - name: The accountant's day, shipped (Windows, ADR-032)
+        if: matrix.os == 'windows-latest'
+        timeout-minutes: 15
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $proc = Start-Process -FilePath ".\dist\LedgerForge\LedgerForge.exe" `
+            -ArgumentList "--accountants-day" -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput day-out.log -RedirectStandardError day-err.log
+          Get-Content day-out.log
+          Get-Content day-err.log -ErrorAction SilentlyContinue
+          if ($proc.ExitCode -ne 0) {
+            Write-Host "::error::LedgerForge.exe --accountants-day exited with $($proc.ExitCode)"
+            exit 1
+          }
+          if (-not (Select-String -Path day-out.log -Pattern "DAY OK" -Quiet)) {
+            Write-Host "::error::the day did not print DAY OK"
+            exit 1
+          }
+
       - name: Smoke test the shipped .app (macOS, offscreen)
         if: matrix.os == 'macos-latest'
         timeout-minutes: 10
@@ -143,12 +165,29 @@ jobs:
           export QT_QPA_PLATFORM=offscreen
           ./dist/LedgerForge.app/Contents/MacOS/LedgerForge --smoke
 
+      - name: The accountant's day, shipped (macOS, ADR-032)
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 15
+        run: |
+          export QT_QPA_PLATFORM=offscreen
+          ./dist/LedgerForge.app/Contents/MacOS/LedgerForge --accountants-day | tee day-out.log
+          grep -q "DAY OK" day-out.log
+
       - name: Smoke test the shipped folder (Linux, offscreen)
         if: matrix.os == 'ubuntu-22.04'
         timeout-minutes: 10
         env:
           QT_QPA_PLATFORM: offscreen
         run: dist/LedgerForge/LedgerForge --smoke
+
+      - name: The accountant's day, shipped (Linux, ADR-032)
+        if: matrix.os == 'ubuntu-22.04'
+        timeout-minutes: 15
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          dist/LedgerForge/LedgerForge --accountants-day | tee day-out.log
+          grep -q "DAY OK" day-out.log
 
       # ------------------------------------------------------------ packaging
       - name: Package (Windows zip)
@@ -196,7 +235,21 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -209,6 +262,16 @@ jobs:
 
       - name: Install the engine (scripts import ledgerforge)
         run: pip install -e .
+
+      # ADR-032: the tag being released is the tag that certified — the
+      # 10x performance certificate runs HERE, inside the publish job,
+      # before any release exists. A blown budget fails the pipeline, not
+      # the user's afternoon.
+      - name: Performance certification at 10x (ADR-032)
+        timeout-minutes: 15
+        run: |
+          python scripts/certify_performance.py \
+            --admin-dsn postgresql://postgres:postgres@localhost:5432/postgres
 
       - uses: actions/download-artifact@v4
         with:

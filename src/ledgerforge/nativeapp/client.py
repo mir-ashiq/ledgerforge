@@ -112,6 +112,25 @@ class ApiClient:
     def books(self) -> list[Book]:
         return [Book.from_json(r) for r in self._get("/api/v1/books")]
 
+    def create_book(
+        self,
+        name: str,
+        *,
+        slug: str | None = None,
+        base_currency: str = "INR",
+        fy_start_month: int = 4,
+    ) -> Book:
+        """Create a book (ADR-009): the seeded chart + voucher types land
+        with it. The client stays on its current book — call ``set_book``."""
+        payload: dict[str, Any] = {
+            "name": name,
+            "base_currency": base_currency,
+            "fy_start_month": fy_start_month,
+        }
+        if slug is not None:
+            payload["slug"] = slug
+        return Book.from_json(self._post("/api/v1/books", payload)["book"])
+
     # -------------------------------------------------------------- masters
     def ledgers(self, search: str = "") -> list[Ledger]:
         return [Ledger.from_json(r) for r in self._get("/api/v1/ledgers", search=search)]
@@ -427,6 +446,12 @@ class ApiClient:
     def periods(self) -> list[Period]:
         return [Period.from_json(r) for r in self._get("/api/v1/periods")]
 
+    def create_period(self, name: str, starts_on: date, ends_on: date) -> Period:
+        """Create a period (ADR-008); overlapping ranges are the engine's
+        to refuse."""
+        payload = {"name": name, "starts_on": starts_on.isoformat(), "ends_on": ends_on.isoformat()}
+        return Period.from_json(self._post("/api/v1/periods", payload))
+
     def lock_period(self, period_id: int) -> Period:
         return Period.from_json(self._post(f"/api/v1/periods/{period_id}/lock"))
 
@@ -434,7 +459,10 @@ class ApiClient:
         return Period.from_json(self._post(f"/api/v1/periods/{period_id}/unlock"))
 
     def close_period(self, period_id: int) -> Period:
-        return Period.from_json(self._post(f"/api/v1/periods/{period_id}/close"))
+        """Close the FY: lock + the sweep voucher. The endpoint answers with
+        the period, the sweep voucher and whether this call posted it
+        (idempotent on retry) — the period is what callers need."""
+        return Period.from_json(self._post(f"/api/v1/periods/{period_id}/close")["period"])
 
     def close_preview(self, period_id: int) -> dict:
         return self._get(f"/api/v1/periods/{period_id}/close-preview")

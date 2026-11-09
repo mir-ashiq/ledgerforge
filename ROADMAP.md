@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Living document** | This is the plan of record. Each phase lands as a minor release with its own ADR, tests and a Windows build; each phase has a GitHub milestone and a tracking issue. |
-| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v0.28.0** |
+| **Baseline** | v0.18.0 (2026-11-07) — the native Windows application (ADR-022) · current: **v1.0.0** |
 | **Destination** | **v1.0.0 — everything an Indian SMB's daily accounting needs, on LedgerForge, without wishing for TallyPrime.** |
 | **Ordering** | Phases are strictly ordered by dependency, deliberately not dated. Scope below is a commitment to the *problem*, not a deadline for the code. |
 
@@ -87,7 +87,8 @@ The honest summary: **the accounting core is at parity** — bill-wise, orders, 
 centres, banking, inventory, GST compliance depth, payroll depth and data
 exchange all landed (v0.20–v0.27), and distribution hardening landed in
 v0.28. What remains toward v1.0 is the parity release itself
-(Phase 11). That is exactly what the remaining phase below delivers.
+(Phase 11). That is exactly what the remaining phase below delivers —
+**and it has: v1.0.0 is the parity release, walked and proven.**
 
 ---
 
@@ -237,15 +238,29 @@ file-level deltas drive update-on-relaunch (fail closed, verified staging,
 idempotent apply); crashes are captured locally always and sent nowhere
 unless chosen (ADR-031).
 
-### Phase 11 — v1.0.0 · The parity release
+### Phase 11 — v1.0.0 · The parity release *(landed in v1.0.0)*
 
 - **The accountant's day, in CI**: a scripted acceptance run on the native app — create
   company, masters, fifty vouchers across packs, an order chain, bill-wise settlement,
   bank reconciliation, GST statements, payroll, period close — green on every release.
+  *(Landed: `--accountants-day`, ADR-032; it gates every platform leg of the release
+  workflow after `--smoke`. Composing the packs for the first time surfaced and fixed a
+  real direction bug in the banking pack — the composition class of bug isolated suites
+  cannot catch, which is why the day exists.)*
 - Performance certification at 10× the §2.3 workload model (posting latency, report
   latency under one second, partitioned and cached paths).
+  *(Landed: `scripts/certify_performance.py` — ≥2,000 vouchers/min concurrent through
+  the public posting path, gapless, exactly balanced; warm TB + P&L under a second,
+  fast proven equal to slow to the cent; CI `certify` job on main and tags, and inside
+  the release publish job — the tag released is the tag certified.)*
 - Accessibility audit of both UIs; docs completion pass; the v1.0 announcement with the
   full capability ledger re-run (the table in §2, all-green or honestly annotated).
+  *(Landed: `tests/test_accessibility_native.py` — every interactive widget named,
+  focus traversal, table context; the web axe-core pass asserting zero serious/critical
+  violations with lesser findings logged for honest triage; the announcement is the
+  1.0.0 release notes, the §2 table re-derived there, trailing rows named in plain
+  words: SmartScreen needs a funded certificate, connected banking and portal adapters
+  stay plugin-side by design.)*
 
 ### Beyond v1.0 (recorded, deliberately unscheduled)
 
@@ -266,4 +281,5 @@ companion · the community index grown beyond its one demo plugin.
   its ADR *before* its first line of code — the repo's rule since 001.
 
 *Maintained in the repository as `ROADMAP.md`; changes land through pull requests like
-code. Last revisited: 2026-11-09, at the close of Phase 10.*
+code. Last revisited: 2026-11-09, at the close of Phase 11 — the road to v1.0 is
+walked; what comes next lives in "Beyond v1.0" above, deliberately unscheduled.*

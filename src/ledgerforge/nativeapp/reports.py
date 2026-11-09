@@ -95,6 +95,7 @@ class ReportsPage(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Report"))
         self.report_box = QComboBox()
+        self.report_box.setAccessibleName("Report")
         for key, (label, _needs) in REPORTS.items():
             self.report_box.addItem(label, key)
         self.report_box.currentIndexChanged.connect(self._sync_params)
@@ -162,6 +163,7 @@ class ReportsPage(QWidget):
         self.tree = QTreeWidget()
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Particulars", "Debit", "Credit"])
+        self.tree.setAccessibleName("Report: particulars, debit, credit")
         self.tree.setAlternatingRowColors(True)
         self.tree.setRootIsDecorated(True)
         header = self.tree.header()

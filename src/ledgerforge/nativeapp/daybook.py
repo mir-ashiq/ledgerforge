@@ -55,6 +55,7 @@ class DayBookPage(QWidget):
         bar.addWidget(self.to_date)
         bar.addWidget(QLabel("Type"))
         self.type_filter = QComboBox()
+        self.type_filter.setAccessibleName("Voucher type filter")
         self.type_filter.addItem("All", "")
         for code, name, *_rest in VOUCHER_TYPES:
             self.type_filter.addItem(f"{code} — {name}", code)

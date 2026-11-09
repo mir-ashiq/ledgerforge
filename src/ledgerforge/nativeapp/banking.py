@@ -49,9 +49,11 @@ class BankingPage(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Bank account"))
         self.bank_picker = QComboBox()
+        self.bank_picker.setAccessibleName("Bank account")
         self.bank_picker.currentIndexChanged.connect(self._bank_changed)
         bar.addWidget(self.bank_picker)
         self.status_filter = QComboBox()
+        self.status_filter.setAccessibleName("Statement line status filter")
         for code, label in (
             ("all", "All lines"),
             ("unmatched", "Unmatched"),

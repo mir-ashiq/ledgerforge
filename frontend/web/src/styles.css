@@ -136,7 +136,7 @@ body {
 
 .grid-row { border-bottom: 1px solid #e9edf2; }
 .grid-row .c-no {
-  color: #8a94a6;
+  color: #566178;
   font-size: 12px;
   text-align: right;
   padding: 0 8px;
@@ -184,12 +184,12 @@ body {
   font-size: 13px;
 }
 .picker-list [role='option'].hl { background: #e8effb; }
-.picker-list [role='option'] .picker-ctx { color: #8a94a6; font-size: 12px; }
-.picker-empty { padding: 10px; color: #8a94a6; font-size: 13px; }
+.picker-list [role='option'] .picker-ctx { color: #566178; font-size: 12px; }
+.picker-empty { padding: 10px; color: #566178; font-size: 13px; }
 .picker-hint {
   padding: 4px 10px;
   border-top: 1px solid #e9edf2;
-  color: #8a94a6;
+  color: #566178;
   font-size: 11px;
 }
 
@@ -257,7 +257,7 @@ body {
   font: inherit;
 }
 .overlay-actions button:last-child { background: transparent; color: var(--bar); }
-.overlay-foot { color: #8a94a6; font-size: 12px; margin: 12px 0 0; }
+.overlay-foot { color: #566178; font-size: 12px; margin: 12px 0 0; }
 .confirm p { margin: 0 0 4px; font-weight: 600; }
 
 .help-rows { display: flex; flex-direction: column; gap: 2px; }
@@ -321,7 +321,7 @@ body {
 .palette-flag { font-style: normal; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; border-radius: 3px; padding: 1px 5px; }
 .palette-flag.custom { background: #fdf3e2; color: var(--accent); border: 1px solid #ecd9b4; }
 .palette-flag.conflict { background: #fbeae9; color: var(--bad); border: 1px solid #f0c8c5; }
-.palette-empty { padding: 12px; color: #8a94a6; font-size: 13px; margin: 0; }
+.palette-empty { padding: 12px; color: #566178; font-size: 13px; margin: 0; }
 .overlay-card.palette .overlay-foot kbd {
   font-family: var(--mono);
   background: #eef1f5;
@@ -398,7 +398,7 @@ body {
   background: #fff;
 }
 .payslip-form select:focus { outline: none; box-shadow: 0 0 0 2px var(--focus); }
-.payslip-form select:disabled { background: #eef1f5; color: #8a94a6; }
+.payslip-form select:disabled { background: #eef1f5; color: #566178; }
 
 .payslip-print {
   margin-left: auto;
@@ -454,7 +454,7 @@ body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #8a94a6;
+  color: #566178;
   margin: 0 0 4px;
 }
 .payslip-figures dd {
@@ -639,7 +639,7 @@ body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: #8a94a6;
+  color: #566178;
   padding: 8px 10px;
   border-bottom: 1px solid var(--grid-line);
   background: #fafbfc;
@@ -836,7 +836,7 @@ body {
 .alloc-table td.num,
 .alloc-table th.num { text-align: right; }
 .alloc-table .row-dim { color: #9aa5ba; }
-.alloc-table .empty-note { color: #8a94a6; font-size: 12px; padding: 10px 8px; }
+.alloc-table .empty-note { color: #566178; font-size: 12px; padding: 10px 8px; }
 .alloc-input {
   width: 110px;
   font-size: 13px;

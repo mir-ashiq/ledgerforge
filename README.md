@@ -1173,13 +1173,30 @@ ship as new revisions that also update the SQL files in the same PR — see
 
 ## Status & roadmap
 
-v0.28.0 — everything below, plus **distribution hardening (v0.28,
-ADR-031: the signed update manifest with file-level deltas and
-update-on-relaunch, code-signing gates for Windows and macOS in the
-release workflow, macOS + Linux native packages of the same Qt shell,
-and opt-in crash reporting — captured locally always, sent nowhere
-unless chosen)** — the accounting core is at parity; what remains to
-v1.0 is the parity release itself (Phases 10–11).
+**v1.0.0 — the parity release (Phase 11, ADR-032): parity demonstrated,
+not asserted.** The accountant's day — `LedgerForge --accountants-day`,
+a scripted full working day, fifty vouchers across every pack in one
+session, every number asserted, the real window rendering the books —
+now gates every release on every platform. Performance is certified at
+10× the workload model in the pipeline (`certify` CI job + the publish
+job: ≥2,000 vouchers/minute concurrent posting, warm trial balance and
+P&L under a second, fast paths proven equal to the slow path to the
+cent). Accessibility is a contract on both UIs (named interactive
+widgets, focus traversal, table context; axe-core zero-serious on the
+web screen). One honest breaking change: the banking pack's direction
+convention is corrected to standard accounting — money into the bank is
+Dr Bank, balances read asset-positive (books posted with v0.23–v0.28's
+Cr-Bank receipts need those vouchers reversed and re-posted). The
+capability table is re-derived in the release notes, trailing rows
+named in plain words: SmartScreen needs a funded certificate; connected
+banking and portal adapters stay plugin-side by design. **The road to
+v1.0 is walked — [ROADMAP.md](ROADMAP.md) is the record.**
+
+v0.28.0 — distribution hardening (ADR-031: the signed update manifest
+with file-level deltas and update-on-relaunch, code-signing gates for
+Windows and macOS in the release workflow, macOS + Linux native
+packages of the same Qt shell, and opt-in crash reporting — captured
+locally always, sent nowhere unless chosen).
 
 v0.27.0 — the payroll depth
 (v0.26, ADR-029: attendance registers as facts, loans with EMI

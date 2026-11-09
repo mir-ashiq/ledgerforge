@@ -32,9 +32,13 @@ def error_detail(error: object) -> str:
 
 
 def make_table(headers: list[str], *, stretch_last: bool = True) -> QTableWidget:
-    """A read-only, keyboard-navigable table with a native header."""
+    """A read-only, keyboard-navigable table with a native header.
+
+    The header list doubles as the table's accessible name (ADR-032): a
+    screen reader announces what the grid holds before its cells."""
     table = QTableWidget(0, len(headers))
     table.setHorizontalHeaderLabels(headers)
+    table.setAccessibleName(f"table: {', '.join(headers)}")
     table.verticalHeader().setVisible(False)
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)

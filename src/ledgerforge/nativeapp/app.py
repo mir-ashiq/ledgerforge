@@ -530,6 +530,13 @@ def main(argv: list[str] | None = None) -> int:
         "--smoke", action="store_true", help="headless self-check for CI: exit 0/1, no window"
     )
     parser.add_argument(
+        "--accountants-day",
+        action="store_true",
+        help="the scripted acceptance run (ADR-032): a full working day, "
+        "fifty vouchers across the packs, every number asserted — "
+        "exit 0/1, the release gate beyond the smoke",
+    )
+    parser.add_argument(
         "--apply-update",
         type=Path,
         default=None,
@@ -546,6 +553,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.smoke:
         return smoke(args.data_dir, args.port)
+    if args.accountants_day:
+        from .acceptance import run_day
+
+        return run_day(args.data_dir, args.port)
 
     # ADR-031 — update-on-relaunch: BEFORE Qt and before the engine child,
     # a frozen app applies the staged update to its own install directory

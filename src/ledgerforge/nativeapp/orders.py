@@ -54,6 +54,7 @@ class OrdersPage(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Kind"))
         self.type_filter = QComboBox()
+        self.type_filter.setAccessibleName("Order type filter")
         for code, label in _TYPE_FILTERS:
             self.type_filter.addItem(label, code)
         bar.addWidget(self.type_filter)
