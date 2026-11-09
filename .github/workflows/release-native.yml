@@ -71,6 +71,37 @@ jobs:
       - name: Build LedgerForge (the native window)
         run: pyinstaller desktop/ledgerforge.spec --noconfirm
 
+      # psycopg's own libpq, made reachable the deterministic way (macOS):
+      # PyInstaller's BUNDLE step rewrites every collected binary's dylib
+      # references to @rpath/<name> and REPLACES all rpaths with one that
+      # points at the bundle top — where libpq.5.dylib never lands. The
+      # forensics step proved dyld then resolves pq.so's libpq against
+      # pgserver's PostgreSQL-16 build (no _PQcancelBlocking). After the
+      # build we point the two extensions straight at the libpq collected
+      # flat beside them (spec: psycopg_binary/), and give every psycopg
+      # dylib an @loader_path rpath so the flat neighbours find each
+      # other. Re-signed ad-hoc afterwards, like PyInstaller itself does.
+      - name: Point psycopg at its own libpq (macOS, post-build)
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          FW=dist/LedgerForge.app/Contents/Frameworks/psycopg_binary
+          ls -la "$FW"
+          for so in "$FW"/pq*.so "$FW"/_psycopg*.so; do
+            install_name_tool -add_rpath @loader_path "$so" 2>/dev/null || true
+            install_name_tool -change @rpath/libpq.5.dylib @loader_path/libpq.5.dylib "$so" || true
+            codesign -s - --force "$so"
+          done
+          for lib in "$FW"/*.dylib; do
+            install_name_tool -add_rpath @loader_path "$lib" 2>/dev/null || true
+            codesign -s - --force "$lib"
+          done
+          echo "--- pq.so after surgery ---"
+          otool -L "$FW"/pq*.so
+          # the per-file surgery invalidated the bundle-level signature;
+          # re-sign the whole .app ad-hoc, exactly as PyInstaller did
+          codesign -s - --force --deep dist/LedgerForge.app
+
       # ------------------------------------------------------------- signing
       # Windows: Azure Trusted Signing when the repository carries the
       # credentials — the SmartScreen warning dies the day this is armed.
